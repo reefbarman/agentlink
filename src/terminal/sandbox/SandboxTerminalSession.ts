@@ -8,6 +8,11 @@ import {
   isValidTerminalDimensions,
   type TerminalDimensions,
 } from "@agentlink/protocol/terminal";
+import type {
+  StreamedOutputFilterSnapshot,
+  StreamedOutputFilterSpec,
+} from "../../core/capabilities/terminal.js";
+import { StreamingOutputFilter } from "../output/StreamingOutputFilter.js";
 import { Utf8TailBuffer } from "../Utf8TailBuffer.js";
 import type {
   SandboxCommandDisposable,
@@ -136,6 +141,8 @@ export interface SandboxTerminalCommandOutput {
   totalBytes: number;
   retainedBytes: number;
   droppedBytes: number;
+  /** Caller-filter candidates collected over the whole output stream. */
+  streamedFilter?: StreamedOutputFilterSnapshot;
 }
 
 export interface SandboxTerminalCommandOutputLease {
@@ -151,6 +158,8 @@ interface CommandOutputSpool {
   writtenBytes: number;
   droppedBytes: number;
   failed: boolean;
+  /** Sees all output, including bytes past the spool cap. */
+  filter?: StreamingOutputFilter;
 }
 
 function cloneCommand(
@@ -248,6 +257,7 @@ export class SandboxTerminalSession {
     cwd: string;
     origin: SandboxCommandOrigin;
     process: SandboxCommandProcess;
+    outputFilter?: StreamedOutputFilterSpec;
   }): SandboxTerminalCommandRecord {
     this.assertOpen();
     if (this.active) throw new Error("Sandbox terminal channel is busy");
@@ -293,10 +303,11 @@ export class SandboxTerminalSession {
     this.active = active;
     this.commands.push(command);
     this.resetCommandOutputSpools(command.commandId);
-    this.commandOutputSpools.set(
-      command.commandId,
-      this.createCommandOutputSpool(),
-    );
+    const spool = this.createCommandOutputSpool();
+    if (input.outputFilter) {
+      spool.filter = new StreamingOutputFilter(input.outputFilter);
+    }
+    this.commandOutputSpools.set(command.commandId, spool);
     this.replayTail.append(
       `${this.replayTail.isEmpty ? "" : "\r\n"}$ ${input.command}\r\n`,
     );
@@ -614,6 +625,7 @@ export class SandboxTerminalSession {
             output: raw.toString("utf8"),
             ...metadata,
             retainedBytes,
+            ...this.streamedFilter(spool),
           };
         }
       } catch {
@@ -623,7 +635,15 @@ export class SandboxTerminalSession {
     return {
       output: command.output,
       ...this.commandOutputMetadata(command, spool),
+      ...this.streamedFilter(spool),
     };
+  }
+
+  private streamedFilter(
+    spool: CommandOutputSpool | undefined,
+  ): Pick<SandboxTerminalCommandOutput, "streamedFilter"> {
+    const snapshot = spool?.filter?.snapshot();
+    return snapshot ? { streamedFilter: snapshot } : {};
   }
 
   private createCommandOutputSpool(): CommandOutputSpool {
@@ -653,6 +673,7 @@ export class SandboxTerminalSession {
   private appendCommandOutput(commandId: string, data: string): void {
     const spool = this.commandOutputSpools.get(commandId);
     if (!spool) return;
+    spool.filter?.append(data);
     const dataBytes = Buffer.byteLength(data, "utf8");
     if (spool.failed || spool.fileDescriptor === undefined) {
       spool.droppedBytes += dataBytes;

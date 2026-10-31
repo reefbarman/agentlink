@@ -481,6 +481,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         cwd: options.cwd,
         origin: this.originFor(sandboxSessionId),
         process,
+        outputFilter: options.outputFilter,
       });
     } catch (error) {
       channel.active = undefined;
@@ -1639,6 +1640,9 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       total_bytes: retained.totalBytes,
       retained_bytes: retained.retainedBytes,
       dropped_bytes: retained.droppedBytes,
+      ...(retained.streamedFilter
+        ? { streamed_filter: retained.streamedFilter }
+        : {}),
     };
   }
 

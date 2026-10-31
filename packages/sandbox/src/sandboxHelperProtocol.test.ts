@@ -354,4 +354,49 @@ describe("sandbox helper event protocol", () => {
       ),
     ).toThrow("invalid event frame");
   });
+
+  it("accepts arbitrary process output, including NUL and control bytes", () => {
+    const data =
+      "build/v1_baseline.metallib:1:1: MTLB\0\u0001\u001b[0m\u0007\u007f\uFFFD€😀\ud800";
+    const line = JSON.stringify({ ...identity, type: "data", data });
+    expect(line).toContain("\\u0000");
+    expect(parseSandboxHelperEventLine(line)).toEqual({
+      ...identity,
+      type: "data",
+      data,
+    });
+    expect(
+      isSandboxHelperEventFrame({
+        ...identity,
+        type: "data",
+        data: "\0".repeat(MAX_SANDBOX_HELPER_DATA_BYTES),
+        stream: "stderr",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps NUL rejection for control frames and non-output event fields", () => {
+    expect(
+      isSandboxHelperControlFrame({ ...identity, type: "input", data: "a\0b" }),
+    ).toBe(false);
+    expect(
+      isSandboxHelperControlFrame({ ...launch, command: "echo\0hi" }),
+    ).toBe(false);
+    expect(
+      isSandboxHelperEventFrame({
+        ...identity,
+        type: "cwd",
+        cwd: "/workspace\0/escape",
+        nonce: "nonce",
+      }),
+    ).toBe(false);
+    expect(
+      isSandboxHelperEventFrame({
+        ...identity,
+        commandId: "command\0other",
+        type: "data",
+        data: "ok",
+      }),
+    ).toBe(false);
+  });
 });

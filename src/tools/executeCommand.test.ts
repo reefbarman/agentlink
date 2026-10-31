@@ -5448,6 +5448,19 @@ describe("handleExecuteCommand", () => {
       },
     })),
     {
+      name: "Metal Toolchain MobileAsset lookup denial",
+      command: "xcrun metal -c -Wall shader.metal -o build/shader.air",
+      output:
+        "error: cannot execute tool 'metal' due to missing Metal Toolchain; use: xcodebuild -downloadComponent MetalToolchain",
+      action: "reviewed_native_retry",
+      code: "sandbox_metal_toolchain_lookup",
+      option: {
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
+    {
       name: "host process inspection denial",
       command: "ps aux",
       output: "/bin/ps: operation not permitted",
@@ -8649,6 +8662,121 @@ describe("handleExecuteCommand", () => {
     }
   });
 
+  it("notes an intentional output_tail without a truncation warning", async () => {
+    const { rmSync } = await import("fs");
+    const { dirname } = await import("path");
+    const output = Array.from({ length: 31 }, (_, i) => `line ${i}`).join("\n");
+    executeCommand.mockResolvedValue({
+      exit_code: 2,
+      output,
+      output_captured: true,
+      output_complete: true,
+      output_finalized: true,
+      terminal_id: "term-intentional-tail",
+      command_sent: true,
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const payload = textPayload(
+      await handleExecuteCommand(
+        { command: "make check", output_tail: 16 },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-intentional-tail",
+        undefined,
+        { terminalProvider },
+      ),
+    );
+
+    try {
+      expect(payload).toMatchObject({
+        total_lines: 31,
+        lines_shown: 16,
+        output_truncated: false,
+        total_lines_scope: "complete",
+        output_file: expect.any(String),
+        output_note: expect.stringContaining("no output was lost"),
+      });
+      expect(payload.output_warning).toBeUndefined();
+    } finally {
+      if (payload.output_file) {
+        rmSync(dirname(payload.output_file), { recursive: true });
+      }
+    }
+  });
+
+  it("returns streamed early grep matches when the raw tail lost them", async () => {
+    const { StreamingOutputFilter } =
+      await import("../terminal/output/StreamingOutputFilter.js");
+    const streaming = new StreamingOutputFilter({
+      output_grep: "^0x2148A4F",
+      output_head: 400,
+    });
+    streaming.append("0x2148A4F4C ldr\n0x2148A4F50 ret\nnoise\n");
+    executeCommand.mockResolvedValue({
+      exit_code: null,
+      output: "noise tail\n",
+      output_captured: true,
+      output_complete: false,
+      output_finalized: false,
+      output_total_bytes: 133 * 1024 * 1024,
+      output_retained_bytes: 1024 * 1024,
+      output_dropped_bytes: 132 * 1024 * 1024,
+      terminal_id: "term-streamed",
+      command_id: "command-streamed",
+      is_running: true,
+      timed_out: true,
+      command_sent: true,
+    });
+    const getRetainedOutput = vi.fn(() => ({
+      output: "noise tail\n",
+      complete: false,
+      finalized: false,
+      total_bytes: 133 * 1024 * 1024,
+      retained_bytes: 1024 * 1024,
+      dropped_bytes: 132 * 1024 * 1024,
+      streamed_filter: streaming.snapshot(),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const payload = textPayload(
+      await handleExecuteCommand(
+        {
+          command: "xcrun dyld_info -disassemble /tmp/fixture",
+          timeout: 30,
+          output_grep: "^0x2148A4F",
+          output_head: 400,
+        },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-streamed-filter",
+        undefined,
+        { terminalProvider: { ...terminalProvider, getRetainedOutput } },
+      ),
+    );
+
+    // The terminal receives the normalized filter so it can stream matches.
+    expect(executeCommand.mock.calls[0]?.[0]).toMatchObject({
+      outputFilter: { output_grep: "^0x2148A4F", output_head: 400 },
+    });
+    expect(getRetainedOutput).toHaveBeenCalledWith({
+      owner: undefined,
+      terminalId: "term-streamed",
+      commandId: "command-streamed",
+    });
+    expect(payload).toMatchObject({
+      output: "0x2148A4F4C ldr\n0x2148A4F50 ret\n",
+      lines_shown: 2,
+      total_lines_scope: "observed",
+      output_filter_source: "streamed",
+      output_warning: expect.stringContaining(
+        "132.0 MiB of raw output was not retained",
+      ),
+    });
+    expect(payload.output_file).toBeUndefined();
+    expect(payload.streamed_filter).toBeUndefined();
+  });
+
   it("reports line counts as retained while output is not finalized", async () => {
     executeCommand.mockResolvedValue({
       exit_code: null,
@@ -8855,6 +8983,75 @@ describe("handleExecuteCommand", () => {
       command_sent: false,
     });
   });
+
+  it.each([
+    {
+      name: "single-quoted multi-line python -c with a bit shift",
+      command: [
+        "python3 -c 'import sys",
+        "a = 0x12345678",
+        "imm=((a>>5&0x7ffff)<<2)|(a>>29&3)",
+        "print(imm)'",
+      ].join("\n"),
+    },
+    {
+      name: "double-quoted multi-line argument containing <<",
+      command: 'node -e "const x = 1\nconsole.log(x << 2)"',
+    },
+    {
+      name: "escaped << outside quotes",
+      command: "echo a \\<<b",
+    },
+  ])("does not treat << as a heredoc for a $name", async ({ command }) => {
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-quoted-shift",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(textPayload(result).reason).toBeUndefined();
+    expect(executeCommand).toHaveBeenCalledTimes(1);
+    expect(executeCommand.mock.calls[0][0]).toMatchObject({ command });
+  });
+
+  it.each([
+    { command: "cat <<EOF\nbody", delimiter: "EOF" },
+    { command: "cat <<-EOF\n\tbody", delimiter: "EOF" },
+    { command: 'cat <<"END"\nbody', delimiter: "END" },
+    {
+      // A closed multi-line quoted argument must not hide a later heredoc.
+      command: "echo 'a\nb' && cat <<EOF\nbody",
+      delimiter: "EOF",
+    },
+  ])(
+    "still rejects an unterminated heredoc in $command",
+    async ({ command, delimiter }) => {
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        { command },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-unterminated-heredoc",
+        undefined,
+        { terminalProvider },
+      );
+
+      expect(executeCommand).not.toHaveBeenCalled();
+      expect(textPayload(result)).toMatchObject({
+        status: "rejected",
+        reason: expect.stringContaining(
+          `missing heredoc terminator ${JSON.stringify(delimiter)}`,
+        ),
+        command_sent: false,
+      });
+    },
+  );
 
   it("rejects protected memory writes before masterBypass and force handling", async () => {
     const { handleExecuteCommand } = await import("./executeCommand.js");

@@ -8,6 +8,36 @@ import {
 } from "./shellLex.js";
 
 describe("maskShellHeredocBodies", () => {
+  it("ignores << inside a multi-line single-quoted program", () => {
+    const input = [
+      "python3 -c '",
+      "a = 7",
+      "imm=((a>>5&0x7ffff)<<2)|(a>>29&3)",
+      "print(imm)' file.bin",
+    ].join("\n");
+    expect(maskShellHeredocBodies(input)).toEqual({
+      maskedInput: input,
+      unterminatedDelimiters: [],
+    });
+  });
+
+  it("ignores << inside multi-line double and $'...' quotes", () => {
+    for (const input of ['echo "line\nx << 2"', "echo $'it\\'s\nx << 2'"]) {
+      expect(maskShellHeredocBodies(input).unterminatedDelimiters).toEqual([]);
+    }
+  });
+
+  it("still finds a heredoc after a closed multi-line quote", () => {
+    const input = ["echo 'a", "b' && cat <<EOF", "body << x", "EOF"].join("\n");
+    const result = maskShellHeredocBodies(input);
+    expect(result.unterminatedDelimiters).toEqual([]);
+    expect(result.maskedInput.split("\n")[2]).toBe(" ".repeat(9));
+    expect(
+      maskShellHeredocBodies("echo 'a\nb' && cat <<EOF\nbody")
+        .unterminatedDelimiters,
+    ).toEqual(["EOF"]);
+  });
+
   it("masks quoted heredoc bodies without changing source length or newlines", () => {
     const input = [
       "python - <<'PY'",

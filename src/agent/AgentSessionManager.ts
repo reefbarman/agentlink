@@ -346,6 +346,23 @@ recall only when exact history is needed.`;
 const MAX_BACKGROUND_PARTIAL_RESULT_CHARS = 40 * 1024;
 const BACKGROUND_EVIDENCE_RECOVERY_MARKER = "[background evidence recovery]";
 const MAX_BACKGROUND_RECOVERED_EVIDENCE_CHARS = 12 * 1024;
+/** Inputs that identify what a running tool is doing; never contents or commands. */
+const BACKGROUND_TOOL_INPUT_FIELDS = [
+  "path",
+  "paths",
+  "file",
+  "regex",
+  "query",
+  "pattern",
+  "anchor",
+  "offset",
+  "symbol",
+  "url",
+  "server",
+  "tool",
+  "name",
+] as const;
+const BACKGROUND_TOOL_INPUT_MAX_FIELD_CHARS = 160;
 /**
  * Terminal results get a larger budget than streaming partials: they are
  * written once per session, and tail-truncating a finished review at 40 KB
@@ -1069,6 +1086,12 @@ export class AgentSessionManager {
       phaseStartedAt?: number;
       requestStartedAt?: number;
       retryAt?: number;
+      /** Bounded identifying-input summary of the running top-level tool. */
+      currentToolInput?: string;
+      currentToolStartedAt?: number;
+      currentToolCallId?: string;
+      /** When the oldest still-queued accepted steering message arrived. */
+      steeringQueuedAt?: number;
     }
   >();
 
@@ -12404,9 +12427,82 @@ export class AgentSessionManager {
     }
   }
 
+  /**
+   * Bounded single-line summary of a tool call's identifying inputs for the
+   * coordinator's status view. Allowlisted fields only: file contents, shell
+   * commands, and environment values are never included.
+   */
+  private summarizeBackgroundToolInput(input: unknown): string | undefined {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      return undefined;
+    }
+    const record = input as Record<string, unknown>;
+    const fields = BACKGROUND_TOOL_INPUT_FIELDS.flatMap((field) => {
+      const value = record[field];
+      if (value === undefined || value === null) return [];
+      const text = Array.isArray(value)
+        ? value.map((item) => String(item)).join(", ")
+        : typeof value === "object"
+          ? JSON.stringify(value)
+          : String(value);
+      const singleLine = text.replace(/\s+/g, " ").trim();
+      if (!singleLine) return [];
+      const bounded =
+        singleLine.length > BACKGROUND_TOOL_INPUT_MAX_FIELD_CHARS
+          ? `${singleLine.slice(0, BACKGROUND_TOOL_INPUT_MAX_FIELD_CHARS - 1)}…`
+          : singleLine;
+      return [`${field}=${bounded}`];
+    });
+    return fields.length ? fields.join(" ") : undefined;
+  }
+
+  private clearBackgroundToolTracking(sessionId: string): void {
+    const meta = this.bgMeta.get(sessionId);
+    if (!meta) return;
+    meta.currentToolCallId = undefined;
+    meta.currentToolInput = undefined;
+    meta.currentToolStartedAt = undefined;
+  }
+
   private noteBackgroundAgentEvent(sessionId: string, event: AgentEvent): void {
     let phase: BackgroundAgentRuntimePhase | undefined;
     switch (event.type) {
+      case "tool_start": {
+        // Nested tool calls carry a parent id; only the top-level call is the
+        // one the coordinator sees as `currentTool`.
+        const meta = this.bgMeta.get(sessionId);
+        if (meta && !event.parentCallId) {
+          meta.currentToolCallId = event.toolCallId;
+          meta.currentToolInput = this.summarizeBackgroundToolInput(
+            event.input,
+          );
+          meta.currentToolStartedAt = Date.now();
+        }
+        phase = "executing_tool";
+        break;
+      }
+      case "tool_result": {
+        const meta = this.bgMeta.get(sessionId);
+        if (
+          meta &&
+          !event.parentCallId &&
+          meta.currentToolCallId === event.toolCallId
+        ) {
+          meta.currentToolCallId = undefined;
+          meta.currentToolInput = undefined;
+          meta.currentToolStartedAt = undefined;
+        }
+        break;
+      }
+      case "user_interjection": {
+        // A steering message reached the agent. Keep the queue timestamp only
+        // while another accepted message is still waiting.
+        const meta = this.bgMeta.get(sessionId);
+        if (meta && !this.sessions.get(sessionId)?.hasPendingInterjections) {
+          meta.steeringQueuedAt = undefined;
+        }
+        break;
+      }
       case "api_request_start": {
         const meta = this.bgMeta.get(sessionId);
         if (meta) {
@@ -12425,7 +12521,6 @@ export class AgentSessionManager {
       case "text_delta":
         phase = "responding";
         break;
-      case "tool_start":
       case "tool_input_delta":
         phase = "executing_tool";
         break;
@@ -12447,9 +12542,11 @@ export class AgentSessionManager {
       case "error":
       case "condense_error":
         phase = "failed";
+        this.clearBackgroundToolTracking(sessionId);
         break;
       case "done":
         phase = "completed";
+        this.clearBackgroundToolTracking(sessionId);
         break;
       default:
         break;
@@ -12570,9 +12667,20 @@ export class AgentSessionManager {
         session.getLastAssistantText())
       : undefined;
 
+    const runningToolStartedAt = done ? undefined : meta?.currentToolStartedAt;
+    const pendingSteering = !done && session.hasPendingInterjections === true;
     return {
       status,
       currentTool: session.currentTool,
+      currentToolInput:
+        runningToolStartedAt !== undefined ? meta?.currentToolInput : undefined,
+      currentToolStartedAt: runningToolStartedAt,
+      currentToolElapsedMs:
+        runningToolStartedAt !== undefined
+          ? Math.max(0, Date.now() - runningToolStartedAt)
+          : undefined,
+      pendingSteering: done ? undefined : pendingSteering,
+      steeringQueuedAt: pendingSteering ? meta?.steeringQueuedAt : undefined,
       done,
       partialOutput,
       displayStatus: heuristicStatus,
@@ -13174,6 +13282,12 @@ ${instruction}`
       undefined,
       instruction,
     );
+    if (accepted) {
+      const steerMeta = this.bgMeta.get(targetSessionId);
+      if (steerMeta && steerMeta.steeringQueuedAt === undefined) {
+        steerMeta.steeringQueuedAt = Date.now();
+      }
+    }
     this.notifySessionsChanged();
     return accepted
       ? { accepted: true }

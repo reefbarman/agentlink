@@ -672,6 +672,125 @@ describe("AgentSessionManager background agents", () => {
     ]);
   });
 
+  it("shows a bounded running-tool summary and pending steering in background status", async () => {
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 1 },
+    );
+    mgr.setToolContext(toolCtx);
+    const parent = await mgr.createSession("code");
+    let releaseTool!: () => void;
+    const toolReleased = new Promise<void>((resolve) => {
+      releaseTool = resolve;
+    });
+    let releaseRun!: () => void;
+    const runReleased = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    let toolStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      toolStarted = resolve;
+    });
+    let steerObserved!: () => void;
+    const steered = new Promise<void>((resolve) => {
+      steerObserved = resolve;
+    });
+    mocks.runBehavior.mockImplementation(() =>
+      (async function* () {
+        const [session] = mocks.runArgs.mock.calls.at(-1) as [any];
+        session.status = "tool_executing";
+        session.currentTool = "search_files";
+        yield {
+          type: "tool_start",
+          toolCallId: "search-1",
+          toolName: "search_files",
+          input: {
+            path: "src",
+            regex: `needle\n${"x".repeat(500)}`,
+            content: "SECRET-FILE-CONTENTS",
+            command: "echo SECRET-COMMAND",
+          },
+        };
+        // A nested call must not replace the top-level summary.
+        yield {
+          type: "tool_start",
+          toolCallId: "nested-1",
+          parentCallId: "search-1",
+          toolName: "read_file",
+          input: { path: "nested.ts" },
+        };
+        toolStarted();
+        await steered;
+        await toolReleased;
+        yield {
+          type: "tool_result",
+          toolCallId: "search-1",
+          toolName: "search_files",
+          output: "ok",
+        };
+        session.currentTool = undefined;
+        // The engine delivers the queued steer at the tool boundary.
+        session.consumePendingInterjection();
+        yield {
+          type: "user_interjection",
+          text: "steer text",
+          queueId: "q1",
+        };
+        await runReleased;
+        yield { type: "done" };
+      })(),
+    );
+
+    const spawned = await mgr.spawnBackground({
+      task: "long search",
+      message: "search",
+    });
+    await started;
+
+    const running = mgr.getBackgroundStatus(spawned.sessionId);
+    expect(running.currentTool).toBe("search_files");
+    expect(running.currentToolInput).toMatch(/^path=src regex=needle x+…$/);
+    expect(running.currentToolInput).not.toContain("\n");
+    expect(running.currentToolInput!.length).toBeLessThan(200);
+    expect(running.currentToolInput).not.toContain("SECRET");
+    expect(running.currentToolStartedAt).toEqual(expect.any(Number));
+    expect(running.currentToolElapsedMs).toBeGreaterThanOrEqual(0);
+    expect(running.pendingSteering).toBe(false);
+    expect(running.steeringQueuedAt).toBeUndefined();
+
+    expect(
+      mgr.steerAuthorizedBackground(parent.id, spawned.sessionId, "wrap up"),
+    ).toEqual({ accepted: true });
+    const queued = mgr.getBackgroundStatus(spawned.sessionId);
+    expect(queued.pendingSteering).toBe(true);
+    expect(queued.steeringQueuedAt).toEqual(expect.any(Number));
+    expect(queued.currentToolInput).toBe(running.currentToolInput);
+    steerObserved();
+
+    releaseTool();
+    await waitFor(
+      () => mgr.getBackgroundStatus(spawned.sessionId),
+      (status) => status.pendingSteering === false,
+    );
+    const delivered = mgr.getBackgroundStatus(spawned.sessionId);
+    expect(delivered.steeringQueuedAt).toBeUndefined();
+    expect(delivered.currentToolInput).toBeUndefined();
+    expect(delivered.currentToolStartedAt).toBeUndefined();
+    expect(delivered.currentToolElapsedMs).toBeUndefined();
+
+    releaseRun();
+    await mgr.waitForBackground(spawned.sessionId);
+    const finished = mgr.getBackgroundStatus(spawned.sessionId);
+    expect(finished.done).toBe(true);
+    expect(finished.pendingSteering).toBeUndefined();
+    expect(finished.currentToolInput).toBeUndefined();
+  });
+
   it("inherits and live-syncs the parent's full approval mode for a shared child", async () => {
     const mgr = new AgentSessionManager(
       config,

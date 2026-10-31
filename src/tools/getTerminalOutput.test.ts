@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { StreamingOutputFilter } from "../terminal/output/StreamingOutputFilter.js";
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import { handleGetTerminalOutput } from "./getTerminalOutput.js";
 
@@ -409,7 +410,51 @@ describe("handleGetTerminalOutput", () => {
       lines_shown: 1,
       output_file: expect.any(String),
     });
-    expect(payload.output_warning).toContain("Full output saved");
+    // The caller's own tail reduced the display; nothing was lost.
+    expect(payload.output_warning).toBeUndefined();
+    expect(payload.output_note).toContain("no output was lost");
+  });
+
+  it("returns streamed early grep matches after the raw tail dropped them", async () => {
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      is_running: false,
+      state: "completed",
+      exit_code: 0,
+      output: "noise 2\nnoise 3",
+      output_captured: true,
+    });
+    const streaming = new StreamingOutputFilter({
+      output_grep: "^0x2148A4F",
+      output_head: 400,
+    });
+    streaming.append("0x2148A4F4C ldr\n0x2148A4F50 ret\nnoise 1\n");
+    terminalProvider.getRetainedOutput = vi.fn(() => ({
+      output: "noise 2\nnoise 3",
+      complete: false,
+      finalized: true,
+      total_bytes: 133 * 1024 * 1024,
+      retained_bytes: 1024 * 1024,
+      dropped_bytes: 132 * 1024 * 1024,
+      streamed_filter: streaming.snapshot(),
+    }));
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_42", output_grep: "^0x2148A4F", output_head: 400 },
+      { terminalProvider },
+    );
+    const payload = textPayload(result);
+
+    expect(payload).toMatchObject({
+      output: "0x2148A4F4C ldr\n0x2148A4F50 ret\n",
+      lines_shown: 2,
+      output_complete: false,
+      output_filter_source: "streamed",
+    });
+    expect(payload.output_file).toBeUndefined();
+    expect(payload.output_warning).toContain(
+      "132.0 MiB of raw output was not retained",
+    );
+    expect(payload.streamed_filter).toBeUndefined();
   });
 
   it("saves complete output when byte bounding truncates a single displayed line", async () => {

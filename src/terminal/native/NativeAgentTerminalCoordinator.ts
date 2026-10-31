@@ -666,6 +666,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
           ? "user"
           : "agent",
         process,
+        outputFilter: options.outputFilter,
       });
     } catch (error) {
       this.disableInteractivePromptWatchdog(channel.active);
@@ -1329,6 +1330,9 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       total_bytes: retained.totalBytes,
       retained_bytes: retained.retainedBytes,
       dropped_bytes: retained.droppedBytes,
+      ...(retained.streamedFilter
+        ? { streamed_filter: retained.streamedFilter }
+        : {}),
     };
   }
 

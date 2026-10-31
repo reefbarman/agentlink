@@ -3,8 +3,23 @@ import type { SandboxViolation } from "@agentlink/protocol/terminal-security";
 import type { TerminalDimensions } from "@agentlink/protocol/terminal";
 
 export const SANDBOX_HELPER_PROTOCOL_VERSION = 3;
+/** Maximum encoded size of a host-to-helper control frame. */
 export const MAX_SANDBOX_HELPER_FRAME_BYTES = 1024 * 1024;
 export const MAX_SANDBOX_HELPER_DATA_BYTES = 256 * 1024;
+/**
+ * JSON escapes each C0 control character as `\u00XX`, which is six bytes for
+ * one byte of output. Bound process output by its decoded size and let its
+ * worst-case escaped frame through, so control-heavy or binary output can
+ * never invalidate the transport.
+ */
+const MAX_JSON_ESCAPE_EXPANSION = 6;
+const SANDBOX_HELPER_EVENT_ENVELOPE_BYTES = 64 * 1024;
+/** Maximum encoded size of a helper-to-host event frame. */
+export const MAX_SANDBOX_HELPER_EVENT_FRAME_BYTES = Math.max(
+  MAX_SANDBOX_HELPER_FRAME_BYTES,
+  MAX_SANDBOX_HELPER_DATA_BYTES * MAX_JSON_ESCAPE_EXPANSION +
+    SANDBOX_HELPER_EVENT_ENVELOPE_BYTES,
+);
 
 export interface SandboxCommandIdentity {
   channelId: string;
@@ -166,6 +181,18 @@ function isBoundedString(value: unknown, maxBytes: number): value is string {
   return (
     typeof value === "string" &&
     !value.includes("\0") &&
+    new TextEncoder().encode(value).byteLength <= maxBytes
+  );
+}
+
+/**
+ * Process output is arbitrary terminal data: NUL and other control characters
+ * are legitimate (for example a compiler quoting a line of a binary file).
+ * JSON parsing already guarantees a well-formed string; only bound its size.
+ */
+function isBoundedOutput(value: unknown, maxBytes: number): value is string {
+  return (
+    typeof value === "string" &&
     new TextEncoder().encode(value).byteLength <= maxBytes
   );
 }
@@ -447,7 +474,7 @@ export function isSandboxHelperEventFrame(
   if (value.type === "data") {
     return (
       hasOnlyKeys(value, [...identityKeys, "data", "stream"]) &&
-      isBoundedString(value.data, MAX_SANDBOX_HELPER_DATA_BYTES) &&
+      isBoundedOutput(value.data, MAX_SANDBOX_HELPER_DATA_BYTES) &&
       (value.stream === undefined ||
         value.stream === "stdout" ||
         value.stream === "stderr")
@@ -538,7 +565,8 @@ export function parseSandboxHelperEventLine(
   line: string,
 ): SandboxHelperEventFrame {
   if (
-    new TextEncoder().encode(line).byteLength > MAX_SANDBOX_HELPER_FRAME_BYTES
+    new TextEncoder().encode(line).byteLength >
+    MAX_SANDBOX_HELPER_EVENT_FRAME_BYTES
   ) {
     throw new Error("Sandbox helper event frame exceeds maximum size");
   }

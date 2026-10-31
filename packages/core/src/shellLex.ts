@@ -103,6 +103,9 @@ export function maskShellHeredocBodies(
 ): ShellLexHeredocMaskResult {
   const masked = input.split("");
   const pending: ShellLexHeredocDeclaration[] = [];
+  // Quotes and arithmetic may span lines (for example a multi-line
+  // `python3 -c '...'` program), so `<<` inside them is not a heredoc.
+  const state: HeredocScanState = { quote: null, arithmeticDepth: 0 };
   let lineStart = 0;
 
   while (lineStart < input.length) {
@@ -110,7 +113,11 @@ export function maskShellHeredocBodies(
     const lineEnd = newline === -1 ? input.length : newline;
     const line = input.slice(lineStart, lineEnd).replace(/\r$/, "");
 
-    if (pending.length > 0) {
+    if (
+      pending.length > 0 &&
+      state.quote === null &&
+      state.arithmeticDepth === 0
+    ) {
       const current = pending[0];
       const candidate = current.stripLeadingTabs
         ? line.replace(/^\t+/, "")
@@ -120,7 +127,7 @@ export function maskShellHeredocBodies(
       }
       if (candidate === current.delimiter) pending.shift();
     } else {
-      pending.push(...readHeredocDeclarations(line));
+      pending.push(...readHeredocDeclarations(line, state));
     }
 
     if (newline === -1) break;
@@ -498,16 +505,37 @@ export function scanShellLexLiteralOccurrences(
   };
 }
 
-function readHeredocDeclarations(line: string): ShellLexHeredocDeclaration[] {
+interface HeredocScanState {
+  /** `ansi` is a `$'...'` string, where backslash escapes a quote. */
+  quote: ShellLexQuote | "ansi" | null;
+  arithmeticDepth: number;
+}
+
+function readHeredocDeclarations(
+  line: string,
+  state: HeredocScanState,
+): ShellLexHeredocDeclaration[] {
   const declarations: ShellLexHeredocDeclaration[] = [];
-  let quote: ShellLexQuote | null = null;
-  let arithmeticDepth = 0;
+  let { quote, arithmeticDepth } = state;
   let index = 0;
 
   while (index < line.length) {
     const ch = line[index];
+    if (quote === "ansi") {
+      if (ch === "\\") index += 2;
+      else {
+        if (ch === "'") quote = null;
+        index++;
+      }
+      continue;
+    }
     if (ch === "\\" && quote !== "single") {
       index += index + 1 < line.length ? 2 : 1;
+      continue;
+    }
+    if (quote === null && line.startsWith("$'", index)) {
+      quote = "ansi";
+      index += 2;
       continue;
     }
     if (ch === "'" && quote !== "double") {
@@ -572,6 +600,8 @@ function readHeredocDeclarations(line: string): ShellLexHeredocDeclaration[] {
     index = parsed.end;
   }
 
+  state.quote = quote;
+  state.arithmeticDepth = arithmeticDepth;
   return declarations;
 }
 

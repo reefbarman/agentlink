@@ -91,7 +91,14 @@ import type {
   SubCommandEntry,
 } from "@agentlink/protocol/approval-transport";
 import type { NetworkApprovalReviewer } from "../approvals/networkApprovalReview.js";
-import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
+import { filterOutput } from "../util/outputFilter.js";
+import {
+  isStreamableFilter,
+  outputFilterFromParams,
+  presentCommandOutput,
+  readStreamedOutputFilter,
+} from "../terminal/commandOutput.js";
+import { streamableOutputFilter } from "../terminal/output/StreamingOutputFilter.js";
 import { sandboxDockerRecovery } from "./sandboxDockerRecovery.js";
 import { buildSandboxPolicyEnvironment } from "../terminal/sandbox/sandboxEnvironmentPolicy.js";
 import { validateCommand } from "../util/pipeValidator.js";
@@ -437,6 +444,7 @@ type ExecuteCommandRetryGuidance = {
     | "sandbox_host_integration"
     | "sandbox_node_oom"
     | "sandbox_swiftpm_nested_sandbox"
+    | "sandbox_metal_toolchain_lookup"
     | "sandbox_preparation_changed"
     | "sandbox_preparation_failed"
     | "sandbox_capability_launch_failed"
@@ -618,12 +626,6 @@ function sandboxHelperFailureEvidence(error: SandboxHelperFailure) {
     recovery:
       "Inspect retained output using terminal_id and command_id before deciding whether to run another command. Helper failure does not establish the command's outcome; do not replay automatically.",
   };
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} bytes`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 }
 
 function singleCommandTokens(command: string): string[] | undefined {
@@ -1615,6 +1617,66 @@ function attachSandboxSwiftPmNestedSandboxRetryGuidance(input: {
       ],
       prohibited_workarounds: [
         "Do not switch to require_escalated or native execution solely to avoid SwiftPM's nested sandbox.",
+      ],
+    } satisfies ExecuteCommandRetryGuidance,
+  });
+}
+
+const METAL_TOOLCHAIN_LOOKUP_PATTERNS = [
+  /cannot execute tool '[\w.+-]+' due to missing Metal Toolchain/i,
+  /Failed querying assets for assetType \(com\.apple\.MobileAsset\.MetalToolchain\)/i,
+];
+
+/**
+ * Xcode's downloadable Metal Toolchain lives in a cryptex mount. Running its
+ * binaries works in the sandbox, but xcrun locates them through the
+ * MobileAsset service, which the sandbox deliberately blocks, so Apple reports
+ * the toolchain as missing. Explain that instead of implying a failed install.
+ */
+function attachSandboxMetalToolchainRetryGuidance(input: {
+  result: TerminalCommandResult;
+  command: string;
+  output: string;
+}): void {
+  const { result, command, output } = input;
+  if (
+    hasRetryGuidance(result) ||
+    result.security?.route !== "sandbox" ||
+    result.security.confinement !== "verified-baseline" ||
+    result.security.permissionIntent !== "default" ||
+    result.exit_code === 0 ||
+    result.exit_code === null ||
+    result.backgrounded ||
+    result.is_running ||
+    result.timed_out ||
+    result.output_complete === false ||
+    result.output_finalized === false ||
+    !METAL_TOOLCHAIN_LOOKUP_PATTERNS.some((pattern) => pattern.test(output))
+  ) {
+    return;
+  }
+
+  Object.assign(result, {
+    retry_guidance: {
+      code: "sandbox_metal_toolchain_lookup",
+      message:
+        "This may not mean the Metal Toolchain is missing. Inside AgentLink's sandbox, xcrun and xcodebuild cannot query the MobileAsset service that locates the downloaded Metal Toolchain, so Apple reports it as missing even when it is installed. To stay in the sandbox, list /private/var/run/com.apple.security.cryptexd/mnt/ to find the versioned com.apple.MobileAsset.MetalToolchain-* mount, run the tool directly from its Metal.xctoolchain/usr/bin/ directory, and pass -fmodules-cache-path=<a writable directory such as the workspace build folder> to metal. Otherwise use the reviewed native retry. The first attempt launched; AgentLink will not retry automatically.",
+      automatic_retry: false,
+      options: [
+        {
+          action: "reviewed_native_retry",
+          same_command: true,
+          sandbox_permissions: "require_escalated",
+          reason_required: true,
+          reviewed_native_execution: true,
+          command,
+          suggested_reason:
+            "xcrun cannot locate the installed Metal Toolchain inside the sandbox.",
+        },
+      ],
+      prohibited_workarounds: [
+        "Do not reinstall the Metal Toolchain or Xcode because of this sandboxed error alone.",
+        "Do not request broad mach-lookup access.",
       ],
     } satisfies ExecuteCommandRetryGuidance,
   });
@@ -2838,6 +2900,7 @@ async function executeCommandWithAudit(
           owner: undefined,
           command: commandToRun,
           cwd,
+          outputFilter: streamableOutputFilter(outputFilterFromParams(params)),
           terminal_id: params.terminal_id,
           terminal_name: params.terminal_name,
           split_from: params.split_from,
@@ -3147,38 +3210,17 @@ async function executeCommandWithAudit(
           }
           delete nativeResult.terminal_raw_output;
           if (nativeResult.output_captured && nativeResult.output) {
-            const fullOutput = nativeResult.output;
-            const { filtered, totalLines, linesShown, truncated } =
-              filterOutput(fullOutput, {
-                output_head: params.output_head,
-                output_tail: params.output_tail,
-                output_offset: params.output_offset,
-                output_grep: params.output_grep,
-                output_grep_context: params.output_grep_context,
-              });
-            nativeResult.total_lines = totalLines;
-            nativeResult.lines_shown = linesShown;
-            nativeResult.output_truncated = truncated;
-            nativeResult.total_lines_scope =
-              nativeResult.output_complete === false ||
-              nativeResult.output_finalized === false
-                ? "retained"
-                : "complete";
-            if (nativeResult.output_finalized === false) {
-              nativeResult.output_warning =
-                "Terminal output is still running. Filtering applies only to retained output.";
-            } else if (nativeResult.output_complete === false) {
-              nativeResult.output_warning =
-                "Terminal output exceeded the bounded capture limit. No full-output file is available.";
-            } else if (truncated || linesShown < totalLines) {
-              const outputFile = saveOutputTempFile(fullOutput);
-              if (outputFile) {
-                nativeResult.output_file = outputFile;
-                nativeResult.output_warning =
-                  "Output was truncated. Full output saved to output_file. Do not re-run this command.";
-              }
-            }
-            nativeResult.output = filtered;
+            Object.assign(
+              nativeResult,
+              presentCommandOutput({
+                output: nativeResult.output,
+                complete: nativeResult.output_complete !== false,
+                finalized: nativeResult.output_finalized !== false,
+                droppedBytes: nativeResult.output_dropped_bytes,
+                filter: outputFilterFromParams(params),
+                streamed: readStreamedOutputFilter(retainedOutput),
+              }),
+            );
           }
           return {
             content: [{ type: "text", text: JSON.stringify(nativeResult) }],
@@ -3609,6 +3651,11 @@ async function executeCommandWithAudit(
           output: result.output,
           replayable: replayableWithNarrowSandboxCapabilities,
           temporaryHome,
+        });
+        attachSandboxMetalToolchainRetryGuidance({
+          result,
+          command: commandToRun,
+          output: result.output,
         });
         attachSandboxHostIntegrationRetryGuidance({
           result,
@@ -4113,6 +4160,11 @@ async function executeCommandWithAudit(
           replayable: replayableWithNarrowSandboxCapabilities,
           temporaryHome,
         });
+        attachSandboxMetalToolchainRetryGuidance({
+          result,
+          command: commandToRun,
+          output: result.output,
+        });
         attachSandboxHostIntegrationRetryGuidance({
           result,
           command: commandToRun,
@@ -4143,42 +4195,37 @@ async function executeCommandWithAudit(
         // Receipt accounting is not an execution result or an approval gate.
       }
       if (result.output_captured && result.output) {
-        const fullOutput = result.output;
-        const filterOptions = {
-          output_head: params.output_head,
-          output_tail: params.output_tail,
-          output_offset: params.output_offset,
-          output_grep: params.output_grep,
-          output_grep_context: params.output_grep_context,
-        };
-        const { filtered, totalLines, linesShown, truncated } = filterOutput(
-          fullOutput,
-          filterOptions,
+        const filter = outputFilterFromParams(params);
+        const rawOutputLost =
+          result.output_dropped_bytes !== undefined
+            ? result.output_dropped_bytes > 0
+            : result.output_complete === false &&
+              result.output_finalized !== false;
+        // Streamed caller-filter matches survive raw-tail loss; they are
+        // read from retained output so the snapshot never enters the result.
+        const streamed =
+          rawOutputLost && isStreamableFilter(filter) && result.terminal_id
+            ? readStreamedOutputFilter(
+                providers.terminalProvider.getRetainedOutput?.({
+                  owner: undefined,
+                  terminalId: result.terminal_id,
+                  ...(result.command_id
+                    ? { commandId: result.command_id }
+                    : {}),
+                }),
+              )
+            : undefined;
+        Object.assign(
+          result,
+          presentCommandOutput({
+            output: result.output,
+            complete: result.output_complete !== false,
+            finalized: result.output_finalized !== false,
+            droppedBytes: result.output_dropped_bytes,
+            filter,
+            streamed,
+          }),
         );
-
-        result.total_lines = totalLines;
-        result.lines_shown = linesShown;
-        result.output_truncated = truncated;
-        result.total_lines_scope =
-          result.output_finalized === false || result.output_complete === false
-            ? "retained"
-            : "complete";
-
-        if (result.output_finalized === false) {
-          result.output_warning =
-            "Terminal output is still running or was closed before finalization. Filtering applies to retained output so far; no final output file is available.";
-        } else if (result.output_complete === false) {
-          result.output_warning = `⚠️ Terminal output exceeded the bounded capture limit. ${result.output_dropped_bytes === undefined ? "Some output" : formatBytes(result.output_dropped_bytes)} was not retained; filtering applies only to the retained tail and no full-output file is available.`;
-        } else if (truncated || linesShown < totalLines) {
-          const outputFile = saveOutputTempFile(fullOutput);
-          if (outputFile) {
-            result.output_file = outputFile;
-            result.output_warning =
-              "⚠️ Output was truncated. Full output saved to output_file — use read_file(output_file) to access it. Do NOT re-run this command.";
-          }
-        }
-
-        result.output = filtered;
       } else if (!result.output_captured && !result.output) {
         result.output =
           "Command execution was sent to the terminal, but no output was captured.";

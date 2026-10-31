@@ -1,5 +1,6 @@
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -8,7 +9,13 @@ import {
   SANDBOX_INTERACTIVE_HELPER_RELATIVE_PATH,
   type SandboxHelperChildProcess,
 } from "./NodeSandboxHelperTransport.js";
-import { MAX_SANDBOX_HELPER_FRAME_BYTES } from "./sandboxHelperProtocol.js";
+import { SandboxHelperClient } from "./SandboxHelperClient.js";
+import {
+  MAX_SANDBOX_HELPER_DATA_BYTES,
+  MAX_SANDBOX_HELPER_EVENT_FRAME_BYTES,
+  SANDBOX_HELPER_PROTOCOL_VERSION,
+  type SandboxHelperLaunchRequest,
+} from "./sandboxHelperProtocol.js";
 
 const extensionRoot = "/Applications/AgentLink Extension";
 const helperPath = path.join(
@@ -211,7 +218,7 @@ describe("NodeSandboxHelperTransport", () => {
 
     test.child.stdout.emit(
       "data",
-      Buffer.alloc(MAX_SANDBOX_HELPER_FRAME_BYTES + 1, "x"),
+      Buffer.alloc(MAX_SANDBOX_HELPER_EVENT_FRAME_BYTES + 1, "x"),
     );
 
     expect(errors).toHaveBeenCalledWith(
@@ -231,7 +238,7 @@ describe("NodeSandboxHelperTransport", () => {
     test.child.stderr.emit("data", Buffer.alloc(70 * 1024, "e"));
     test.child.stdout.emit(
       "data",
-      Buffer.alloc(MAX_SANDBOX_HELPER_FRAME_BYTES + 1, "x"),
+      Buffer.alloc(MAX_SANDBOX_HELPER_EVENT_FRAME_BYTES + 1, "x"),
     );
 
     const error = errors.mock.calls[0][0] as Error;
@@ -286,6 +293,160 @@ describe("NodeSandboxHelperTransport", () => {
         realpath: vi.fn((candidate: string) => candidate),
       }),
     ).toThrow("nodeExecutable must be an absolute path");
+  });
+
+  describe("process output through the real transport and client", () => {
+    const launchRequest: SandboxHelperLaunchRequest = {
+      version: SANDBOX_HELPER_PROTOCOL_VERSION,
+      type: "launch",
+      channelId: "channel-1",
+      commandId: "command-1",
+      generation: 1,
+      command: "xcrun metal -c shader.metal",
+      cwd: "/workspace",
+      shell: "/bin/zsh",
+      environment: { HOME: "/private/tmp/home" },
+      filesystem: {
+        denyRead: [],
+        allowRead: ["/workspace"],
+        allowWrite: ["/workspace"],
+        denyWrite: [],
+      },
+      network: { mode: "loopback" },
+      protectedRoots: [],
+      structurallyProtectedRoots: [],
+      dimensions: { columns: 80, rows: 24 },
+      stdio: "pipe",
+    };
+
+    /** Decode raw child bytes exactly as the helper does (`setEncoding("utf8")`). */
+    async function decodeLikeHelper(chunks: Buffer[]): Promise<string[]> {
+      const stream = new PassThrough();
+      stream.setEncoding("utf8");
+      const decoded: string[] = [];
+      stream.on("data", (chunk: string) => decoded.push(chunk));
+      for (const chunk of chunks) stream.write(chunk);
+      stream.end();
+      await once(stream, "end");
+      return decoded;
+    }
+
+    /** Run helper-serialized frames through the real transport and client. */
+    async function runThroughClient(
+      frames: Array<Record<string, unknown>>,
+      chunkBytes: number,
+    ) {
+      const test = harness();
+      const client = new SandboxHelperClient(test.factory);
+      const commandProcess = client.launch(launchRequest);
+      const output: string[] = [];
+      commandProcess.onEvent((event) => {
+        if (event.type === "data") output.push(event.data);
+      });
+      const identity = commandProcess.identity;
+      // The helper serializes each frame with JSON.stringify plus a newline.
+      const bytes = Buffer.from(
+        frames
+          .map((frame) => `${JSON.stringify({ ...identity, ...frame })}\n`)
+          .join(""),
+        "utf8",
+      );
+      for (let offset = 0; offset < bytes.length; offset += chunkBytes) {
+        test.child.stdout.emit(
+          "data",
+          bytes.subarray(offset, offset + chunkBytes),
+        );
+      }
+      const completion = await commandProcess.completion;
+      await Promise.resolve();
+      test.child.emitClose(0, null);
+      return { completion, output: output.join(""), child: test.child };
+    }
+
+    it("preserves exit status for NUL, control, invalid and split UTF-8 output", async () => {
+      const euro = Buffer.from("€", "utf8");
+      const emoji = Buffer.from("😀", "utf8");
+      const rawChunks = [
+        Buffer.from("build/v1_baseline.metallib:1:1: ", "utf8"),
+        // Binary container bytes: magic, NUL, C0 controls, ESC, BEL, DEL,
+        // invalid UTF-8 and a truncated lead byte.
+        Buffer.from([
+          0x4d, 0x54, 0x4c, 0x42, 0x00, 0x01, 0x1b, 0x07, 0x7f, 0xff, 0xfe,
+          0xc3,
+        ]),
+        // Multibyte characters split across child output chunks.
+        euro.subarray(0, 1),
+        euro.subarray(1),
+        emoji.subarray(0, 2),
+        Buffer.concat([emoji.subarray(2), Buffer.from("\0 error\n", "utf8")]),
+      ];
+      const decoded = await decodeLikeHelper(rawChunks);
+      const expected = decoded.join("");
+      expect(expected).toContain("\0");
+      expect(expected).toContain("\uFFFD");
+      expect(expected).toContain("€😀");
+
+      // Odd chunk sizes also split the multibyte characters inside frames.
+      for (const chunkBytes of [1, 3, 7, 4096]) {
+        const result = await runThroughClient(
+          [
+            { type: "ready", pid: 77, pgid: 77, backend: "seatbelt" },
+            ...decoded.map((data) => ({
+              type: "data",
+              data,
+              stream: "stderr",
+            })),
+            { type: "exit", exitCode: 1, timedOut: false },
+          ],
+          chunkBytes,
+        );
+        expect(result.completion).toEqual({ exitCode: 1, timedOut: false });
+        expect(result.output).toBe(expected);
+        expect(result.child.kill).not.toHaveBeenCalled();
+      }
+    });
+
+    it("accepts a maximum-size output chunk at worst-case JSON escaping", async () => {
+      const data = "\u0001".repeat(MAX_SANDBOX_HELPER_DATA_BYTES);
+      expect(
+        Buffer.byteLength(JSON.stringify({ data }), "utf8"),
+      ).toBeGreaterThan(5 * MAX_SANDBOX_HELPER_DATA_BYTES);
+
+      const result = await runThroughClient(
+        [
+          { type: "ready", pid: 77, pgid: 77, backend: "seatbelt" },
+          { type: "data", data, stream: "stdout" },
+          { type: "exit", exitCode: 0, timedOut: false },
+        ],
+        64 * 1024,
+      );
+
+      expect(result.completion).toEqual({ exitCode: 0, timedOut: false });
+      expect(result.output).toBe(data);
+      expect(result.child.kill).not.toHaveBeenCalled();
+    });
+
+    it("still fails closed on a genuinely malformed frame", async () => {
+      const test = harness();
+      const client = new SandboxHelperClient(test.factory);
+      const commandProcess = client.launch(launchRequest);
+      const failure = commandProcess.completion.catch(
+        (error: unknown) => error,
+      );
+      const identity = commandProcess.identity;
+      test.child.stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ ...identity, type: "ready", pid: 77, pgid: 77, backend: "seatbelt" })}\n${JSON.stringify({ ...identity, type: "data", data: "\0ok", authority: "host" })}\n`,
+        ),
+      );
+
+      expect(await failure).toMatchObject({
+        message: "Sandbox helper emitted an invalid event frame",
+        category: "protocol_validation",
+      });
+      expect(test.child.kill).toHaveBeenCalledWith("SIGKILL");
+    });
   });
 
   it("rejects unsupported hosts, missing/symlinked helpers, and path escape", () => {

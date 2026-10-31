@@ -447,6 +447,41 @@ describe("SandboxTerminalSession", () => {
     });
   });
 
+  it("keeps early caller-filter matches after output overflows retention", async () => {
+    const test = session({ maxReplayBytes: 16, maxCommandOutputBytes: 64 });
+    const running = process("command-1", 1);
+    test.session.startCommand({
+      command: "generate output",
+      cwd: "/workspace",
+      origin: "agent",
+      process: running,
+      outputFilter: { output_grep: "^match", output_head: 2 },
+    });
+    running.readyDeferred.resolve({ pid: 1, pgid: 1, backend: "seatbelt" });
+    await flush();
+
+    running.emit({ type: "data", data: "noise\nmatch one\nmat" });
+    running.emit({ type: "data", data: "ch two\n" });
+    for (let i = 0; i < 20; i++) {
+      running.emit({ type: "data", data: `filler line ${i}\nmatch late\n` });
+    }
+    running.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+    await flush();
+
+    const output = test.session.getCommandOutput("command-1");
+    expect(output?.complete).toBe(false);
+    expect(output?.output).not.toContain("match one");
+    expect(output?.streamedFilter).toMatchObject({
+      filter: { output_grep: "^match", output_head: 2 },
+      exact: true,
+      sensitive: false,
+    });
+    expect(output?.streamedFilter?.lines.slice(0, 2)).toEqual([
+      "match one",
+      "match two",
+    ]);
+  });
+
   it("does not report a truncated spool as complete", async () => {
     const spoolRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "agentlink-spool-test-"),

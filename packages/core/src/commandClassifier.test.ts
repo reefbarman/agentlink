@@ -53,6 +53,7 @@ describe("static binary file inspection", () => {
       for (const command of [
         "dyld_info -uuid /usr/lib/dyld",
         "dyld_info -disassemble /usr/lib/dyld",
+        "xcrun dyld_info -exports -function_starts /usr/lib/dyld",
         // Shared-cache images have no on-disk file; dyld_info resolves them.
         "dyld_info -uuid /System/Library/Frameworks/AgentLinkCacheOnly.framework/AgentLinkCacheOnly",
       ]) {
@@ -98,6 +99,11 @@ describe("static binary file inspection", () => {
     "dyld_info -disassemble capture.bin",
     "dyld_info -uuid capture.bin",
     "dyld_info -uuid -disassemble 'image file'",
+    "dyld_info -exports -function_starts capture.bin",
+    "dyld_info -platform -segments -dependents -inits -imports capture.bin",
+    "xcrun dyld_info",
+    "xcrun dyld_info -uuid capture.bin",
+    "xcrun dyld_info -exports -function_starts capture.bin",
   ])("allows narrowly scoped inspection: %s", (command) => {
     expect(classifyCommand(command, ctx).tier).toBe("safe");
     expect(isCommandEligibleForReadOnlyExecution(command, ctx)).toEqual({
@@ -158,6 +164,14 @@ describe("static binary file inspection", () => {
     "dyld_info -disassemble -",
     "/usr/bin/dyld_info -help",
     "dyld_info -help > output.txt",
+    "xcrun dyld_info capture.bin",
+    "xcrun dyld_info -section __TEXT __text capture.bin",
+    "xcrun -sdk macosx dyld_info -uuid capture.bin",
+    "xcrun -r dyld_info -uuid capture.bin",
+    "xcrun --run dyld_info -uuid capture.bin",
+    "xcrun xxd -l 4 capture.bin",
+    "xcrun clang -c capture.bin",
+    "xcrun dyld_info -uuid capture.bin > output.txt",
     "od -Ax -tx1 -N 512 capture.bin",
     "hexdump -C -n 512 capture.bin",
     "jq -r 'select(.event == \"resource\") | [.id, (.request_hex[176:192]), (.request_hex[192:208])] | @tsv' capture.bin",
@@ -168,35 +182,37 @@ describe("static binary file inspection", () => {
     expect(classifyCommand(command, ctx).tier).not.toBe("safe");
   });
 
-  it.each(["xxd -l 4", "dyld_info -disassemble", "dyld_info -uuid"])(
-    "preserves external and secret path guards: %s",
-    (prefix) => {
-      for (const target of [path.join(outside, "image"), "outside-link"]) {
-        const command = `${prefix} ${target}`;
-        expect(
-          classifyCommand(command, ctx).perSubCommand[0]?.result,
-        ).toMatchObject({
-          tier: "dangerous",
-          code: "external_path",
-        });
-        expect(
-          isCommandEligibleForReadOnlyExecution(command, ctx).eligible,
-        ).toBe(false);
-      }
-      for (const target of [".env", "secret-link"]) {
-        const command = `${prefix} ${target}`;
-        expect(
-          classifyCommand(command, ctx).perSubCommand[0]?.result,
-        ).toMatchObject({
-          tier: "dangerous",
-          code: "secret_path",
-        });
-        expect(
-          isCommandEligibleForReadOnlyExecution(command, ctx).eligible,
-        ).toBe(false);
-      }
-    },
-  );
+  it.each([
+    "xxd -l 4",
+    "dyld_info -disassemble",
+    "dyld_info -uuid",
+    "xcrun dyld_info -exports",
+  ])("preserves external and secret path guards: %s", (prefix) => {
+    for (const target of [path.join(outside, "image"), "outside-link"]) {
+      const command = `${prefix} ${target}`;
+      expect(
+        classifyCommand(command, ctx).perSubCommand[0]?.result,
+      ).toMatchObject({
+        tier: "dangerous",
+        code: "external_path",
+      });
+      expect(isCommandEligibleForReadOnlyExecution(command, ctx).eligible).toBe(
+        false,
+      );
+    }
+    for (const target of [".env", "secret-link"]) {
+      const command = `${prefix} ${target}`;
+      expect(
+        classifyCommand(command, ctx).perSubCommand[0]?.result,
+      ).toMatchObject({
+        tier: "dangerous",
+        code: "secret_path",
+      });
+      expect(isCommandEligibleForReadOnlyExecution(command, ctx).eligible).toBe(
+        false,
+      );
+    }
+  });
 
   it("allows an absolute workspace file without relaxing executable paths", () => {
     expect(

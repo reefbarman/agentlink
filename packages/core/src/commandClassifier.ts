@@ -265,6 +265,12 @@ export class StaticCommandTierClassifier implements CommandTierClassifier {
       if (redirection) return redirection;
       return classifyStaticFileInspection(command, args, ctx);
     }
+    // `xcrun dyld_info ...` only locates and runs the same tool. Accept no
+    // xcrun options (-sdk, -run, toolchain overrides) so the grammar stays closed.
+    if (command === "xcrun" && args[0] === "dyld_info") {
+      if (redirection) return redirection;
+      return classifyStaticFileInspection("dyld_info", args.slice(1), ctx);
+    }
 
     const semanticClassification =
       command === "git"
@@ -1297,6 +1303,22 @@ function findRedirectionTarget(tokens: string[]): string | undefined {
   return undefined;
 }
 
+/**
+ * Value-free dyld_info flags that only print static Mach-O metadata. Options
+ * taking operands (such as -section) are excluded to keep the grammar closed.
+ */
+const DYLD_INFO_OPTIONS = new Set([
+  "-disassemble",
+  "-uuid",
+  "-platform",
+  "-segments",
+  "-dependents",
+  "-inits",
+  "-exports",
+  "-imports",
+  "-function_starts",
+]);
+
 /** Allow only bounded hex reads and static Mach-O inspection of one file. */
 function classifyStaticFileInspection(
   command: "xxd" | "dyld_info",
@@ -1316,7 +1338,7 @@ function classifyStaticFileInspection(
     sensitive(
       command === "xxd"
         ? "xxd requires [-g 1|2|4|8|16] [-s offset] -l 1..65536 and one regular workspace file"
-        : "dyld_info requires no arguments (usage) or -disassemble/-uuid and one regular workspace file",
+        : `dyld_info requires no arguments (usage) or ${[...DYLD_INFO_OPTIONS].join("/")} and one regular workspace file or Apple system image`,
       "unrecognized_operation",
       command,
     );
@@ -1340,7 +1362,7 @@ function classifyStaticFileInspection(
     if (seen.has(option)) return invalid();
     seen.add(option);
     if (command === "dyld_info") {
-      if (option !== "-disassemble" && option !== "-uuid") return invalid();
+      if (!DYLD_INFO_OPTIONS.has(option)) return invalid();
       continue;
     }
     if (option !== "-g" && option !== "-s" && option !== "-l") {

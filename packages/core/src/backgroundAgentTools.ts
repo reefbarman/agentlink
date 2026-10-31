@@ -130,6 +130,20 @@ export interface BackgroundAgentStatusResult {
     | "cancelled"
     | "error";
   currentTool?: string;
+  /**
+   * Bounded single-line summary of the running top-level tool's identifying
+   * inputs (for example `path=src/a.ts regex=foo`). Never includes file
+   * contents, commands, or environment values.
+   */
+  currentToolInput?: string;
+  /** Timestamp when the current top-level tool call started. */
+  currentToolStartedAt?: number;
+  /** Wall time the current top-level tool call has been running. */
+  currentToolElapsedMs?: number;
+  /** An accepted steering message is queued and not yet delivered to the agent. */
+  pendingSteering?: boolean;
+  /** Timestamp when the oldest still-queued steering message was accepted. */
+  steeringQueuedAt?: number;
   displayStatus?: string;
   streamingPreview?: string;
   resolvedMode?: string;

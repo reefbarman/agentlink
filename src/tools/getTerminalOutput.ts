@@ -1,16 +1,14 @@
-import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
+import {
+  outputFilterFromParams,
+  presentCommandOutput,
+  readStreamedOutputFilter,
+} from "../terminal/commandOutput.js";
 
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { detectInteractivePrompt } from "../terminal/interactivePromptDetector.js";
 import { sandboxDockerRecovery } from "./sandboxDockerRecovery.js";
 import { sleep } from "../util/sleep.js";
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} bytes`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
-}
 
 export interface GetTerminalOutputProviders {
   terminalProvider?: TerminalProvider;
@@ -277,39 +275,18 @@ export async function handleGetTerminalOutput(
   }
 
   if (state.output_captured && output) {
-    const filterOptions = {
-      output_head: params.output_head,
-      output_tail: params.output_tail,
-      output_offset: params.output_offset,
-      output_grep: params.output_grep,
-      output_grep_context: params.output_grep_context,
-    };
-    const { filtered, totalLines, linesShown, truncated } = filterOutput(
-      output,
-      filterOptions,
+    Object.assign(
+      result,
+      presentCommandOutput({
+        output,
+        complete: outputComplete,
+        finalized: outputFinalized,
+        droppedBytes:
+          retainedOutput?.dropped_bytes ?? state.output_dropped_bytes,
+        filter: outputFilterFromParams(params),
+        streamed: readStreamedOutputFilter(retainedOutput),
+      }),
     );
-
-    result.output = filtered;
-    result.total_lines = totalLines;
-    result.lines_shown = linesShown;
-    result.output_truncated = truncated;
-    result.total_lines_scope = outputComplete ? "complete" : "retained";
-
-    if (!outputFinalized) {
-      result.output_warning =
-        "Terminal output is still running or was closed before finalization. Filtering applies to retained output so far; no final output file is available.";
-    } else if (!outputComplete) {
-      const droppedBytes =
-        retainedOutput?.dropped_bytes ?? state.output_dropped_bytes;
-      result.output_warning = `⚠️ Terminal output exceeded the bounded capture limit. ${droppedBytes === undefined ? "Some output" : formatBytes(droppedBytes)} was not retained; filtering applies only to the retained tail and no full-output file is available.`;
-    } else if (truncated || linesShown < totalLines) {
-      const outputFile = saveOutputTempFile(output);
-      if (outputFile) {
-        result.output_file = outputFile;
-        result.output_warning =
-          "⚠️ Output was truncated. Full output saved to output_file — use read_file(output_file) to access it. Do NOT re-run this command.";
-      }
-    }
   } else if (!state.output_captured) {
     result.output =
       "Output capture unavailable — shell integration was not active when the background command started.";

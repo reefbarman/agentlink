@@ -229,11 +229,50 @@ export function sameTerminalOwnerScope(
   return left.scopeId === right.scopeId && left.generation === right.generation;
 }
 
+/** The subset of caller output filters that a terminal applies while streaming. */
+export interface StreamedOutputFilterSpec {
+  output_grep?: string;
+  output_grep_context?: number;
+  output_head?: number;
+  output_tail?: number;
+  output_offset?: number;
+}
+
+/** Bounded filter candidates collected over a command's whole output stream. */
+export interface StreamedOutputFilterSnapshot {
+  /** Normalized filter the candidates were collected for. */
+  filter: StreamedOutputFilterSpec;
+  /** Retained candidate lines (grep-selected lines, context, separators). */
+  lines: string[];
+  /** Candidate index of `lines[0]`. */
+  firstCandidateIndex: number;
+  /** Candidate lines produced over the observed stream. */
+  candidateLines: number;
+  /** Raw output lines observed, counted like `filterCommandOutput`. */
+  totalLines: number;
+  /** Whether the observed output ends with a newline. */
+  endsWithNewline: boolean;
+  /** False when bounded retention may have dropped lines the filter needed. */
+  exact: boolean;
+  /** Raw lines longer than the per-line bound; only their start was matched. */
+  truncatedLines: number;
+  /**
+   * Structured secret output was observed. Callers must not present streamed
+   * lines; no lines are retained once this is set.
+   */
+  sensitive: boolean;
+}
+
 export interface TerminalExecuteOptions {
   /** Required migration key; interactive AgentLink execution must provide an owner. */
   owner: TerminalExecutionOwner | undefined;
   command: string;
   cwd: string;
+  /**
+   * Caller output filter to apply while output streams, so early matches
+   * survive after raw output exceeds the retained tail.
+   */
+  outputFilter?: StreamedOutputFilterSpec;
   terminal_id?: string;
   /** Explicit logical selector: reuse or create a terminal with this name. */
   terminal_name?: string;
@@ -324,6 +363,8 @@ export interface TerminalRetainedOutputMetadata {
 
 export interface TerminalRetainedOutput extends TerminalRetainedOutputMetadata {
   output: string;
+  /** Streamed caller-filter candidates, when the command requested a filter. */
+  streamed_filter?: StreamedOutputFilterSnapshot;
 }
 
 export interface TerminalRetainedOutputLease {

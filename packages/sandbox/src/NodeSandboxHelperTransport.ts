@@ -7,7 +7,7 @@ import { lstatSync, realpathSync, type Stats } from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
-import { MAX_SANDBOX_HELPER_FRAME_BYTES } from "./sandboxHelperProtocol.js";
+import { MAX_SANDBOX_HELPER_EVENT_FRAME_BYTES } from "./sandboxHelperProtocol.js";
 import type {
   SandboxHelperTransport,
   SandboxHelperTransportFactory,
@@ -222,7 +222,7 @@ class NodeSandboxHelperTransport implements SandboxHelperTransport {
       if (newline === -1) {
         if (
           Buffer.byteLength(this.pending, "utf8") >
-          MAX_SANDBOX_HELPER_FRAME_BYTES
+          MAX_SANDBOX_HELPER_EVENT_FRAME_BYTES
         ) {
           this.protocolFailure(
             "Sandbox helper output frame exceeds maximum size",
@@ -233,7 +233,9 @@ class NodeSandboxHelperTransport implements SandboxHelperTransport {
       const line = this.pending.slice(0, newline);
       this.pending = this.pending.slice(newline + 1);
 
-      if (Buffer.byteLength(line, "utf8") > MAX_SANDBOX_HELPER_FRAME_BYTES) {
+      if (
+        Buffer.byteLength(line, "utf8") > MAX_SANDBOX_HELPER_EVENT_FRAME_BYTES
+      ) {
         this.protocolFailure(
           "Sandbox helper output frame exceeds maximum size",
         );
