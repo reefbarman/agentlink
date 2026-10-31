@@ -125,6 +125,7 @@ export interface BrowserGatewaySessionState {
         lastCacheReadTokens: number;
         estimatedTotalUsed: number;
         messageQueue: AppState["messageQueue"];
+        autoContinue?: BrowserGatewayAutoContinueState;
         questionRequest: StructuredQuestionRequest | null;
         detectedQuestion: AppState["detectedQuestion"];
         todos: TodoItem[];
@@ -175,6 +176,8 @@ export interface BrowserGatewayWireSessionState {
     lastCacheReadTokens: number;
     estimatedTotalUsed: number;
     messageQueue: AppState["messageQueue"];
+    /** Host-owned Auto Continue, shared with VS Code. */
+    autoContinue?: BrowserGatewayAutoContinueState;
     questionRequest: StructuredQuestionRequest | null;
     detectedQuestion: AppState["detectedQuestion"];
     todos: TodoItem[];
@@ -204,6 +207,20 @@ export interface BrowserGatewayDetachedSessionUiState {
   questionProgress: QuestionProgressState | null;
   formElicitation: McpFormElicitationRequest | null;
   urlElicitation: McpUrlElicitationRequest | null;
+}
+
+export interface BrowserGatewayAutoContinueState {
+  enabled: boolean;
+  status: string;
+}
+
+/**
+ * Provider-owned per-session state: queued browser messages for a session the
+ * foreground projection does not track, and the shared Auto Continue toggle.
+ */
+export interface BrowserGatewayDetachedSessionOwnerState {
+  messageQueue: AppState["messageQueue"];
+  autoContinue?: BrowserGatewayAutoContinueState;
 }
 
 export interface BrowserGatewayDetachedSessionDetail {
@@ -293,6 +310,21 @@ export class BrowserGatewayService implements vscode.Disposable {
   setHasActiveClientsProbe(probe: (() => boolean) | undefined): void {
     this.hasActiveClientsProbe = probe;
   }
+
+  /**
+   * Register the provider-owned state for sessions the foreground projection
+   * does not track, such as messages the browser queued on a VS Code tab that
+   * is not focused.
+   */
+  setDetachedSessionStateProvider(
+    getState: (sessionId: string) => BrowserGatewayDetachedSessionOwnerState,
+  ): void {
+    this.getDetachedSessionOwnerState = getState;
+  }
+
+  private getDetachedSessionOwnerState: (
+    sessionId: string,
+  ) => BrowserGatewayDetachedSessionOwnerState = () => ({ messageQueue: [] });
 
   constructor(
     private readonly uiEventHub: ReadableAgentUiEventHub,
@@ -585,6 +617,9 @@ export class BrowserGatewayService implements vscode.Disposable {
     const projected = this.getProjectedForegroundState();
     const projectedMatchesForeground =
       projected && projected.sessionId === foreground.id;
+    const foregroundAutoContinue = this.getDetachedSessionOwnerState(
+      foreground.id,
+    ).autoContinue;
     const configuredCommandApprovalPolicy =
       this.getConfiguredCommandApprovalPolicy(foreground.projectScope);
     const approvalMode = this.sessionManager.getSessionApprovalMode(
@@ -689,6 +724,9 @@ export class BrowserGatewayService implements vscode.Disposable {
           ? projected.estimatedTotalUsed
           : foreground.estimatedTotalUsed,
         messageQueue: projectedMatchesForeground ? projected.messageQueue : [],
+        ...(foregroundAutoContinue
+          ? { autoContinue: { ...foregroundAutoContinue } }
+          : {}),
         questionRequest: projectedMatchesForeground
           ? projected.questionRequest
           : null,
@@ -761,6 +799,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     const messages = session.getAllMessages();
     const projected = this.getProjectedForegroundState();
     const projectedMatchesSession = projected?.sessionId === session.id;
+    const detachedOwnerState = this.getDetachedSessionOwnerState(session.id);
     const projectedMessages = projectedMatchesSession
       ? projected.projectedMessages
       : agentMessagesToChatMessages(messages, { baseIndex: 0 });
@@ -847,7 +886,12 @@ export class BrowserGatewayService implements vscode.Disposable {
         estimatedTotalUsed: projectedMatchesSession
           ? projected.estimatedTotalUsed
           : session.estimatedTotalUsed,
-        messageQueue: projectedMatchesSession ? projected.messageQueue : [],
+        messageQueue: projectedMatchesSession
+          ? projected.messageQueue
+          : detachedOwnerState.messageQueue,
+        ...(detachedOwnerState.autoContinue
+          ? { autoContinue: { ...detachedOwnerState.autoContinue } }
+          : {}),
         questionRequest: projectedMatchesSession
           ? (projected.questionRequest ?? ui.question)
           : ui.question,
@@ -946,6 +990,9 @@ export class BrowserGatewayService implements vscode.Disposable {
             lastCacheReadTokens: sessionState.foreground.lastCacheReadTokens,
             estimatedTotalUsed: sessionState.foreground.estimatedTotalUsed,
             messageQueue: sessionState.foreground.messageQueue,
+            ...(sessionState.foreground.autoContinue
+              ? { autoContinue: sessionState.foreground.autoContinue }
+              : {}),
             questionRequest: sessionState.foreground.questionRequest,
             detectedQuestion: sessionState.foreground.detectedQuestion,
             todos: sessionState.foreground.todos,

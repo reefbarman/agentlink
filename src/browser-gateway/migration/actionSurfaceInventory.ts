@@ -204,6 +204,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
   retainedHttp(
     "vscode_gateway",
     "POST",
+    "/api/auto-continue",
+    "Owner-run Auto Continue toggle; not yet in the relay checkpoint.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
     "/api/queue/resolve-skill-selection",
     "Explicit selection correction uses the queue HTTP boundary until queue command protocol coverage lands.",
   ),

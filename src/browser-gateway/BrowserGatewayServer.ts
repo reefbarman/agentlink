@@ -514,6 +514,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "POST",
+        rawExact("/api/auto-continue"),
+        ({ req, res }) => this.handleAutoContinueAction(req, res),
+        json("auto continue action failed"),
+      ),
+      route(
+        "POST",
         rawExact("/api/queue/steer"),
         ({ req, res }) => this.handleQueueSteerAction(req, res),
         json("queue steer action failed"),
@@ -1737,6 +1743,55 @@ export class BrowserGatewayServer implements vscode.Disposable {
       result.ok ? 200 : 404,
       result.ok ? { ...result, snapshot: this.getSnapshot() } : result,
     );
+  }
+
+  /**
+   * Read (no `enabled`) or set a session's Auto Continue toggle. The owner
+   * runs Auto Continue, so VS Code and the browser share one setting.
+   */
+  private async handleAutoContinueAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as {
+      sessionId?: unknown;
+      projectId?: unknown;
+      enabled?: unknown;
+    } | null;
+    const sessionId =
+      typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
+    if (
+      !sessionId ||
+      (body?.enabled !== undefined && typeof body.enabled !== "boolean")
+    ) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const projectId = this.resolveRequestedProjectId(body?.projectId, res);
+    if (!projectId || !this.validateSessionProject(sessionId, projectId, res)) {
+      return;
+    }
+
+    if (typeof body?.enabled !== "boolean") {
+      this.writeJson(res, 200, {
+        ok: true,
+        autoContinue:
+          this.chatViewProvider.getBrowserDetachedSessionState(sessionId)
+            .autoContinue,
+      });
+      return;
+    }
+    const result = this.chatViewProvider.setBrowserAutoContinue({
+      sessionId,
+      projectId,
+      enabled: body.enabled,
+    });
+    this.writeJson(res, result.ok ? 200 : 404, result);
   }
 
   private async handleModeAction(

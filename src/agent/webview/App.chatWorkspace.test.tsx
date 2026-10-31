@@ -482,7 +482,7 @@ describe("App chat workspace integration", () => {
     });
   });
 
-  it("auto-continues a tab that completes while another tab is selected", async () => {
+  it("leaves Auto Continue to the host and mirrors its state for inactive tabs", async () => {
     const vscodeApi = createVsCodeApi();
     const { container } = render(<App vscodeApi={vscodeApi} />);
     deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
@@ -492,30 +492,16 @@ describe("App chat workspace integration", () => {
         sessionId: "session-1",
         mode: "code",
         model: "claude-opus-5",
-        reasoningEffort: "high",
         streaming: true,
         projects: [{ projectId: "project-1", displayName: "Project" }],
       },
     });
     fireEvent.click(screen.getByRole("button", { name: "Auto Continue" }));
-    deliver({
-      type: "agentTextDelta",
-      sessionId: "session-1",
-      text: "Ready for another slice.",
-    });
-    deliver({
-      type: "agentFinalMarker",
-      sessionId: "session-1",
-      marker: {
-        status: "completed",
-        source: "tool",
-        summary: "Ready for another slice.",
-        continueAction: {
-          label: "Continue",
-          prompt: "Continue the inactive tab.",
-        },
-      },
-    });
+    expect(
+      postedCommands(vscodeApi.postMessage, "agentSetAutoContinue"),
+    ).toContainEqual(
+      expect.objectContaining({ sessionId: "session-1", enabled: true }),
+    );
 
     const tabSelectors =
       container.querySelectorAll<HTMLButtonElement>(".chat-tab-select");
@@ -532,6 +518,15 @@ describe("App chat workspace integration", () => {
       },
     });
     deliver({
+      type: "agentFinalMarker",
+      sessionId: "session-1",
+      marker: {
+        status: "waiting_for_user",
+        source: "tool",
+        summary: "Need a decision.",
+      },
+    });
+    deliver({
       type: "agentDone",
       sessionId: "session-1",
       transcriptRevision: 2,
@@ -540,29 +535,38 @@ describe("App chat workspace integration", () => {
       totalCacheReadTokens: 0,
       totalCacheCreationTokens: 0,
     });
-
-    await waitFor(() => {
-      expect(postedCommands(vscodeApi.postMessage, "agentSend")).toContainEqual(
-        expect.objectContaining({
-          text: "Continue the inactive tab.",
-          controllerEpoch: "epoch-1",
-          tabId: "tab-1",
-          sessionId: "session-1",
-          mode: "code",
-          reasoningEffort: "high",
-        }),
-      );
+    // The host decides; the webview never sends a continue prompt itself.
+    deliver({
+      type: "agentAutoContinueState",
+      sessionId: "session-1",
+      enabled: false,
+      status: "Auto Continue stopped because the agent is waiting for input.",
+      transcriptAction: {
+        kind: "stopped",
+        reason: "Auto Continue stopped because the agent is waiting for input.",
+      },
     });
-    expect(postedCommands(vscodeApi.postMessage, "chatTabFocus")).toHaveLength(
-      1,
-    );
+    expect(postedCommands(vscodeApi.postMessage, "agentSend")).toHaveLength(0);
 
     deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
-    await waitFor(() => {
-      expect(postedCommands(vscodeApi.postMessage, "agentSend")).toHaveLength(
-        1,
-      );
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-1",
+        mode: "code",
+        model: "claude-opus-5",
+        streaming: false,
+        projects: [{ projectId: "project-1", displayName: "Project" }],
+      },
     });
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("button", { name: "Auto Continue" })
+          .getAttribute("aria-pressed"),
+      ).toBe("false");
+    });
+    expect(postedCommands(vscodeApi.postMessage, "agentSend")).toHaveLength(0);
   });
 
   it("keeps the model catalog after closing a restored tab", async () => {

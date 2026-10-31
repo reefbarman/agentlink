@@ -122,20 +122,10 @@ import {
   type AppState,
   type LoadedInstructionDebugInfo,
 } from "../../shared/chatProjection";
-import {
-  getFinalMessageContinueAction,
-  getLatestAutoContinueAction,
-  getLatestFinalMessageMarker,
-} from "@agentlink/protocol/final-status";
-import {
-  AUTO_CONTINUE_NO_PROGRESS_REASON,
-  turnMadeProgress,
-} from "@agentlink/protocol/auto-continue-progress";
 import { isForwardedBuiltinCommand } from "@agentlink/protocol/builtin-command-forwarding";
 import { deriveModelSetupState } from "@agentlink/protocol/model-setup";
 import { randomId } from "../../shared/randomId";
 import type { EditInForkRequest } from "../../shared/editInFork";
-import { AutoContinueTabStateCache } from "../../shared/autoContinueTabState";
 import {
   isWriteApprovalSelection,
   toHttpSelectionRequest,
@@ -222,7 +212,7 @@ import {
 
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
-const AUTO_CONTINUE_BROWSER_SETTLE_MS = 500;
+
 /** How often the Assistant refreshes chat and project status. */
 const ASSISTANT_STATUS_REFRESH_MS = 5_000;
 /** Why the Assistant kept a chat it was asked to delete, in plain words. */
@@ -329,37 +319,10 @@ function dedupeBackgroundSessions(sessions: BgSessionInfo[]): BgSessionInfo[] {
   return changed ? Array.from(byId.values()) : sessions;
 }
 
-function projectFinalMarkerAutoContinueState(
-  messages: ChatMessage[],
-  hiddenMessageIds: ReadonlySet<string>,
-  stopReasons: ReadonlyMap<string, string>,
-): ChatMessage[] {
-  if (hiddenMessageIds.size === 0 && stopReasons.size === 0) return messages;
-
-  let changed = false;
-  const next = messages.map((message) => {
-    if (message.role !== "assistant" || !message.finalMarker) return message;
-
-    let finalMarker = message.finalMarker;
-    if (
-      hiddenMessageIds.has(message.id) &&
-      getFinalMessageContinueAction(finalMarker)
-    ) {
-      const { continueAction: _continueAction, ...rest } = finalMarker;
-      finalMarker = { ...rest, continueActionConsumed: true };
-    }
-
-    const stopReason = stopReasons.get(message.id);
-    if (stopReason && finalMarker.autoContinueStopReason !== stopReason) {
-      finalMarker = { ...finalMarker, autoContinueStopReason: stopReason };
-    }
-
-    if (finalMarker === message.finalMarker) return message;
-    changed = true;
-    return { ...message, finalMarker };
-  });
-
-  return changed ? next : messages;
+/** The VS Code host's Auto Continue state for one session. */
+interface BrowserAutoContinueState {
+  enabled: boolean;
+  status: string;
 }
 
 const DEFAULT_BROWSER_MODES: ModeInfo[] = [
@@ -635,6 +598,8 @@ export type GatewaySnapshot = {
       lastCacheReadTokens: number;
       estimatedTotalUsed: number;
       messageQueue: AppState["messageQueue"];
+      /** VS Code sessions: the host-owned Auto Continue toggle. */
+      autoContinue?: BrowserAutoContinueState;
       /** Ask Agent: queued messages can interject the running turn. */
       queueInterjectionAvailable?: boolean;
       questionRequest: {
@@ -719,14 +684,6 @@ function logicalTabSelectionKey(selection: BrowserLogicalTabSelection): string {
     selection.controllerEpoch,
     selection.tabId,
     selection.sessionId,
-  ].join("\u0000");
-}
-
-function autoContinueTabKey(selection: BrowserLogicalTabSelection): string {
-  return [
-    selection.instanceId,
-    selection.controllerEpoch,
-    selection.tabId,
   ].join("\u0000");
 }
 
@@ -2590,49 +2547,22 @@ export function BrowserGatewayApp({
     | { type: "prompt"; prompt: string; attachments: string[] }
     | null
   >(null);
-  const [hiddenFinalContinueMessageIds, setHiddenFinalContinueMessageIds] =
-    useState<ReadonlySet<string>>(() => new Set());
-  const [autoContinueStopReasons, setAutoContinueStopReasons] = useState<
-    ReadonlyMap<string, string>
+  // Auto Continue runs in the VS Code host per session, shared with VS Code;
+  // the browser mirrors that state and toggles it.
+  const [autoContinueBySession, setAutoContinueBySession] = useState<
+    ReadonlyMap<string, BrowserAutoContinueState>
   >(() => new Map());
-  const [autoContinueEnabled, setAutoContinueEnabled] = useState(false);
-  const [autoContinueStatus, setAutoContinueStatus] = useState("");
-  const autoContinueEnabledRef = useRef(autoContinueEnabled);
-  const autoContinueStatusRef = useRef(autoContinueStatus);
-  autoContinueEnabledRef.current = autoContinueEnabled;
-  autoContinueStatusRef.current = autoContinueStatus;
-  const autoContinuedMessageIdsRef = useRef<Set<string>>(new Set());
-  const autoContinueCountRef = useRef(0);
-  const pendingAutoContinueUserMessageIdRef = useRef<string | null>(null);
-  const autoContinueTabKeyRef = useRef<string | null>(null);
-  const autoContinueTabStateCacheRef = useRef(new AutoContinueTabStateCache());
-  const autoContinueSessionIdRef = useRef<string | null>(null);
-  const autoContinueGenerationRef = useRef(0);
-  const switchAutoContinueState = useCallback(
-    (tabKey: string, sessionId: string | null): void => {
-      autoContinueTabStateCacheRef.current.save(autoContinueTabKeyRef.current, {
-        enabled: autoContinueEnabledRef.current,
-        status: autoContinueStatusRef.current,
-        sessionId: autoContinueSessionIdRef.current,
-        continuedMessageIds: autoContinuedMessageIdsRef.current,
-        count: autoContinueCountRef.current,
-        pendingUserMessageId: pendingAutoContinueUserMessageIdRef.current,
+  const rememberAutoContinue = useCallback(
+    (sessionId: string, next: BrowserAutoContinueState): void => {
+      setAutoContinueBySession((previous) => {
+        const current = previous.get(sessionId);
+        if (current?.enabled === next.enabled && current.status === next.status)
+          return previous;
+        return new Map(previous).set(sessionId, {
+          enabled: next.enabled,
+          status: next.status,
+        });
       });
-      const restored = autoContinueTabStateCacheRef.current.restore(
-        tabKey,
-        sessionId,
-      );
-      autoContinueTabKeyRef.current = tabKey;
-      autoContinueSessionIdRef.current = sessionId;
-      autoContinueEnabledRef.current = restored.enabled;
-      autoContinueStatusRef.current = restored.status;
-      autoContinuedMessageIdsRef.current = restored.continuedMessageIds;
-      autoContinueCountRef.current = restored.count;
-      pendingAutoContinueUserMessageIdRef.current =
-        restored.pendingUserMessageId;
-      autoContinueGenerationRef.current += 1;
-      setAutoContinueEnabled(restored.enabled);
-      setAutoContinueStatus(restored.status);
     },
     [],
   );
@@ -3473,22 +3403,13 @@ export function BrowserGatewayApp({
     foregroundProjectedMessages,
     optimisticUserMessages,
   ]);
-  const messages = useMemo<ChatMessage[]>(() => {
-    return projectFinalMarkerAutoContinueState(
-      [
-        ...(foregroundProjectedMessages ?? []),
-        ...pendingUserMessages.map(({ message }) => message),
-      ],
-      hiddenFinalContinueMessageIds,
-      autoContinueStopReasons,
-    );
-  }, [
-    autoContinueStopReasons,
-    foreground?.sessionId,
-    foregroundProjectedMessages,
-    hiddenFinalContinueMessageIds,
-    pendingUserMessages,
-  ]);
+  const messages = useMemo<ChatMessage[]>(
+    () => [
+      ...(foregroundProjectedMessages ?? []),
+      ...pendingUserMessages.map(({ message }) => message),
+    ],
+    [foregroundProjectedMessages, pendingUserMessages],
+  );
 
   useEffect(() => {
     if (!foregroundProjectedMessages) return;
@@ -5473,17 +5394,78 @@ export function BrowserGatewayApp({
     }
   }
 
-  const handleToggleAutoContinue = useCallback((enabled: boolean): void => {
-    setAutoContinueEnabled(enabled);
-    setAutoContinueStatus(
-      enabled
-        ? `Auto Continue enabled (max ${AUTO_CONTINUE_MAX_TURNS} turns).`
-        : "Auto Continue disabled.",
-    );
-    autoContinuedMessageIdsRef.current.clear();
-    autoContinueCountRef.current = 0;
-    pendingAutoContinueUserMessageIdRef.current = null;
-  }, []);
+  const autoContinueSessionId = isAskAgentSelected
+    ? null
+    : (foreground?.sessionId ?? null);
+  const autoContinueProjectId = foreground?.project?.projectId;
+  const hostAutoContinue = autoContinueSessionId
+    ? autoContinueBySession.get(autoContinueSessionId)
+    : undefined;
+  const autoContinueEnabled = hostAutoContinue?.enabled ?? false;
+  const autoContinueStatus = hostAutoContinue?.status ?? "";
+
+  const requestAutoContinue = useCallback(
+    async (
+      sessionId: string,
+      projectId: string | undefined,
+      enabled?: boolean,
+      signal?: AbortSignal,
+    ): Promise<BrowserAutoContinueState | null> => {
+      const response = await fetch(buildApiPath("/api/auto-continue"), {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ sessionId, projectId, enabled }),
+        signal,
+      });
+      const body = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        autoContinue?: BrowserAutoContinueState;
+      };
+      if (!response.ok || !body.ok || !body.autoContinue) {
+        throw new Error(body.error ?? String(response.status));
+      }
+      return body.autoContinue;
+    },
+    [authToken, buildApiPath],
+  );
+
+  const handleToggleAutoContinue = useCallback(
+    (enabled: boolean): void => {
+      const sessionId = autoContinueSessionId;
+      if (!sessionId) return;
+      const previous = autoContinueBySession.get(sessionId);
+      // Show the change now; the host's answer replaces it.
+      rememberAutoContinue(sessionId, {
+        enabled,
+        status: enabled
+          ? `Auto Continue enabled (max ${AUTO_CONTINUE_MAX_TURNS} turns).`
+          : "Auto Continue disabled.",
+      });
+      void requestAutoContinue(sessionId, autoContinueProjectId, enabled)
+        .then((state) => {
+          if (state) rememberAutoContinue(sessionId, state);
+        })
+        .catch((error: unknown) => {
+          rememberAutoContinue(
+            sessionId,
+            previous ?? { enabled: false, status: "" },
+          );
+          setSendStatus(`Auto Continue failed: ${String(error)}`);
+        });
+    },
+    [
+      autoContinueBySession,
+      autoContinueProjectId,
+      autoContinueSessionId,
+      rememberAutoContinue,
+      requestAutoContinue,
+    ],
+  );
 
   async function ensureAskAgentForeground(): Promise<
     GatewaySnapshot["session"]["foreground"] | null
@@ -5599,12 +5581,6 @@ export function BrowserGatewayApp({
         current.filter(({ message }) => message.id !== userMessageId),
       );
     };
-    if (origin === "autoContinue") {
-      pendingAutoContinueUserMessageIdRef.current = userMessageId;
-    } else {
-      pendingAutoContinueUserMessageIdRef.current = null;
-    }
-
     let fullText = text;
     if (attachments.length > 0) {
       const fileRefs = attachments.map((p) => `[Attached: ${p}]`).join("\n");
@@ -6256,7 +6232,6 @@ export function BrowserGatewayApp({
       return;
     }
     logicalSelectionGenerationRef.current += 1;
-    autoContinueGenerationRef.current += 1;
     selectedLogicalTabRef.current = next;
     setSelectedLogicalTab(next);
     persistStoredBrowserSelection(storedWorkspaceSelection(instanceId, next));
@@ -6664,7 +6639,6 @@ export function BrowserGatewayApp({
   } {
     const sessionId = `${BROWSER_GATEWAY_ASK_AGENT_SESSION_ID_PREFIX}${randomId()}`;
     askAgentSessionTargetRef.current = sessionId;
-    autoContinueGenerationRef.current += 1;
     logAskAgentBrowserEvent("session.new.start", { sessionId });
     // Optimistically clear the transcript. The commit guard now rejects any
     // snapshot for a different session, so a stale stream update cannot bring
@@ -6741,7 +6715,6 @@ export function BrowserGatewayApp({
   ): Promise<GatewaySnapshot | null> {
     try {
       const selection = selectedLogicalTabRef.current;
-      autoContinueGenerationRef.current += 1;
       const response = await fetch(buildApiPath("/api/session/new"), {
         method: "POST",
         credentials: "same-origin",
@@ -6805,10 +6778,6 @@ export function BrowserGatewayApp({
           selectedLogicalTabRef.current = nextSelection;
           logicalSelectionGenerationRef.current += 1;
           setSelectedLogicalTab(nextSelection);
-          switchAutoContinueState(
-            autoContinueTabKey(nextSelection),
-            nextSelection.sessionId,
-          );
         }
         setSnapshot(body.snapshot);
       } else if (
@@ -6835,7 +6804,6 @@ export function BrowserGatewayApp({
           setOwnerSnapshotRevision((revision) => revision + 1);
         }
         setSelectedLogicalTab(next);
-        switchAutoContinueState(autoContinueTabKey(next), next.sessionId);
         setSnapshot(null);
       }
       setShowHistory(false);
@@ -8515,150 +8483,55 @@ export function BrowserGatewayApp({
     };
   }, [consumerShell, product, streaming]);
 
+  // Snapshots from the direct gateway and tab detail carry the host's Auto
+  // Continue state; they are authoritative whenever they change.
+  const snapshotAutoContinueEnabled = foreground?.autoContinue?.enabled;
+  const snapshotAutoContinueStatus = foreground?.autoContinue?.status;
   useEffect(() => {
-    const sessionId =
-      !isAskAgentSelected && selectedLogicalTab
-        ? selectedLogicalTab.sessionId
-        : (foreground?.sessionId ?? null);
-    const tabKey = isAskAgentSelected
-      ? BROWSER_GATEWAY_ASK_AGENT_TAB_ID
-      : selectedLogicalTab
-        ? autoContinueTabKey(selectedLogicalTab)
-        : selectedTabId;
-    if (
-      autoContinueTabKeyRef.current === tabKey &&
-      autoContinueSessionIdRef.current === sessionId
-    ) {
+    if (!autoContinueSessionId || snapshotAutoContinueEnabled === undefined) {
       return;
     }
-    switchAutoContinueState(tabKey, sessionId);
+    rememberAutoContinue(autoContinueSessionId, {
+      enabled: snapshotAutoContinueEnabled,
+      status: snapshotAutoContinueStatus ?? "",
+    });
   }, [
-    foreground?.sessionId,
-    isAskAgentSelected,
-    selectedLogicalTab,
-    selectedTabId,
-    switchAutoContinueState,
+    autoContinueSessionId,
+    rememberAutoContinue,
+    snapshotAutoContinueEnabled,
+    snapshotAutoContinueStatus,
   ]);
 
+  // The relay foreground checkpoint does not carry Auto Continue, so read it
+  // from the owner when the session or its turn state changes.
+  const autoContinueTurnKey = `${foreground?.streaming ? "1" : "0"}:${foreground?.status ?? ""}`;
   useEffect(() => {
-    if (
-      !autoContinueEnabled ||
-      !autoContinueEnabledRef.current ||
-      !foreground ||
-      autoContinueSessionIdRef.current !== foreground.sessionId
-    ) {
+    if (!autoContinueSessionId || snapshotAutoContinueEnabled !== undefined) {
       return;
     }
-    if (pendingApproval || pendingQuestion) return;
-    if (
-      foreground.streaming ||
-      foreground.status === "streaming" ||
-      foreground.status === "tool_executing" ||
-      foreground.status === "awaiting_approval"
-    ) {
-      return;
-    }
-
-    const lastMessage = messages[messages.length - 1];
-    if (lastMessage?.error) {
-      setAutoContinueEnabled(false);
-      setAutoContinueStatus("Auto Continue paused after an agent error.");
-      return;
-    }
-
-    const action = getLatestAutoContinueAction(messages);
-    if (!action) {
-      const latest = getLatestFinalMessageMarker(messages);
-      if (!latest || latest.marker.autoContinueStopReason) return;
-      const reason =
-        latest.marker.status === "waiting_for_user"
-          ? "Auto Continue stopped because the agent is waiting for input."
-          : `Auto Continue stopped because the task status is ${latest.marker.status.replaceAll("_", " ")}.`;
-      setAutoContinueEnabled(false);
-      setAutoContinueStatus(reason);
-      setAutoContinueStopReasons((prev) => {
-        const next = new Map(prev);
-        next.set(latest.messageId, reason);
-        return next;
+    const controller = new AbortController();
+    void requestAutoContinue(
+      autoContinueSessionId,
+      autoContinueProjectId,
+      undefined,
+      controller.signal,
+    )
+      .then((state) => {
+        if (state && !controller.signal.aborted) {
+          rememberAutoContinue(autoContinueSessionId, state);
+        }
+      })
+      .catch(() => {
+        // Best effort: the toggle keeps its last known state.
       });
-      return;
-    }
-    if (autoContinuedMessageIdsRef.current.has(action.messageId)) return;
-
-    const scheduledTabKey = autoContinueTabKeyRef.current;
-    const scheduledSessionId = foreground.sessionId;
-    const scheduledGeneration = autoContinueGenerationRef.current;
-    const timer = window.setTimeout(() => {
-      if (
-        !autoContinueEnabledRef.current ||
-        autoContinueGenerationRef.current !== scheduledGeneration ||
-        autoContinueTabKeyRef.current !== scheduledTabKey ||
-        autoContinueSessionIdRef.current !== scheduledSessionId ||
-        autoContinuedMessageIdsRef.current.has(action.messageId)
-      ) {
-        return;
-      }
-
-      const pendingAutoContinueUserMessageId =
-        pendingAutoContinueUserMessageIdRef.current;
-      if (
-        pendingAutoContinueUserMessageId &&
-        !turnMadeProgress(messages, pendingAutoContinueUserMessageId)
-      ) {
-        setAutoContinueEnabled(false);
-        setAutoContinueStatus(AUTO_CONTINUE_NO_PROGRESS_REASON);
-        pendingAutoContinueUserMessageIdRef.current = null;
-        setAutoContinueStopReasons((prev) => {
-          const next = new Map(prev);
-          next.set(action.messageId, AUTO_CONTINUE_NO_PROGRESS_REASON);
-          return next;
-        });
-        return;
-      }
-
-      if (autoContinueCountRef.current >= AUTO_CONTINUE_MAX_TURNS) {
-        const reason = `Auto Continue stopped after ${AUTO_CONTINUE_MAX_TURNS} turns to avoid an infinite loop.`;
-        setAutoContinueEnabled(false);
-        setAutoContinueStatus(reason);
-        setAutoContinueStopReasons((prev) => {
-          const next = new Map(prev);
-          next.set(action.messageId, reason);
-          return next;
-        });
-        return;
-      }
-
-      autoContinuedMessageIdsRef.current.add(action.messageId);
-      autoContinueCountRef.current += 1;
-      setAutoContinueStatus(
-        `Auto Continue sent ${autoContinueCountRef.current}/${AUTO_CONTINUE_MAX_TURNS}.`,
-      );
-      setHiddenFinalContinueMessageIds((prev) => {
-        const next = new Set(prev);
-        next.add(action.messageId);
-        return next;
-      });
-      void handleSend(
-        action.prompt,
-        [],
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        "autoContinue",
-      );
-    }, AUTO_CONTINUE_BROWSER_SETTLE_MS);
-
-    return () => window.clearTimeout(timer);
+    return () => controller.abort();
   }, [
-    autoContinueEnabled,
-    foreground,
-    foreground?.status,
-    foreground?.streaming,
-    handleSend,
-    messages,
-    pendingApproval,
-    pendingQuestion,
+    autoContinueProjectId,
+    autoContinueSessionId,
+    autoContinueTurnKey,
+    rememberAutoContinue,
+    requestAutoContinue,
+    snapshotAutoContinueEnabled,
   ]);
 
   const composerModes = modes.length > 0 ? modes : DEFAULT_BROWSER_MODES;

@@ -1,8 +1,3 @@
-import {
-  AUTO_CONTINUE_NO_PROGRESS_REASON,
-  isProgressToolName,
-  turnMadeProgress,
-} from "@agentlink/protocol/auto-continue-progress";
 import type {
   ApprovalRequest,
   DecisionMessage,
@@ -36,11 +31,7 @@ import {
   shouldProjectBackgroundCompletion,
   type AppAction,
 } from "../../shared/chatProjection.js";
-import {
-  getFinalMessageContinueAction,
-  getLatestAutoContinueAction,
-  getLatestFinalMessageMarker,
-} from "@agentlink/protocol/final-status";
+import { getFinalMessageContinueAction } from "@agentlink/protocol/final-status";
 import {
   useCallback,
   useEffect,
@@ -119,7 +110,7 @@ import {
   allowsDirectYesNoQuestion,
   getQuestionDetectionText,
 } from "./questionDetection";
-import { AutoContinueTabStateCache } from "../../shared/autoContinueTabState";
+
 import {
   resolveOpenFileRequest,
   trackOpenFileRequest,
@@ -497,25 +488,35 @@ export function App({
   const streamingRef = useRef(false);
 
   const [injection, setInjection] = useState<Injection | null>(null);
-  const [autoContinueEnabled, setAutoContinueEnabled] = useState(false);
-  const [autoContinueStatus, setAutoContinueStatus] = useState("");
-  const autoContinueEnabledRef = useRef(autoContinueEnabled);
-  const autoContinueStatusRef = useRef(autoContinueStatus);
-  autoContinueEnabledRef.current = autoContinueEnabled;
-  autoContinueStatusRef.current = autoContinueStatus;
-  const autoContinuedMessageIdsRef = useRef<Set<string>>(new Set());
-  const autoContinueCountRef = useRef(0);
-  const pendingAutoContinueUserMessageIdRef = useRef<string | null>(null);
-  const autoContinueTabKeyRef = useRef<string | null>(null);
-  const autoContinueTabStateCacheRef = useRef(new AutoContinueTabStateCache());
-  const inactiveAutoContinueMarkerRef = useRef(
-    new Map<
-      string,
-      import("@agentlink/protocol/final-status").FinalMessageMarker
-    >(),
-  );
-  const autoContinueSessionIdRef = useRef<string | null>(
-    state.chatState.sessionId,
+  // Auto Continue runs in the extension host per session, shared with the
+  // browser; this only mirrors its state for the toggle.
+  const [autoContinueBySession, setAutoContinueBySession] = useState<
+    ReadonlyMap<string, { enabled: boolean; status: string }>
+  >(() => new Map());
+  const autoContinueSessionState = state.chatState.sessionId
+    ? autoContinueBySession.get(state.chatState.sessionId)
+    : undefined;
+  const autoContinueEnabled = autoContinueSessionState?.enabled ?? false;
+  const autoContinueStatus = autoContinueSessionState?.status ?? "";
+  const applyAutoContinueState = useCallback(
+    (update: { sessionId: string; enabled: boolean; status: string }) => {
+      setAutoContinueBySession((previous) => {
+        const current = previous.get(update.sessionId);
+        if (
+          current?.enabled === update.enabled &&
+          current.status === update.status
+        ) {
+          return previous;
+        }
+        const next = new Map(previous);
+        next.set(update.sessionId, {
+          enabled: update.enabled,
+          status: update.status,
+        });
+        return next;
+      });
+    },
+    [],
   );
   const [shiftDragOver, setShiftDragOver] = useState(false);
   const dragCounterRef = useRef(0);
@@ -748,8 +749,6 @@ export function App({
         acceptedTranscriptRevisionsRef.current.clear();
         inactiveProjectionCacheRef.current.clear();
         projectionStateCacheRef.current.clear();
-        autoContinueTabStateCacheRef.current.clear();
-        inactiveAutoContinueMarkerRef.current.clear();
         restoredCachedSessionRef.current = null;
         hydratedSessionsRef.current.clear();
         optimisticFirstSendRef.current = null;
@@ -760,45 +759,6 @@ export function App({
         pinnedTabId ?? previousSnapshot?.focusedTabId;
       const nextSelectedTabId = pinnedTabId ?? snapshot.focusedTabId;
       const selectedTabChanged = previousSelectedTabId !== nextSelectedTabId;
-      const selectedSessionChanged = previousSessionId !== nextSessionId;
-      if (
-        selectedTabChanged ||
-        selectedSessionChanged ||
-        controllerEpochChanged
-      ) {
-        if (!controllerEpochChanged) {
-          autoContinueTabStateCacheRef.current.save(
-            autoContinueTabKeyRef.current,
-            {
-              enabled: autoContinueEnabledRef.current,
-              status: autoContinueStatusRef.current,
-              sessionId: autoContinueSessionIdRef.current,
-              mode: stateRef.current.mode,
-              reasoningEffort: reasoningEffortRef.current,
-              continuedMessageIds: autoContinuedMessageIdsRef.current,
-              count: autoContinueCountRef.current,
-              pendingUserMessageId: pendingAutoContinueUserMessageIdRef.current,
-            },
-          );
-        }
-        const nextTabKey = nextSelectedTabId ?? null;
-        const restoredAutoContinue =
-          autoContinueTabStateCacheRef.current.restore(
-            nextTabKey,
-            nextSessionId,
-          );
-        autoContinueTabKeyRef.current = nextTabKey;
-        autoContinueSessionIdRef.current = nextSessionId;
-        autoContinueEnabledRef.current = restoredAutoContinue.enabled;
-        autoContinueStatusRef.current = restoredAutoContinue.status;
-        autoContinuedMessageIdsRef.current =
-          restoredAutoContinue.continuedMessageIds;
-        autoContinueCountRef.current = restoredAutoContinue.count;
-        pendingAutoContinueUserMessageIdRef.current =
-          restoredAutoContinue.pendingUserMessageId;
-        setAutoContinueEnabled(restoredAutoContinue.enabled);
-        setAutoContinueStatus(restoredAutoContinue.status);
-      }
       const optimisticFirstSend = optimisticFirstSendRef.current;
       const boundSelectedTabToSession = Boolean(
         !controllerEpochChanged &&
@@ -857,17 +817,6 @@ export function App({
           // load arrived) would poison the cache with an empty transcript that
           // later gets trusted.
           const outgoing = fullStateRef.current;
-          if (previousSessionId) {
-            const latestFinalMarker = getLatestFinalMessageMarker(
-              outgoing.messages,
-            );
-            if (latestFinalMarker) {
-              inactiveAutoContinueMarkerRef.current.set(
-                previousSessionId,
-                latestFinalMarker.marker,
-              );
-            }
-          }
           const outgoingHasSubstance =
             outgoing.messages.length > 0 ||
             outgoing.messageQueue.length > 0 ||
@@ -907,11 +856,6 @@ export function App({
       }
       inactiveProjectionCacheRef.current.retainSessions(openSessionIds);
       projectionStateCacheRef.current.retainSessions(openSessionIds);
-      for (const sessionId of inactiveAutoContinueMarkerRef.current.keys()) {
-        if (!openSessionIds.has(sessionId)) {
-          inactiveAutoContinueMarkerRef.current.delete(sessionId);
-        }
-      }
       for (const sessionId of acceptedTranscriptRevisionsRef.current.keys()) {
         if (!openSessionIds.has(sessionId)) {
           acceptedTranscriptRevisionsRef.current.delete(sessionId);
@@ -1012,136 +956,8 @@ export function App({
     onInactiveSessionMessage: (msg) => {
       if (msg.type === "agentSessionLoaded") return;
       inactiveProjectionCacheRef.current.append(msg);
-
-      const workspace = workspaceSnapshotRef.current;
-      const tab = workspace?.tabs.find(
-        (candidate) => candidate.sessionId === msg.sessionId,
-      );
-      if (!workspace || !tab) return;
-      const autoContinueState = autoContinueTabStateCacheRef.current.get(
-        tab.tabId,
-      );
-      if (!autoContinueState || autoContinueState.sessionId !== msg.sessionId) {
-        return;
-      }
-
-      if (msg.type === "agentFinalMarker") {
-        if (msg.marker) {
-          inactiveAutoContinueMarkerRef.current.set(msg.sessionId, msg.marker);
-        } else {
-          inactiveAutoContinueMarkerRef.current.delete(msg.sessionId);
-        }
-        return;
-      }
-      if (
-        msg.type === "agentToolComplete" &&
-        autoContinueState.pendingUserMessageId &&
-        isProgressToolName(msg.toolName)
-      ) {
-        autoContinueState.pendingUserMessageId = null;
-        autoContinueTabStateCacheRef.current.save(tab.tabId, autoContinueState);
-        return;
-      }
-      if (msg.type === "agentError") {
-        autoContinueState.enabled = false;
-        autoContinueState.status = "Auto Continue paused after an agent error.";
-        autoContinueTabStateCacheRef.current.save(tab.tabId, autoContinueState);
-        inactiveAutoContinueMarkerRef.current.delete(msg.sessionId);
-        return;
-      }
-      if (msg.type !== "agentDone") return;
-
-      if (msg.transcriptRevision !== undefined) {
-        const controllerEpoch = workspace.controllerEpoch;
-        const accepted = acceptedTranscriptRevisionsRef.current.get(
-          msg.sessionId,
-        );
-        acceptedTranscriptRevisionsRef.current.set(msg.sessionId, {
-          controllerEpoch,
-          revision:
-            accepted?.controllerEpoch === controllerEpoch
-              ? Math.max(accepted.revision, msg.transcriptRevision)
-              : msg.transcriptRevision,
-        });
-      }
-
-      const marker = inactiveAutoContinueMarkerRef.current.get(msg.sessionId);
-      inactiveAutoContinueMarkerRef.current.delete(msg.sessionId);
-      if (!autoContinueState.enabled || !marker) return;
-
-      const action = getFinalMessageContinueAction(marker);
-      if (!action) {
-        const reason =
-          marker.status === "waiting_for_user"
-            ? "Auto Continue stopped because the agent is waiting for input."
-            : `Auto Continue stopped because the task status is ${marker.status.replaceAll("_", " ")}.`;
-        autoContinueState.enabled = false;
-        autoContinueState.status = reason;
-        autoContinueTabStateCacheRef.current.save(tab.tabId, autoContinueState);
-        return;
-      }
-      if (autoContinueState.pendingUserMessageId) {
-        autoContinueState.enabled = false;
-        autoContinueState.status = AUTO_CONTINUE_NO_PROGRESS_REASON;
-        autoContinueState.pendingUserMessageId = null;
-        autoContinueTabStateCacheRef.current.save(tab.tabId, autoContinueState);
-        return;
-      }
-      if (autoContinueState.count >= AUTO_CONTINUE_MAX_TURNS) {
-        autoContinueState.enabled = false;
-        autoContinueState.status = `Auto Continue stopped after ${AUTO_CONTINUE_MAX_TURNS} turns to avoid an infinite loop.`;
-        autoContinueTabStateCacheRef.current.save(tab.tabId, autoContinueState);
-        return;
-      }
-
-      const userMessageId = randomId();
-      const cachedMessages = projectionStateCacheRef.current.restore(
-        msg.sessionId,
-        {
-          modes: fullStateRef.current.modes,
-          availableModels: fullStateRef.current.availableModels,
-          slashCommands: fullStateRef.current.slashCommands,
-        },
-      ).messages;
-      const completedAssistant = [...cachedMessages]
-        .reverse()
-        .find((message) => message.role === "assistant");
-      if (completedAssistant) {
-        autoContinueState.continuedMessageIds.add(completedAssistant.id);
-      }
-      inactiveProjectionCacheRef.current.updateLatestFinalMarker(
-        msg.sessionId,
-        (bufferedMarker) => ({
-          ...bufferedMarker,
-          continueActionConsumed: true,
-        }),
-      );
-      autoContinueState.count += 1;
-      autoContinueState.pendingUserMessageId = userMessageId;
-      autoContinueState.status = `Auto Continue sent ${autoContinueState.count}/${AUTO_CONTINUE_MAX_TURNS}.`;
-      autoContinueTabStateCacheRef.current.save(tab.tabId, autoContinueState);
-      inactiveProjectionCacheRef.current.append({
-        type: "agentCommittedUserMessage",
-        sessionId: msg.sessionId,
-        id: userMessageId,
-        text: action.prompt,
-        displayText: action.prompt,
-        origin: "vscode",
-      });
-      vscodeApi.postMessage({
-        command: "agentSend",
-        text: action.prompt,
-        displayText: action.prompt,
-        controllerEpoch: workspace.controllerEpoch,
-        tabId: tab.tabId,
-        sessionId: msg.sessionId,
-        mode: autoContinueState.mode ?? undefined,
-        reasoningEffort: autoContinueState.reasoningEffort ?? undefined,
-        thinkingEnabled:
-          autoContinueState.reasoningEffort == null
-            ? undefined
-            : autoContinueState.reasoningEffort !== "none",
-      });
+      // The toggle shows a session's state as soon as it is selected.
+      if (msg.type === "agentAutoContinueState") applyAutoContinueState(msg);
     },
     onMessage: (msg, controls) => {
       const { dropIfNotStreaming, flushDeltasNow } = controls;
@@ -1149,6 +965,15 @@ export function App({
       switch (msg.type) {
         case "releaseInstallState":
           setReleaseInstallState(msg.state);
+          break;
+        case "agentAutoContinueState":
+          applyAutoContinueState(msg);
+          if (msg.transcriptAction) {
+            dispatch({
+              type: "APPLY_AUTO_CONTINUE_TRANSCRIPT",
+              transcriptAction: msg.transcriptAction,
+            });
+          }
           break;
         case "releaseUpdateState":
           setReleaseUpdateState(msg.state);
@@ -1284,12 +1109,6 @@ export function App({
           break;
         case "agentToolComplete":
           if (dropIfNotStreaming()) break;
-          if (
-            pendingAutoContinueUserMessageIdRef.current &&
-            isProgressToolName(msg.toolName)
-          ) {
-            pendingAutoContinueUserMessageIdRef.current = null;
-          }
           streamingBaselineMetrics?.record({
             type: "delta",
             surface: "vscode-webview",
@@ -1397,14 +1216,6 @@ export function App({
             kind: "semantic",
             chars: 0,
           });
-          if (msg.marker) {
-            inactiveAutoContinueMarkerRef.current.set(
-              msg.sessionId,
-              msg.marker,
-            );
-          } else {
-            inactiveAutoContinueMarkerRef.current.delete(msg.sessionId);
-          }
           dispatch({
             type: "SET_FINAL_MARKER",
             marker: msg.marker,
@@ -1432,7 +1243,6 @@ export function App({
                   : msg.transcriptRevision,
             });
           }
-          inactiveAutoContinueMarkerRef.current.delete(msg.sessionId);
           streamingRef.current = false;
           dispatch({ type: "DONE" });
           drainMessageQueue(msg.sessionId);
@@ -2583,15 +2393,10 @@ export function App({
         kind: "image" | "document";
       }>,
       skillSelection?: ExplicitSkillSelection,
-      origin: "user" | "autoContinue" = "user",
+      _origin: "user" = "user",
       interject = false,
     ) => {
       const userMessageId = randomId();
-      if (origin === "autoContinue") {
-        pendingAutoContinueUserMessageIdRef.current = userMessageId;
-      } else {
-        pendingAutoContinueUserMessageIdRef.current = null;
-      }
       // Build message text: prepend attached file references
       let fullText = text;
       if (attachments.length > 0) {
@@ -2820,17 +2625,26 @@ export function App({
     });
   }, [vscodeApi]);
 
-  const handleToggleAutoContinue = useCallback((enabled: boolean) => {
-    setAutoContinueEnabled(enabled);
-    setAutoContinueStatus(
-      enabled
-        ? `Auto Continue enabled (max ${AUTO_CONTINUE_MAX_TURNS} turns).`
-        : "Auto Continue disabled.",
-    );
-    autoContinuedMessageIdsRef.current.clear();
-    autoContinueCountRef.current = 0;
-    pendingAutoContinueUserMessageIdRef.current = null;
-  }, []);
+  const handleToggleAutoContinue = useCallback(
+    (enabled: boolean) => {
+      const sessionId = stateRef.current.sessionId;
+      if (!sessionId) return;
+      // Show the change now; the host confirms with its own state.
+      applyAutoContinueState({
+        sessionId,
+        enabled,
+        status: enabled
+          ? `Auto Continue enabled (max ${AUTO_CONTINUE_MAX_TURNS} turns).`
+          : "Auto Continue disabled.",
+      });
+      vscodeApi.postMessage({
+        command: "agentSetAutoContinue",
+        sessionId,
+        enabled,
+      });
+    },
+    [applyAutoContinueState, vscodeApi],
+  );
 
   const handleDetectedQuestionAnswer = useCallback(
     (payload: string) => {
@@ -2925,15 +2739,6 @@ export function App({
     setInjection({ type: "context", context: prompt });
   }, []);
 
-  useEffect(() => {
-    const sessionId = state.chatState.sessionId;
-    if (autoContinueSessionIdRef.current === sessionId) return;
-    autoContinueSessionIdRef.current = sessionId;
-    autoContinuedMessageIdsRef.current.clear();
-    autoContinueCountRef.current = 0;
-    pendingAutoContinueUserMessageIdRef.current = null;
-  }, [state.chatState.sessionId]);
-
   // Keep the extension informed of how many locally queued (non-browser)
   // messages are waiting so the agent can skip the todo auto-continue and let
   // the queue flush instead. Browser-sourced entries are already tracked
@@ -2947,93 +2752,6 @@ export function App({
       count: state.messageQueue.filter((q) => q.source !== "browser").length,
     });
   }, [state.messageQueue, state.chatState.sessionId]);
-
-  useEffect(() => {
-    if (!autoContinueEnabled || state.streaming) return;
-    if (!state.chatState.sessionId) return;
-    if (state.questionRequest || globalApproval || state.approvalRequest)
-      return;
-
-    const lastMessage = state.messages[state.messages.length - 1];
-    if (lastMessage?.error) {
-      setAutoContinueEnabled(false);
-      setAutoContinueStatus("Auto Continue paused after an agent error.");
-      return;
-    }
-
-    const action = getLatestAutoContinueAction(state.messages);
-    if (!action) {
-      const latest = getLatestFinalMessageMarker(state.messages);
-      if (!latest || latest.marker.autoContinueStopReason) return;
-      const reason =
-        latest.marker.status === "waiting_for_user"
-          ? "Auto Continue stopped because the agent is waiting for input."
-          : `Auto Continue stopped because the task status is ${latest.marker.status.replaceAll("_", " ")}.`;
-      setAutoContinueEnabled(false);
-      setAutoContinueStatus(reason);
-      dispatch({
-        type: "MARK_AUTO_CONTINUE_STOPPED",
-        messageId: latest.messageId,
-        reason,
-      });
-      return;
-    }
-    if (autoContinuedMessageIdsRef.current.has(action.messageId)) return;
-
-    const pendingAutoContinueUserMessageId =
-      pendingAutoContinueUserMessageIdRef.current;
-    if (
-      pendingAutoContinueUserMessageId &&
-      !turnMadeProgress(state.messages, pendingAutoContinueUserMessageId)
-    ) {
-      setAutoContinueEnabled(false);
-      setAutoContinueStatus(AUTO_CONTINUE_NO_PROGRESS_REASON);
-      pendingAutoContinueUserMessageIdRef.current = null;
-      dispatch({
-        type: "MARK_AUTO_CONTINUE_STOPPED",
-        messageId: action.messageId,
-        reason: AUTO_CONTINUE_NO_PROGRESS_REASON,
-      });
-      return;
-    }
-
-    if (autoContinueCountRef.current >= AUTO_CONTINUE_MAX_TURNS) {
-      const reason = `Auto Continue stopped after ${AUTO_CONTINUE_MAX_TURNS} turns to avoid an infinite loop.`;
-      setAutoContinueEnabled(false);
-      setAutoContinueStatus(reason);
-      dispatch({
-        type: "MARK_AUTO_CONTINUE_STOPPED",
-        messageId: action.messageId,
-        reason,
-      });
-      return;
-    }
-
-    autoContinuedMessageIdsRef.current.add(action.messageId);
-    autoContinueCountRef.current += 1;
-    setAutoContinueStatus(
-      `Auto Continue sent ${autoContinueCountRef.current}/${AUTO_CONTINUE_MAX_TURNS}.`,
-    );
-    dispatch({ type: "CLEAR_FINAL_MARKER_CONTINUE_ACTIONS" });
-    handleSend(
-      action.prompt,
-      [],
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "autoContinue",
-    );
-  }, [
-    autoContinueEnabled,
-    globalApproval,
-    handleSend,
-    state.approvalRequest,
-    state.chatState.sessionId,
-    state.messages,
-    state.questionRequest,
-    state.streaming,
-  ]);
 
   const handleOpenBgTranscript = useCallback(
     (sessionId: string) => {

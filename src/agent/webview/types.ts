@@ -118,6 +118,14 @@ export interface WorktreeSetupState {
 /** Messages from extension to webview */
 export type ExtensionMessage =
   | {
+      /** Host-owned Auto Continue state, shared with the browser. */
+      type: "agentAutoContinueState";
+      sessionId: string;
+      enabled: boolean;
+      status: string;
+      transcriptAction?: import("../../shared/chatProjection.js").AutoContinueTranscriptAction;
+    }
+  | {
       type: "releaseInstallState";
       state: import("../../updates/releaseInstall.js").ReleaseInstallState;
     }

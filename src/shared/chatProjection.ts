@@ -51,10 +51,19 @@ import type { McpApprovalPromotionMeta } from "@agentlink/protocol/tool-result";
 import type { RequestContextBreakdown } from "@agentlink/protocol/context-diagnostics";
 import {
   getFinalMessageContinueAction,
+  getLatestFinalMessageMarker,
   type FinalMessageMarker,
 } from "@agentlink/protocol/final-status";
 
 type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
+
+/**
+ * Transcript change the host's Auto Continue makes at the end of a turn: it
+ * either consumed the latest final card's continue action or stopped there.
+ */
+export type AutoContinueTranscriptAction =
+  | { kind: "continued" }
+  | { kind: "stopped"; reason: string };
 
 /** Transcript card for a host-committed user skill selection. */
 export function explicitSkillActivationBlock(
@@ -1037,6 +1046,10 @@ export type AppAction =
   | { type: "SET_FINAL_MARKER"; marker: FinalMessageMarker | null }
   | { type: "CLEAR_FINAL_MARKER_CONTINUE_ACTIONS" }
   | { type: "MARK_AUTO_CONTINUE_STOPPED"; messageId: string; reason: string }
+  | {
+      type: "APPLY_AUTO_CONTINUE_TRANSCRIPT";
+      transcriptAction: AutoContinueTranscriptAction;
+    }
   | { type: "CLEAR_INTERACTION_PROMPTS" }
   | { type: "DONE" }
   | { type: "NEW_SESSION" }
@@ -2984,6 +2997,22 @@ export function reducer(state: AppState, action: AppAction): AppState {
           action.reason,
         ),
       };
+
+    case "APPLY_AUTO_CONTINUE_TRANSCRIPT": {
+      const transcriptAction = action.transcriptAction;
+      if (transcriptAction.kind === "continued") {
+        const messages = clearFinalMarkerContinueActions(state.messages);
+        return messages === state.messages ? state : { ...state, messages };
+      }
+      const latest = getLatestFinalMessageMarker(state.messages);
+      if (!latest) return state;
+      const messages = markAutoContinueStopped(
+        state.messages,
+        latest.messageId,
+        transcriptAction.reason,
+      );
+      return messages === state.messages ? state : { ...state, messages };
+    }
 
     case "CLEAR_INTERACTION_PROMPTS":
       return {

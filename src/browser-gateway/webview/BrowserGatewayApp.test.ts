@@ -4691,8 +4691,9 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     const draft = screen.getByTestId(
       "continuation-draft",
     ) as HTMLTextAreaElement;
+    // Markdown bodies render asynchronously.
     expect(
-      screen.getByText("Distinct Ask Agent verification details."),
+      await screen.findByText("Distinct Ask Agent verification details."),
     ).toBeTruthy();
     expect(screen.getByText("Ask Agent validation passed")).toBeTruthy();
     expect(screen.getByText("Please continue in Ask Agent.")).toBeTruthy();

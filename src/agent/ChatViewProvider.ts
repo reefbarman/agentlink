@@ -259,6 +259,7 @@ import {
 import type { DetectedQuestion } from "@agentlink/protocol/question-detection";
 import {
   agentMessagesToChatMessages,
+  initialState as initialProjectionState,
   queueHasSkillSelectionError,
   reducer,
   shouldDropSessionScopedEvent,
@@ -267,6 +268,11 @@ import {
   type LoadedInstructionDebugInfo,
 } from "../shared/chatProjection.js";
 import { stripMemoryCandidateReminders } from "../shared/memoryCandidates.js";
+import {
+  SessionAutoContinueController,
+  type SessionAutoContinueState,
+  type SessionAutoContinueUpdate,
+} from "./SessionAutoContinueController.js";
 import {
   commandApprovalPolicyFromLegacyTier,
   isCommandApprovalPolicy,
@@ -443,12 +449,16 @@ function formatInstructionDebugInfo(
  * a beat, so this must stay comfortably below that threshold.
  */
 export const HOST_HEARTBEAT_INTERVAL_MS = 2_000;
+/** How long Auto Continue waits for a finished run to settle before sending. */
+const AUTO_CONTINUE_SETTLE_RETRY_MS = 100;
+const AUTO_CONTINUE_SETTLE_ATTEMPTS = 50;
 
 /**
  * Webview protocol types — messages between extension and chat webview.
  * Mirrored in src/agent/webview/types.ts for the browser side.
  */
 export type ExtensionToWebview =
+  | ({ type: "agentAutoContinueState" } & SessionAutoContinueUpdate)
   | { type: "releaseInstallState"; state: ReleaseInstallState }
   | {
       type: "releaseUpdateState";
@@ -1418,6 +1428,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private browserGatewayThemeSnapshot: BrowserGatewayThemeSnapshot | null =
     null;
   private readonly projectedForegroundStore = new ProjectedForegroundStore();
+  /**
+   * Browser-queued messages for sessions the foreground projection is not
+   * tracking: a browser view of a VS Code tab that is not focused, or a
+   * session VS Code switched away from while messages were queued. The
+   * projection only holds one session, so without this those messages
+   * vanished from the browser and never sent.
+   */
+  private readonly detachedBrowserQueues = new Map<
+    string,
+    AppState["messageQueue"]
+  >();
+  private readonly browserSessionOwnerStateChangeEmitter =
+    new vscode.EventEmitter<void>();
+  /** Auto Continue is per session and shared by VS Code and the browser. */
+  private readonly autoContinue = new SessionAutoContinueController({
+    sendPrompt: (sessionId, prompt, isStillWanted) =>
+      this.sendAutoContinuePrompt(sessionId, prompt, isStillWanted),
+    publish: (update) => this.publishAutoContinueState(update),
+    hasQueuedUserMessages: (sessionId) =>
+      this.sessionManager?.getSession(sessionId)?.hasQueuedUiMessages ?? false,
+  });
   private projectedDetectRequest: {
     requestId: string;
     messageId: string;
@@ -1660,7 +1691,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   onDidChangeBrowserProjectedForeground(
     listener: () => void,
   ): vscode.Disposable {
-    return this.projectedForegroundStore.onDidChange(listener);
+    const projected = this.projectedForegroundStore.onDidChange(listener);
+    const detached = this.browserSessionOwnerStateChangeEmitter.event(() =>
+      listener(),
+    );
+    return {
+      dispose: () => {
+        projected.dispose();
+        detached.dispose();
+      },
+    };
   }
 
   onDidChangeBrowserGatewaySurface(
@@ -4769,11 +4809,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       effectiveSession?.status === "awaiting_approval";
 
     if (effectiveSession && isActiveSession) {
-      const foregroundSession = mgr.getForegroundSession();
-      if (foregroundSession?.id !== effectiveSession.id) {
-        return { ok: false, error: "session_not_foreground" };
-      }
-      this.ensureProjectedForegroundSession(foregroundSession);
+      // The browser can view a running tab that is not VS Code's focused one;
+      // those messages queue in the detached store and drain the same way.
+      this.ensureProjectedForegroundSession(mgr.getForegroundSession());
 
       // Preserve a browser-supplied message identity through the queue so the
       // remote commit replaces the browser's optimistic transcript row.
@@ -6452,6 +6490,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ): void {
     if (!this.sessionManager) return;
     const session = this.sessionManager.getSession(sessionId);
+    this.autoContinue.noteManualStop(sessionId);
     if (opts?.preserveBackgroundAgents) {
       this.sessionManager.interruptSession(sessionId);
     } else {
@@ -6532,7 +6571,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const session = this.sessionManager.getSession(input.sessionId);
     if (!session) return;
 
-    this.applyProjectedAction({
+    this.applySessionQueueAction(input.sessionId, {
       type: "REMOVE_FROM_QUEUE",
       id: input.queueId,
     });
@@ -6667,7 +6706,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       ...(input.skillSelection ? ([input.skillSelection] as const) : []),
     );
     if (accepted) {
-      this.applyProjectedAction({
+      this.applySessionQueueAction(input.sessionId, {
         type: "MARK_QUEUE_INTERJECTION_READY",
         id: input.queueId,
         ready: true,
@@ -6691,7 +6730,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!session) return;
 
     session.clearPendingInterjectionIf(queueId);
-    this.applyProjectedAction({
+    this.applySessionQueueAction(sessionId, {
       type: "MARK_QUEUE_INTERJECTION_READY",
       id: queueId,
       ready: false,
@@ -6740,7 +6779,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     ) {
       return { ok: false, error: "project_state_mismatch" };
     }
-    const queued = this.projectedForegroundState.messageQueue.find(
+    const queued = this.getBrowserMessageQueue(input.sessionId).find(
       (entry) => entry.id === input.queueId && entry.source === "browser",
     );
     if (!queued) return { ok: false, error: "queued_message_not_found" };
@@ -6770,7 +6809,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     ) {
       return { ok: false };
     }
-    const queued = this.projectedForegroundState.messageQueue.find(
+    const queued = this.getBrowserMessageQueue(input.sessionId).find(
       (entry) => entry.id === input.queueId && entry.source === "browser",
     );
     if (!queued) return { ok: false };
@@ -6806,7 +6845,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     ) {
       return { ok: false, error: "project_state_mismatch" };
     }
-    const queued = this.projectedForegroundState.messageQueue.find(
+    const queued = this.getBrowserMessageQueue(input.sessionId).find(
       (entry) => entry.id === input.queueId,
     );
     if (!queued) return { ok: false, error: "queued_message_not_found" };
@@ -6838,7 +6877,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     ) {
       return { ok: false, error: "project_state_mismatch" };
     }
-    const queued = this.projectedForegroundState.messageQueue.find(
+    const queued = this.getBrowserMessageQueue(input.sessionId).find(
       (entry) => entry.id === input.queueId && entry.source === "browser",
     );
     if (!queued) return { ok: false, error: "queued_message_not_found" };
@@ -7972,6 +8011,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
     this.startHostHeartbeat();
     this.sendReleaseUpdateState();
+    for (const update of this.autoContinue.getStates()) {
+      this.sendOrQueueWebviewMessage({
+        type: "agentAutoContinueState",
+        ...update,
+      });
+    }
     const initialSnapshot = this.getChatWorkspaceViewSnapshot();
     if (initialSnapshot) {
       this.postMessage({
@@ -9235,6 +9280,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           msg.sessionId as string,
           msg.queueId as string,
         );
+        break;
+      }
+
+      case "agentSetAutoContinue": {
+        const sessionId = msg.sessionId;
+        if (typeof sessionId === "string" && sessionId) {
+          this.autoContinue.setEnabled(sessionId, msg.enabled === true);
+        }
         break;
       }
 
@@ -10590,7 +10643,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentRemoveQueuedMessage": {
         const sessionId = msg.sessionId as string;
         const queueId = msg.queueId as string;
-        this.applyProjectedAction({ type: "REMOVE_FROM_QUEUE", id: queueId });
+        if (sessionId) {
+          this.applySessionQueueAction(sessionId, {
+            type: "REMOVE_FROM_QUEUE",
+            id: queueId,
+          });
+        } else {
+          this.applyProjectedAction({ type: "REMOVE_FROM_QUEUE", id: queueId });
+        }
         if (sessionId && queueId && this.sessionManager) {
           const session = this.sessionManager.getSession(sessionId);
           session?.clearPendingInterjectionIf(queueId);
@@ -10693,6 +10753,238 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       action.type === "SET_STATE"
     ) {
       this.syncBrowserQueuedMessageCount();
+    }
+  }
+
+  /** The queue that owns browser-queued messages for this session. */
+  private getBrowserMessageQueue(sessionId: string): AppState["messageQueue"] {
+    return this.projectedForegroundStore.sessionId === sessionId
+      ? this.projectedForegroundState.messageQueue
+      : (this.detachedBrowserQueues.get(sessionId) ?? []);
+  }
+
+  /** Provider-owned browser state for a session, foreground or not. */
+  public getBrowserDetachedSessionState(sessionId: string): {
+    messageQueue: AppState["messageQueue"];
+    autoContinue: SessionAutoContinueState;
+  } {
+    return {
+      messageQueue: this.getBrowserMessageQueue(sessionId),
+      autoContinue: this.autoContinue.getState(sessionId),
+    };
+  }
+
+  public setBrowserAutoContinue(input: {
+    sessionId: string;
+    projectId?: string;
+    enabled: boolean;
+  }): { ok: boolean; error?: string; autoContinue?: SessionAutoContinueState } {
+    const session = this.sessionManager?.getSession(input.sessionId);
+    if (!session) return { ok: false, error: "session_not_found" };
+    if (
+      input.projectId !== undefined &&
+      session.projectScope.projectId !== input.projectId
+    ) {
+      return { ok: false, error: "project_state_mismatch" };
+    }
+    this.autoContinue.setEnabled(input.sessionId, input.enabled);
+    return {
+      ok: true,
+      autoContinue: this.autoContinue.getState(input.sessionId),
+    };
+  }
+
+  private publishAutoContinueState(update: SessionAutoContinueUpdate): void {
+    this.postMessage({ type: "agentAutoContinueState", ...update });
+    this.browserSessionOwnerStateChangeEmitter.fire();
+  }
+
+  /**
+   * Send the continue prompt as an ordinary user turn once the finished turn
+   * has fully settled, unless something else (a queued message, the user)
+   * started the session first or Auto Continue was turned off meanwhile.
+   */
+  private sendAutoContinuePrompt(
+    sessionId: string,
+    prompt: string,
+    isStillWanted: () => boolean,
+    attempt = 0,
+  ): void {
+    setTimeout(
+      () => {
+        const mgr = this.sessionManager;
+        const session = mgr?.getSession(sessionId);
+        if (!mgr || !session || !isStillWanted()) return;
+        if (this.isSessionTurnLive(session)) {
+          // The finished run may still be saving; give it a moment.
+          if (attempt < AUTO_CONTINUE_SETTLE_ATTEMPTS) {
+            this.sendAutoContinuePrompt(
+              sessionId,
+              prompt,
+              isStillWanted,
+              attempt + 1,
+            );
+          }
+          return;
+        }
+        this.commitAutoContinuePrompt(mgr, session, prompt);
+      },
+      attempt === 0 ? 0 : AUTO_CONTINUE_SETTLE_RETRY_MS,
+    );
+  }
+
+  private commitAutoContinuePrompt(
+    mgr: AgentSessionManager,
+    session: AgentSession,
+    prompt: string,
+  ): void {
+    const sessionId = session.id;
+    const reasoningEffort = session.reasoningEffort;
+    this.postMessage({
+      type: "agentCommittedUserMessage",
+      sessionId,
+      id: randomUUID(),
+      text: prompt,
+      displayText: prompt,
+      origin: "vscode",
+    });
+    mgr
+      .sendMessage(sessionId, prompt, session.mode, {
+        thinkingEnabled: reasoningEffort !== "none",
+        reasoningEffort,
+        activeFilePath: session.activeFilePath,
+        displayText: prompt,
+        origin: "vscode",
+      })
+      .catch((err) => {
+        this.log(`[error] auto continue send failed: ${err}`);
+      });
+  }
+
+  /**
+   * Apply a queue action to whichever queue owns the session: the foreground
+   * projection when it tracks the session, otherwise the detached store.
+   */
+  private applySessionQueueAction(
+    sessionId: string,
+    action: Parameters<typeof reducer>[1],
+  ): void {
+    if (this.projectedForegroundStore.sessionId === sessionId) {
+      this.applyProjectedAction(action);
+      return;
+    }
+    // Only browser entries live here: VS Code's own queue stays in its
+    // webview, which drains it for inactive tabs too.
+    if (action.type === "ENQUEUE_MESSAGE" && action.source !== "browser") {
+      return;
+    }
+    const current = this.detachedBrowserQueues.get(sessionId) ?? [];
+    if (current.length === 0 && action.type !== "ENQUEUE_MESSAGE") return;
+    const next = reducer(
+      { ...initialProjectionState, messageQueue: current },
+      action,
+    ).messageQueue;
+    if (next === current) return;
+    this.setDetachedBrowserQueue(sessionId, next);
+  }
+
+  private setDetachedBrowserQueue(
+    sessionId: string,
+    queue: AppState["messageQueue"],
+  ): void {
+    if (queue.length > 0) this.detachedBrowserQueues.set(sessionId, queue);
+    else this.detachedBrowserQueues.delete(sessionId);
+    this.sessionManager
+      ?.getSession(sessionId)
+      ?.setQueuedUiMessageCount?.("browser", queue.length);
+    this.browserSessionOwnerStateChangeEmitter.fire();
+  }
+
+  /** Keep the outgoing projected session's browser queue when it is replaced. */
+  private stashProjectedBrowserQueue(): void {
+    const sessionId = this.projectedForegroundStore.sessionId;
+    if (!sessionId) return;
+    const queue = this.projectedForegroundState.messageQueue.filter(
+      (entry) => entry.source === "browser",
+    );
+    if (queue.length > 0) this.setDetachedBrowserQueue(sessionId, queue);
+  }
+
+  /** Move a session's detached browser queue back into the projection. */
+  private restoreProjectedBrowserQueue(sessionId: string): void {
+    const queue = this.detachedBrowserQueues.get(sessionId);
+    if (!queue) return;
+    this.detachedBrowserQueues.delete(sessionId);
+    const existingIds = new Set(
+      this.projectedForegroundState.messageQueue.map((entry) => entry.id),
+    );
+    this.projectedForegroundState = {
+      ...this.projectedForegroundState,
+      messageQueue: [
+        ...this.projectedForegroundState.messageQueue,
+        ...queue.filter((entry) => !existingIds.has(entry.id)),
+      ],
+    };
+    this.syncBrowserQueuedMessageCount();
+    this.browserSessionOwnerStateChangeEmitter.fire();
+  }
+
+  /** Queue actions carried by a webview message, routed by session id. */
+  private applyDetachedQueueMessage(
+    sessionId: string,
+    extMsg: ExtensionMessage,
+  ): void {
+    switch (extMsg.type) {
+      case "agentQueuedMessage":
+        this.applySessionQueueAction(sessionId, {
+          type: "ENQUEUE_MESSAGE",
+          id: extMsg.queueId,
+          text: extMsg.displayText ?? extMsg.text,
+          fullText:
+            extMsg.displayText && extMsg.displayText !== extMsg.text
+              ? extMsg.text
+              : undefined,
+          isSlashCommand: extMsg.isSlashCommand,
+          slashCommandLabel: extMsg.slashCommandLabel,
+          attachments: extMsg.attachments,
+          images: extMsg.images,
+          documents: extMsg.documents,
+          displayMedia: extMsg.displayMedia,
+          source: extMsg.source,
+          skillSelection: extMsg.skillSelection,
+          skillSelectionError: extMsg.skillSelectionError,
+        });
+        return;
+      case "agentRemoveQueuedMessage":
+      case "agentInterjection":
+        this.applySessionQueueAction(sessionId, {
+          type: "REMOVE_FROM_QUEUE",
+          id: extMsg.queueId,
+        });
+        return;
+      case "agentQueueInterjectionReady":
+        this.applySessionQueueAction(sessionId, {
+          type: "MARK_QUEUE_INTERJECTION_READY",
+          id: extMsg.queueId,
+          ready: extMsg.ready,
+        });
+        return;
+      case "agentQueueSkillSelectionError":
+        this.applySessionQueueAction(sessionId, {
+          type: "MARK_QUEUE_SKILL_SELECTION_ERROR",
+          ids: extMsg.queueIds,
+          failure: extMsg.failure,
+        });
+        return;
+      case "agentQueueSkillSelectionResolved":
+        this.applySessionQueueAction(sessionId, {
+          type: "RESOLVE_QUEUE_SKILL_SELECTION",
+          id: extMsg.queueId,
+          skillRevision: extMsg.skillRevision,
+        });
+        return;
+      default:
+        return;
     }
   }
 
@@ -10850,6 +11142,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private resetProjectedForegroundState(): void {
+    this.stashProjectedBrowserQueue();
     this.projectedForegroundStore.reset();
     this.projectedDetectRequest = null;
     this.projectedLastDetectKey = null;
@@ -10880,6 +11173,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       "function"
         ? session.getAllMessages()
         : [];
+    this.stashProjectedBrowserQueue();
     this.projectedForegroundStore.hydrate(
       {
         type: "LOAD_SESSION",
@@ -10897,6 +11191,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       },
       session.estimatedTotalUsed,
     );
+    this.restoreProjectedBrowserQueue(session.id);
     this.projectedDetectRequest = null;
     this.projectedLastDetectKey = null;
     this.projectedRestoreDetectPending = true;
@@ -10976,6 +11271,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         isBackgroundEvent,
       )
     ) {
+      // The projection only tracks one session; queue changes for any other
+      // session still have to land somewhere or the messages are lost.
+      if (eventSessionId) {
+        this.applyDetachedQueueMessage(eventSessionId, extMsg);
+      }
       return;
     }
 
@@ -11346,6 +11646,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           id: extMsg.queueId,
           ready: extMsg.ready,
         });
+        break;
+
+      case "agentAutoContinueState":
+        if (extMsg.transcriptAction) {
+          this.applyProjectedAction({
+            type: "APPLY_AUTO_CONTINUE_TRANSCRIPT",
+            transcriptAction: extMsg.transcriptAction,
+          });
+        }
         break;
 
       case "agentSkillSelectionBatchRejected":
@@ -11971,14 +12280,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                   (skill) =>
                     skill.id === event.failure.skillId && skill.enabled,
                 );
-              const stillBlocked =
-                this.projectedForegroundStore.sessionId === sessionId &&
-                this.projectedForegroundState.messageQueue.some(
-                  (entry) =>
-                    failedQueueIds.includes(entry.id) &&
-                    entry.skillSelectionError?.selectedRevision ===
-                      event.failure.selectedRevision,
-                );
+              const stillBlocked = this.getBrowserMessageQueue(sessionId).some(
+                (entry) =>
+                  failedQueueIds.includes(entry.id) &&
+                  entry.skillSelectionError?.selectedRevision ===
+                    event.failure.selectedRevision,
+              );
               if (
                 current &&
                 stillBlocked &&
@@ -14119,19 +14426,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private drainBrowserQueuedMessage(sessionId: string): void {
     const session = this.sessionManager?.getSession(sessionId);
-    if (!session || this.projectedForegroundStore.sessionId !== sessionId)
-      return;
-    const queuedMessages = this.projectedForegroundState.messageQueue.filter(
-      (entry) => entry.source === "browser",
-    );
-    if (
-      queuedMessages.length === 0 ||
-      queueHasSkillSelectionError(this.projectedForegroundState.messageQueue)
-    )
+    if (!session) return;
+    const queue = this.getBrowserMessageQueue(sessionId);
+    const queuedMessages = queue.filter((entry) => entry.source === "browser");
+    if (queuedMessages.length === 0 || queueHasSkillSelectionError(queue))
       return;
 
     for (const queued of queuedMessages) {
-      this.applyProjectedAction({ type: "REMOVE_FROM_QUEUE", id: queued.id });
+      this.applySessionQueueAction(sessionId, {
+        type: "REMOVE_FROM_QUEUE",
+        id: queued.id,
+      });
       this.sendOrQueueWebviewMessage({
         type: "agentRemoveQueuedMessage",
         sessionId,
@@ -14211,6 +14516,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.projectExtensionMessage(msg);
     this.sendOrQueueWebviewMessage(msg);
     this.postMessageToEditorPanes(msg);
+    // After delivery, so surfaces see the turn end before any continue prompt.
+    this.autoContinue.observe(msg);
   }
 
   /**

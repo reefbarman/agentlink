@@ -757,6 +757,19 @@ describe("BrowserGatewayService", () => {
       "Choose for session two.",
       [],
     );
+    const getDetachedState = vi.fn((sessionId: string) => ({
+      messageQueue:
+        sessionId === "session-2"
+          ? [
+              {
+                id: "queued-2",
+                text: "queued for tab two",
+                source: "browser" as const,
+              },
+            ]
+          : [],
+    }));
+    service.setDetachedSessionStateProvider(getDetachedState);
 
     const detail = service.getSerializableSessionDetail({
       controllerEpoch: "controller-1",
@@ -786,7 +799,9 @@ describe("BrowserGatewayService", () => {
         lastOutputTokens: 17,
         lastCacheReadTokens: 9,
         estimatedTotalUsed: 67,
-        messageQueue: [],
+        messageQueue: [
+          { id: "queued-2", text: "queued for tab two", source: "browser" },
+        ],
         todos: [
           expect.objectContaining({
             id: "detached-todo",

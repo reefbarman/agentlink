@@ -251,6 +251,9 @@ export const BROWSER_GATEWAY_SNAPSHOT_PARITY_CONTRACT = {
         "owner_event",
         "detail_handle",
       ),
+      autoContinue: missing(
+        "Not in the relay checkpoint; relay browsers read and set it through the retained POST /api/auto-continue owner route.",
+      ),
       questionRequest: partial(
         "Projected from the aggregate interaction detail even when another interaction is primary; browser DTO reconstruction is complete, with explicit field/cardinality bounds still open.",
         "checkpoint",

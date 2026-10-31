@@ -2424,6 +2424,9 @@ export async function activate(
     () => chatViewProvider.getBrowserProjectedForegroundState(),
     () => chatViewProvider.getBrowserMcpStatusInfos(),
   );
+  browserGatewayService.setDetachedSessionStateProvider((sessionId) =>
+    chatViewProvider.getBrowserDetachedSessionState(sessionId),
+  );
   browserGatewayService.setChatWorkspaceProvider(
     () =>
       createChatWorkspaceViewSnapshot(

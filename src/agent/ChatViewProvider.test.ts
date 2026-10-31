@@ -6102,6 +6102,256 @@ describe("ChatViewProvider session state sync", () => {
     ]);
   });
 
+  function makeBrowserQueueSession(id: string, status: string) {
+    return {
+      id,
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status,
+      title: id,
+      reasoningEffort: "high",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      projectScope: {
+        projectId: "project-a",
+        workspaceFolderUri: "file:///workspace/a",
+        displayName: "Project A",
+        rootPath: "/workspace/a",
+      },
+      projectAvailability: "available",
+      getAllMessages: () => [] as unknown[],
+      setPendingInterjection: vi.fn(() => true),
+      clearPendingInterjectionIf: vi.fn(),
+      setQueuedUiMessageCount: vi.fn(),
+    };
+  }
+
+  async function makeBrowserQueueProvider(
+    sessions: ReturnType<typeof makeBrowserQueueSession>[],
+    foreground: { current: ReturnType<typeof makeBrowserQueueSession> },
+  ) {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const sendMessage = vi.fn(async () => undefined);
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => foreground.current),
+      getSession: vi.fn((sessionId: string) =>
+        sessions.find((session) => session.id === sessionId),
+      ),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      sendMessage,
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    } as never);
+    const drain = (sessionId: string) =>
+      (
+        provider as unknown as {
+          drainBrowserQueuedMessage(sessionId: string): void;
+        }
+      ).drainBrowserQueuedMessage(sessionId);
+    return { provider, sendMessage, drain };
+  }
+
+  it("queues, interjects, and drains browser messages for a running tab VS Code is not focused on", async () => {
+    const focused = makeBrowserQueueSession("session-focused", "idle");
+    const viewed = makeBrowserQueueSession("session-viewed", "streaming");
+    const { provider, sendMessage, drain } = await makeBrowserQueueProvider(
+      [focused, viewed],
+      { current: focused },
+    );
+
+    await expect(
+      provider.submitBrowserSend({
+        id: "queued-later",
+        text: "do this after",
+        sessionId: viewed.id,
+        mode: "code",
+      }),
+    ).resolves.toEqual({ ok: true, queued: true });
+    await expect(
+      provider.submitBrowserSend({
+        id: "queued-now",
+        text: "change course",
+        sessionId: viewed.id,
+        mode: "code",
+        interject: true,
+      }),
+    ).resolves.toEqual({ ok: true, queued: true, interjected: true });
+
+    expect(
+      provider.getBrowserDetachedSessionState(viewed.id).messageQueue,
+    ).toMatchObject([
+      { id: "queued-later", text: "do this after", source: "browser" },
+      {
+        id: "queued-now",
+        text: "change course",
+        source: "browser",
+        interjectionReady: true,
+      },
+    ]);
+    expect(provider.getBrowserProjectedForegroundState()?.messageQueue).toEqual(
+      [],
+    );
+    expect(viewed.setQueuedUiMessageCount).toHaveBeenLastCalledWith(
+      "browser",
+      2,
+    );
+
+    // The agent takes the interjection at its next break.
+    (
+      provider as unknown as { postMessage(message: unknown): void }
+    ).postMessage({
+      type: "agentInterjection",
+      sessionId: viewed.id,
+      queueId: "queued-now",
+      text: "change course",
+    });
+    expect(
+      provider
+        .getBrowserDetachedSessionState(viewed.id)
+        .messageQueue.map((entry) => entry.id),
+    ).toEqual(["queued-later"]);
+
+    viewed.status = "idle";
+    drain(viewed.id);
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      viewed.id,
+      "do this after",
+      "code",
+      expect.objectContaining({ origin: "browser" }),
+    );
+    expect(
+      provider.getBrowserDetachedSessionState(viewed.id).messageQueue,
+    ).toEqual([]);
+    expect(viewed.setQueuedUiMessageCount).toHaveBeenLastCalledWith(
+      "browser",
+      0,
+    );
+  });
+
+  it("runs Auto Continue in the host and shares its state with the browser", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = makeBrowserQueueSession("session-auto", "streaming");
+      const { provider, sendMessage } = await makeBrowserQueueProvider(
+        [session],
+        { current: session },
+      );
+      const host = provider as unknown as {
+        handleWebviewMessage(message: unknown): Promise<void>;
+        postMessage(message: unknown): void;
+      };
+
+      await host.handleWebviewMessage({
+        command: "agentSetAutoContinue",
+        sessionId: session.id,
+        enabled: true,
+      });
+      expect(
+        provider.getBrowserDetachedSessionState(session.id).autoContinue,
+      ).toMatchObject({ enabled: true });
+
+      host.postMessage({
+        type: "agentFinalMarker",
+        sessionId: session.id,
+        marker: {
+          status: "completed",
+          source: "tool",
+          summary: "Slice done.",
+          continueAction: { label: "Continue", prompt: "Do the next slice." },
+        },
+      });
+      session.status = "idle";
+      host.postMessage({
+        type: "agentDone",
+        sessionId: session.id,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCacheReadTokens: 0,
+        totalCacheCreationTokens: 0,
+      });
+      await vi.runAllTimersAsync();
+
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith(
+        session.id,
+        "Do the next slice.",
+        "code",
+        expect.objectContaining({ origin: "vscode" }),
+      );
+      expect(
+        provider.getBrowserDetachedSessionState(session.id).autoContinue,
+      ).toEqual({ enabled: true, status: "Auto Continue sent 1/10." });
+
+      // The browser can turn it off for both surfaces.
+      expect(
+        provider.setBrowserAutoContinue({
+          sessionId: session.id,
+          projectId: "project-a",
+          enabled: false,
+        }),
+      ).toMatchObject({ ok: true, autoContinue: { enabled: false } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps browser-queued messages when VS Code switches to another tab", async () => {
+    const first = makeBrowserQueueSession("session-first", "streaming");
+    const second = makeBrowserQueueSession("session-second", "idle");
+    const foreground = { current: first };
+    const { provider, sendMessage, drain } = await makeBrowserQueueProvider(
+      [first, second],
+      foreground,
+    );
+
+    await provider.submitBrowserSend({
+      id: "queued-first",
+      text: "keep me",
+      sessionId: first.id,
+      mode: "code",
+    });
+    expect(
+      provider.getBrowserProjectedForegroundState()?.messageQueue,
+    ).toMatchObject([{ id: "queued-first" }]);
+
+    foreground.current = second;
+    expect(provider.getBrowserProjectedForegroundState()?.sessionId).toBe(
+      second.id,
+    );
+    expect(
+      provider.getBrowserDetachedSessionState(first.id).messageQueue,
+    ).toMatchObject([{ id: "queued-first", text: "keep me" }]);
+
+    // Returning to the tab shows the same queue again.
+    foreground.current = first;
+    expect(
+      provider.getBrowserProjectedForegroundState()?.messageQueue,
+    ).toMatchObject([{ id: "queued-first" }]);
+    foreground.current = second;
+    provider.getBrowserProjectedForegroundState();
+
+    first.status = "idle";
+    drain(first.id);
+    expect(sendMessage).toHaveBeenCalledWith(
+      first.id,
+      "keep me",
+      "code",
+      expect.objectContaining({ origin: "browser" }),
+    );
+  });
+
   it("sends browser workspace image attachments as model media", async () => {
     const projectRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "agentlink-browser-image-"),
