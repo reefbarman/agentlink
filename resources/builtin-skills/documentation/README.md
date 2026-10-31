@@ -17,6 +17,7 @@ These are the shipped product docs for AgentLink's VS Code extension and standal
 - [Customization](references/customization.md) — instructions, rules, modes, slash commands, skills, Agent Plugins, and memory.
 - [Standalone CLI](references/standalone-cli.md) — verify, install, and use the macOS Apple Silicon GitHub release preview with reviewed file edits.
 - [Embed AgentLink](references/embedding-agentlink.md) — build application assistants, desktop runtimes, CLI harnesses, and cloud hosts with the private packages, including a voice input button.
+- [Agent activity UX](references/agent-activity-ux.md) — suggested patterns, taken from the VS Code extension, for spinners, streaming text, thinking blocks, and tool rows in an SDK-built chat UI.
 - [Complete product reference](references/complete-reference.md) — the comprehensive compatibility reference while focused guides are being split out.
 - [Package contract](references/package-contract.md) — generated exact commands, views, settings, defaults, scopes, and allowed values.
 - [Release notes](references/release-notes.md) — generated copy of the current release history.

@@ -188,7 +188,7 @@ Model selection precedence is `turn > session > runtime default`. Prefer provide
 
 Set `defaultReasoningEffort` on `createAgentEngine(...)` (or `createNodeHostAgent(...)`), optionally set a persisted session default when creating a session or through `sessions.setReasoningEffort(...)`, and optionally send a per-turn `reasoningEffort`. Precedence is `turn > session > runtime default`; `"none"` explicitly disables a lower-level default.
 
-For OpenAI-compatible providers, the connection's `reasoningEffortMode` must match the endpoint's actual wire contract: `reasoning_effort`, `reasoning.effort`, or `output_config.effort`. A non-`none` effort fails closed when the selected model cannot reason or the connection has no wire mode. Test the actual outgoing request body for every effort option exposed by the application. The embedded Web transport forwards the selected effort but does not expose private provider reasoning/thinking events to the client.
+For OpenAI-compatible providers, the connection's `reasoningEffortMode` must match the endpoint's actual wire contract: `reasoning_effort`, `reasoning.effort`, or `output_config.effort`. A non-`none` effort fails closed when the selected model cannot reason or the connection has no wire mode. Test the actual outgoing request body for every effort option exposed by the application. The embedded Web transport forwards the selected effort. When the provider streams reasoning, the turn stream and Web transport also forward it as `thinking.started`, `thinking.delta`, and `thinking.completed` events; decide whether your UI shows that text, and ignore the events if it should not.
 
 ## Handle the complete event and session lifecycle
 
@@ -210,7 +210,7 @@ const result = await agent.turn({ sessionId, text: userText });
 The lower-level `decodeEmbeddedAgentNdjson(...)`, `createEmbeddedAgentClientState(...)`, and `reduceEmbeddedAgentTurnEvent(...)` remain available when a host needs custom request ownership or reconnection behavior. The framework-neutral reducer:
 
 - validates protocol/schema version, required runtime fields, turn identity, and sequence before applying an event;
-- preserves streamed text and tool blocks in arrival order; provider reasoning/thinking content is not exposed by this transport;
+- preserves streamed text, thinking, and tool blocks in arrival order (thinking blocks carry `status: "running" | "completed"`);
 - maps `turn.failed` to a safe visible error and retryability state;
 - maps `turn.cancelled` to a visible stopped state;
 - renders a deliberate approval denial as neutral `Denied`, not as an execution failure;
@@ -219,7 +219,7 @@ The lower-level `decodeEmbeddedAgentNdjson(...)`, `createEmbeddedAgentClientStat
 - restores the persisted next sequence and pending tool block for approval resume after refresh;
 - rejects unknown event types and malformed stream frames rather than silently ignoring them.
 
-The application still owns endpoint authentication, reconnect/backoff policy, local user-message state, UI rendering, and any framework binding. `EmbeddedAgentClientError` exposes stable `code`, `category`, and `retryable` fields without message parsing. A React hook should wrap the controller rather than duplicate its protocol logic, but remains deferred until another integration validates the state and cancellation semantics.
+The application still owns endpoint authentication, reconnect/backoff policy, local user-message state, UI rendering, and any framework binding. For suggested ways to render this state (activity spinners, streaming text, thinking, and tool rows) based on what works well in the AgentLink VS Code extension, see [Agent activity UX](agent-activity-ux.md). `EmbeddedAgentClientError` exposes stable `code`, `category`, and `retryable` fields without message parsing. A React hook should wrap the controller rather than duplicate its protocol logic, but remains deferred until another integration validates the state and cancellation semantics.
 
 Plan explicitly for `idle`, `running`, `suspended`, `resuming`, and interrupted/stale states. Use the high-level engine operations rather than manipulating repositories:
 
