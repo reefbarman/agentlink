@@ -749,4 +749,41 @@ describe("parseCodexResponseStreamEvents", () => {
       collect([{ type: "response.failed", error: { message: "failed" } }]),
     ).rejects.toThrow(/Codex request failed: failed/);
   });
+
+  it("announces lifecycle and silent reasoning as content-free progress", async () => {
+    const state = { outputStarted: false };
+    const events = await collect(
+      [
+        { type: "response.created", response: { id: "resp-1" } },
+        { type: "response.in_progress", response: { id: "resp-1" } },
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "reasoning", id: "rs_1" },
+        },
+        // A keepalive-era lifecycle event while reasoning is still open.
+        { type: "response.in_progress", response: { id: "resp-1" } },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: { type: "reasoning", id: "rs_1", summary: [] },
+        },
+      ],
+      state,
+    );
+
+    expect(
+      events.filter((event) => event.type === "provider_progress"),
+    ).toEqual([
+      { type: "provider_progress", silentWork: false },
+      { type: "provider_progress", silentWork: false },
+      { type: "provider_progress", silentWork: true },
+      { type: "provider_progress", silentWork: true },
+      { type: "provider_progress", silentWork: false },
+    ]);
+    // Progress is not output: routing-rejection recovery still sees an
+    // untouched stream, and no empty thinking block is created.
+    expect(state.outputStarted).toBe(false);
+    expect(events.some((event) => event.type === "thinking_start")).toBe(false);
+  });
 });

@@ -78,6 +78,62 @@ describe("ProviderStreamActivityMonitor", () => {
     }
   });
 
+  it("allows a longer bounded silence while the provider announces silent work", async () => {
+    const controller = new AbortController();
+    const monitor = new ProviderStreamActivityMonitor(
+      1_000,
+      1_000,
+      15,
+      controller,
+      500,
+    );
+    try {
+      monitor.recordProviderEvent({
+        type: "provider_progress",
+        silentWork: true,
+      });
+      await sleep(40);
+      // Past the ordinary no-progress limit, but reasoning is announced.
+      expect(controller.signal.aborted).toBe(false);
+      await expect(monitor.next(neverYields())).rejects.toMatchObject({
+        name: "ProviderStreamTimeoutError",
+        kind: "no_progress",
+        message: expect.stringContaining("500ms"),
+      });
+      expect(controller.signal.aborted).toBe(true);
+    } finally {
+      monitor.dispose();
+    }
+  });
+
+  it.each([
+    [{ type: "provider_progress", silentWork: false }],
+    [{ type: "response_retry", attempt: 1 }],
+  ])("returns to the ordinary no-progress limit after %o", async (event) => {
+    const controller = new AbortController();
+    const monitor = new ProviderStreamActivityMonitor(
+      1_000,
+      1_000,
+      15,
+      controller,
+      10_000,
+    );
+    try {
+      monitor.recordProviderEvent({
+        type: "provider_progress",
+        silentWork: true,
+      });
+      monitor.recordProviderEvent(event);
+      expect(monitor.silentWork).toBe(false);
+      await expect(monitor.next(neverYields())).rejects.toMatchObject({
+        kind: "no_progress",
+        message: expect.stringContaining("15ms"),
+      });
+    } finally {
+      monitor.dispose();
+    }
+  });
+
   it("stops firing after dispose", async () => {
     const controller = new AbortController();
     const monitor = new ProviderStreamActivityMonitor(5, 5, 5, controller);
@@ -135,6 +191,30 @@ describe("runWatchedProviderStream", () => {
       for await (const event of stream) void event;
     }).rejects.toBeInstanceOf(ProviderStreamTimeoutError);
     expect(underlyingSignal?.aborted).toBe(true);
+  });
+
+  it("keeps silently reasoning streams alive past the ordinary no-progress limit", async () => {
+    const events: string[] = [];
+    const stream = runWatchedProviderStream<{
+      type: string;
+      silentWork?: boolean;
+    }>({
+      noProgressTimeoutMs: 15,
+      silentWorkTimeoutMs: 1_000,
+      start: () =>
+        (async function* () {
+          yield { type: "provider_progress", silentWork: true };
+          await sleep(50);
+          yield { type: "provider_progress", silentWork: false };
+          yield { type: "text_delta" };
+        })(),
+    });
+    for await (const event of stream) events.push(event.type);
+    expect(events).toEqual([
+      "provider_progress",
+      "provider_progress",
+      "text_delta",
+    ]);
   });
 
   it("keeps websocket watchdog timeouts retryable for the owning recovery loop", async () => {

@@ -77,6 +77,10 @@ export async function* parseCodexResponseStreamEvents(
   // minutes without yielding a single parsed event and trips the provider
   // no-progress watchdog.
   const toolCallIdsByItemId = new Map<string, string>();
+  // Reasoning items that have started but not finished. High-effort reasoning
+  // can run for many minutes without summary deltas; announcing it as silent
+  // work stops the no-progress watchdog from restarting legitimate reasoning.
+  const openReasoningItems = new Set<string | number>();
 
   let inputTokens = 0;
   let outputTokens = 0;
@@ -101,6 +105,18 @@ export async function* parseCodexResponseStreamEvents(
   for await (const event of events) {
     const eventType = event.type as string | undefined;
     if (!eventType) continue;
+
+    if (
+      eventType === "response.created" ||
+      eventType === "response.queued" ||
+      eventType === "response.in_progress"
+    ) {
+      yield {
+        type: "provider_progress",
+        silentWork: openReasoningItems.size > 0,
+      };
+      continue;
+    }
 
     if (
       eventType === "response.output_text.delta" ||
@@ -225,6 +241,11 @@ export async function* parseCodexResponseStreamEvents(
 
     if (eventType === "response.output_item.added") {
       const item = event.item as Record<string, unknown> | undefined;
+      if (item?.type === "reasoning") {
+        openReasoningItems.add(reasoningItemKey(item, event.output_index));
+        yield { type: "provider_progress", silentWork: true };
+        continue;
+      }
       if (item?.type === "web_search_call" && typeof item.id === "string") {
         const activity = toStartedWebActivity(item);
         const alreadyStarted = startedWebActivities.has(activity.id);
@@ -259,6 +280,14 @@ export async function* parseCodexResponseStreamEvents(
       const outputIndex = event.output_index;
       if (item && typeof outputIndex === "number") {
         completedOutputItems.set(outputIndex, item);
+      }
+      if (item?.type === "reasoning") {
+        openReasoningItems.delete(reasoningItemKey(item, outputIndex));
+        yield {
+          type: "provider_progress",
+          silentWork: openReasoningItems.size > 0,
+        };
+        continue;
       }
       if (item?.type === "web_search_call") {
         const activity = toCoreWebActivity(item);
@@ -789,6 +818,15 @@ function failPendingWebActivities(
     failed.push(next);
   }
   return failed;
+}
+
+function reasoningItemKey(
+  item: Record<string, unknown>,
+  outputIndex: unknown,
+): string | number {
+  if (typeof item.id === "string") return item.id;
+  if (typeof outputIndex === "number") return outputIndex;
+  return "reasoning";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

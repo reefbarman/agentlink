@@ -8219,6 +8219,47 @@ describe("AgentEngine", () => {
       }
     });
 
+    it("keeps announced silent reasoning alive past the no-progress limit without retrying", async () => {
+      let attempts = 0;
+      const provider: ModelProvider = {
+        ...makeMockProvider(),
+        async *stream(request: StreamRequest) {
+          attempts += 1;
+          request.onProviderRequestAttempt?.({ model: request.model });
+          yield { type: "provider_progress", silentWork: true };
+          // Long silent reasoning: only transport keepalives arrive.
+          const heartbeat = setInterval(() => {
+            request.onTransportActivity?.({
+              kind: "body",
+              at: Date.now(),
+              bytes: 1,
+            });
+          }, 2);
+          try {
+            await new Promise((resolve) => setTimeout(resolve, 60));
+          } finally {
+            clearInterval(heartbeat);
+          }
+          yield { type: "provider_progress", silentWork: false };
+          yield* makeProviderStream();
+        },
+      };
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(
+        engine.run(session, {
+          providerNoProgressTimeoutMs: 10,
+          providerSilentWorkTimeoutMs: 5_000,
+        }),
+      );
+
+      expect(attempts).toBe(1);
+      expect(events.some((event) => event.type === "error")).toBe(false);
+      expect(events.some((event) => event.type === "warning")).toBe(false);
+    });
+
     it("stops Codex Responses recovery after repeated no-progress timeouts instead of exhausting all 11 retries", async () => {
       let attempts = 0;
       const provider: ModelProvider = {

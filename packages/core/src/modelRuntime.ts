@@ -375,6 +375,14 @@ export type CoreModelStreamEvent =
       requestedModel: string;
       effectiveModel: string;
     }
+  /**
+   * Content-free liveness signal from a provider stream. `silentWork` is true
+   * while the provider is legitimately working without streaming content (for
+   * example an open reasoning item with no summary deltas), so stream
+   * watchdogs can allow a longer, still bounded, gap between parsed events.
+   * Consumers that render or collect output should ignore it.
+   */
+  | { type: "provider_progress"; silentWork: boolean }
   | { type: "thinking_start"; thinkingId: string }
   | { type: "thinking_delta"; thinkingId: string; text: string }
   | { type: "thinking_end"; thinkingId: string }

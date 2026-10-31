@@ -19,6 +19,16 @@ export const DEFAULT_PROVIDER_INACTIVITY_TIMEOUT_MS = 300_000;
  * bounds that failure mode and hands the request to the normal retry path.
  */
 export const DEFAULT_PROVIDER_NO_PROGRESS_TIMEOUT_MS = 300_000;
+/**
+ * No-progress bound while the provider has announced silent work (a
+ * `provider_progress` event with `silentWork: true`, e.g. long reasoning with
+ * no summary deltas). High-effort reasoning can legitimately stay silent far
+ * longer than {@link DEFAULT_PROVIDER_NO_PROGRESS_TIMEOUT_MS}; retrying it
+ * restarts the reasoning, so it would never finish. Still bounded so a stream
+ * that stalls mid-reasoning is eventually retried. The inactivity timer keeps
+ * guarding a transport that stops sending anything.
+ */
+export const DEFAULT_PROVIDER_SILENT_WORK_TIMEOUT_MS = 1_800_000;
 
 export type ProviderStreamTimeoutKind =
   | "connection"
@@ -60,7 +70,9 @@ export class ProviderStreamActivityMonitor {
   private readonly timeoutPromise: Promise<never>;
   private rejectTimeout: (error: Error) => void = () => undefined;
   private disposed = false;
+  private readonly silentWorkTimeoutMs: number;
   hasTransportActivity = false;
+  silentWork = false;
   lastActivityAt: number | undefined;
   lastProgressAt: number | undefined;
 
@@ -69,7 +81,12 @@ export class ProviderStreamActivityMonitor {
     private readonly inactivityTimeoutMs: number,
     private readonly noProgressTimeoutMs: number,
     private readonly requestController: AbortController,
+    silentWorkTimeoutMs: number = DEFAULT_PROVIDER_SILENT_WORK_TIMEOUT_MS,
   ) {
+    this.silentWorkTimeoutMs = Math.max(
+      silentWorkTimeoutMs,
+      noProgressTimeoutMs,
+    );
     this.timeoutPromise = new Promise<never>((_, reject) => {
       this.rejectTimeout = reject;
     });
@@ -102,6 +119,24 @@ export class ProviderStreamActivityMonitor {
     this.armProgress();
   }
 
+  /**
+   * Record a yielded provider stream event as progress, honouring
+   * `provider_progress` silent-work announcements. A `response_retry` starts a
+   * fresh provider attempt, so it clears any silent work from the previous one.
+   */
+  recordProviderEvent(event: unknown): void {
+    if (event && typeof event === "object" && "type" in event) {
+      const { type } = event as { type: unknown };
+      if (type === "provider_progress") {
+        this.silentWork =
+          (event as { silentWork?: unknown }).silentWork === true;
+      } else if (type === "response_retry") {
+        this.silentWork = false;
+      }
+    }
+    this.recordProgress();
+  }
+
   async next<T>(iterator: AsyncIterator<T>): Promise<IteratorResult<T>> {
     return Promise.race([iterator.next(), this.timeoutPromise]);
   }
@@ -127,9 +162,12 @@ export class ProviderStreamActivityMonitor {
 
   private armProgress(): void {
     if (this.progressTimer) clearNodeTimeout(this.progressTimer);
+    const timeoutMs = this.silentWork
+      ? this.silentWorkTimeoutMs
+      : this.noProgressTimeoutMs;
     this.progressTimer = setNodeTimeout(
-      () => this.fire("no_progress", this.noProgressTimeoutMs),
-      this.noProgressTimeoutMs,
+      () => this.fire("no_progress", timeoutMs),
+      timeoutMs,
     );
   }
 
@@ -159,6 +197,7 @@ export async function* runWatchedProviderStream<T>(params: {
   connectionTimeoutMs?: number;
   inactivityTimeoutMs?: number;
   noProgressTimeoutMs?: number;
+  silentWorkTimeoutMs?: number;
 }): AsyncGenerator<T> {
   const requestController = new AbortController();
   const forwardAbort = () => requestController.abort();
@@ -169,6 +208,7 @@ export async function* runWatchedProviderStream<T>(params: {
     params.inactivityTimeoutMs ?? DEFAULT_PROVIDER_INACTIVITY_TIMEOUT_MS,
     params.noProgressTimeoutMs ?? DEFAULT_PROVIDER_NO_PROGRESS_TIMEOUT_MS,
     requestController,
+    params.silentWorkTimeoutMs ?? DEFAULT_PROVIDER_SILENT_WORK_TIMEOUT_MS,
   );
 
   const iterator = params
@@ -182,7 +222,7 @@ export async function* runWatchedProviderStream<T>(params: {
     while (true) {
       const next = await monitor.next(iterator);
       if (next.done) return;
-      monitor.recordProgress();
+      monitor.recordProviderEvent(next.value);
       yield next.value;
     }
   } finally {

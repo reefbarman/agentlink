@@ -128,6 +128,7 @@ import {
   DEFAULT_PROVIDER_FIRST_EVENT_TIMEOUT_MS,
   DEFAULT_PROVIDER_INACTIVITY_TIMEOUT_MS,
   DEFAULT_PROVIDER_NO_PROGRESS_TIMEOUT_MS,
+  DEFAULT_PROVIDER_SILENT_WORK_TIMEOUT_MS,
   ProviderStreamActivityMonitor,
   ProviderStreamTimeoutError,
 } from "../core/providerStreamWatchdog.js";
@@ -1228,6 +1229,12 @@ export class AgentEngine {
        * would otherwise keep alive forever.
        */
       providerNoProgressTimeoutMs?: number;
+      /**
+       * Bounded replacement for providerNoProgressTimeoutMs while the provider
+       * announces silent work (provider_progress with silentWork, e.g. long
+       * reasoning without summary deltas).
+       */
+      providerSilentWorkTimeoutMs?: number;
       /** Resolves the linked predecessor transcript for an eligible handoff successor. */
       getHandoffSourceTranscript?: import("../core/tools/types.js").AgentToolExecutionContext["getHandoffSourceTranscript"];
       /** Validates and stages explicitly selected skills on queued input. */
@@ -1934,6 +1941,8 @@ export class AgentEngine {
             opts?.providerNoProgressTimeoutMs ??
               DEFAULT_PROVIDER_NO_PROGRESS_TIMEOUT_MS,
             requestController,
+            opts?.providerSilentWorkTimeoutMs ??
+              DEFAULT_PROVIDER_SILENT_WORK_TIMEOUT_MS,
           );
           const estimatedInputTokens = contextLedger.allocatedInputTokens;
           const toolResultContextAttributions =
@@ -2069,9 +2078,14 @@ export class AgentEngine {
               if (event.type !== "transport_fallback") {
                 // A yielded model event is both transport liveness (custom/test
                 // providers may not use agentLinkFetch) and parsed progress.
-                transportMonitor.recordProgress();
+                // provider_progress may also announce silent work (long
+                // reasoning), which extends the bounded no-progress limit.
+                transportMonitor.recordProviderEvent(event);
 
-                if (!firstTokenReceived) {
+                // Content-free lifecycle progress is not a first token: it
+                // must not skew time-to-first-token or make a request failure
+                // look like a stream failure.
+                if (!firstTokenReceived && event.type !== "provider_progress") {
                   firstTokenReceived = true;
                   timeToFirstToken = Date.now() - startTime;
                 }
@@ -2228,6 +2242,9 @@ export class AgentEngine {
                     event.inputTokenBreakdownReported;
                   usageEstimated = event.estimated;
                   providerResponseId = event.providerResponseId;
+                  break;
+                case "provider_progress":
+                  // Liveness only; handled by the transport monitor above.
                   break;
                 case "done":
                   break;
