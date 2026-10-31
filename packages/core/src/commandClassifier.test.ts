@@ -53,6 +53,8 @@ describe("static binary file inspection", () => {
       for (const command of [
         "dyld_info -uuid /usr/lib/dyld",
         "dyld_info -disassemble /usr/lib/dyld",
+        // Shared-cache images have no on-disk file; dyld_info resolves them.
+        "dyld_info -uuid /System/Library/Frameworks/AgentLinkCacheOnly.framework/AgentLinkCacheOnly",
       ]) {
         expect(isCommandEligibleForReadOnlyExecution(command, ctx)).toEqual({
           eligible: true,
@@ -64,6 +66,8 @@ describe("static binary file inspection", () => {
         "dyld_info -uuid /usr/lib/../../etc/hosts",
         "dyld_info -uuid /usr/libexec/../lib/dyld/../../../etc/hosts",
         "dyld_info -uuid /System/Library",
+        "xxd -l 4 /System/Library/Frameworks/AgentLinkCacheOnly.framework/AgentLinkCacheOnly",
+        "dyld_info -uuid /Library/AgentLinkMissing",
       ]) {
         expect(
           isCommandEligibleForReadOnlyExecution(command, ctx).eligible,

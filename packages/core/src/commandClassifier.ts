@@ -1365,16 +1365,24 @@ function classifyStaticFileInspection(
   if (isSecretPath(resolved) || isSecretPath(physical)) {
     return dangerous("read targets secret path", "secret_path", command);
   }
-  if (
-    !isCommandPathInsideWorkspace(resolved, ctx.workspaceRoots) &&
-    !(command === "dyld_info" && isAppleSystemImagePath(resolved, physical))
-  ) {
+  const inWorkspace = isCommandPathInsideWorkspace(
+    resolved,
+    ctx.workspaceRoots,
+  );
+  const systemImage =
+    !inWorkspace &&
+    command === "dyld_info" &&
+    isAppleSystemImagePath(resolved, physical);
+  if (!inWorkspace && !systemImage) {
     return dangerous("read target outside workspace", "external_path", command);
   }
   try {
     if (!fs.statSync(resolved).isFile()) return invalid();
-  } catch {
-    return invalid();
+  } catch (error) {
+    // Most macOS system images exist only inside the dyld shared cache, which
+    // dyld_info resolves by path. Their on-disk path is absent, not a file.
+    const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+    if (!(systemImage && missing)) return invalid();
   }
   return safe(`static file inspection (${command})`, "read_only", command);
 }
