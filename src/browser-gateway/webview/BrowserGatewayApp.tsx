@@ -937,6 +937,31 @@ export function reconcileAskAgentSessionTarget(
   return projectEmptyAskAgentSession(next, targetSessionId);
 }
 
+type ApprovalSubmitResponseBody = {
+  ok?: boolean;
+  error?: string;
+  message?: string;
+  snapshot?: GatewaySnapshot;
+};
+
+/** Explain, next to the approval card, why a browser decision did not land. */
+export function describeApprovalSubmitFailure(
+  status: number | undefined,
+  body: Pick<ApprovalSubmitResponseBody, "error" | "message">,
+): string {
+  if (
+    status === 502 ||
+    body.error === "proxy_error" ||
+    body.error === "network_error"
+  ) {
+    return "Couldn't reach VS Code, so this decision wasn't applied. Answer it in VS Code, or reload that VS Code window to reconnect the browser.";
+  }
+  if (status === 404 && !body.error && !body.message) {
+    return "VS Code is no longer waiting on this approval. It may have been answered elsewhere; check the chat in VS Code.";
+  }
+  return `This decision wasn't applied: ${body.message ?? body.error ?? `HTTP ${status ?? "error"}`}.`;
+}
+
 export function mergeDetachedSessionDetail(
   ownerSnapshot: GatewaySnapshot,
   detail: BrowserGatewayDetachedSessionDetail,
@@ -2553,6 +2578,10 @@ export function BrowserGatewayApp({
   const [localDismissedApprovalId, setLocalDismissedApprovalId] = useState<
     string | null
   >(null);
+  const [approvalSubmitError, setApprovalSubmitError] = useState<{
+    approvalId: string;
+    message: string;
+  } | null>(null);
   const [localDismissedQuestionId, setLocalDismissedQuestionId] = useState<
     string | null
   >(null);
@@ -7649,6 +7678,7 @@ export function BrowserGatewayApp({
       data.followUp?.trim() || forwardedFollowUpRef.current.trim();
     forwardedFollowUpRef.current = "";
     setLocalDismissedApprovalId(submittedApprovalId);
+    setApprovalSubmitError(null);
     void (async () => {
       const approvalPath =
         origin.tabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
@@ -7656,33 +7686,43 @@ export function BrowserGatewayApp({
             ? "/api/ask-agent/memory/approval"
             : "/api/ask-agent/approval"
           : buildApiPathForTab("/api/approval", origin.tabId);
-      const response = await fetch(approvalPath, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({
-          ...data,
-          approvalKind: approval?.kind ?? data.approvalKind,
-          ...(followUp ? { followUp } : { followUp: undefined }),
-        }),
-      });
-      const body = (await response.json()) as {
-        ok?: boolean;
-        error?: string;
-        message?: string;
-        snapshot?: GatewaySnapshot;
-      };
+      let status: number | undefined;
+      let body: ApprovalSubmitResponseBody = {};
+      try {
+        const response = await fetch(approvalPath, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            ...data,
+            approvalKind: approval?.kind ?? data.approvalKind,
+            ...(followUp ? { followUp } : { followUp: undefined }),
+          }),
+        });
+        status = response.status;
+        body = (await response
+          .json()
+          .catch(() => ({}))) as ApprovalSubmitResponseBody;
+      } catch {
+        body = { error: "network_error" };
+      }
       if (!relayClientEnabled && body.ok && body.snapshot) {
         commitSnapshot(body.snapshot, origin.tabId, origin.generation);
       }
       if (selectedTabIdRef.current === origin.tabId) {
         if (!body.ok) {
+          // The card comes back so the user can retry; say why next to it,
+          // because the header status is hidden in embedded workspace views.
           setLocalDismissedApprovalId(null);
+          setApprovalSubmitError({
+            approvalId: submittedApprovalId,
+            message: describeApprovalSubmitFailure(status, body),
+          });
           setModeStatus(
-            `Approval action failed: ${body.message ?? body.error ?? response.status}`,
+            `Approval action failed: ${body.message ?? body.error ?? status}`,
           );
         } else if (body.message) {
           setModeStatus(body.message);
@@ -11800,6 +11840,13 @@ export function BrowserGatewayApp({
                     />
                   )}
 
+                {visibleApproval &&
+                  approvalSubmitError?.approvalId === visibleApproval.id && (
+                    <div class="approval-submit-error" role="alert">
+                      <i class="codicon codicon-error" aria-hidden="true" />
+                      <span>{approvalSubmitError.message}</span>
+                    </div>
+                  )}
                 {visibleApproval && (
                   <ApprovalPanelEmbed
                     key={`${snapshotOriginRef.current.tabId}:${visibleApproval.id}`}

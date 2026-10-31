@@ -1,4 +1,5 @@
 import * as http from "http";
+import * as net from "net";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -699,6 +700,80 @@ describe("BrowserGatewayServer", () => {
 
       expect(persistCurrentThemeSnapshot).toHaveBeenCalledWith(theme);
     } finally {
+      await server.stop();
+      service.dispose();
+      hub.dispose();
+    }
+  });
+
+  it("stops and restarts while requests and SSE streams are still open", async () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const service = new BrowserGatewayService(
+      hub,
+      makeSessionManagerStub() as never,
+      () => ({
+        cssVariables: {},
+        colorScheme: "dark",
+        themeLabel: "Dark",
+        source: "vscode-theme-api",
+      }),
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => null,
+      () => [],
+    );
+    const server = new BrowserGatewayServer(
+      service,
+      makeChatViewProviderStub() as never,
+      "test-token",
+      "restart-instance",
+      "Restart Workspace",
+      "/workspace/restart",
+      vi.fn(),
+    );
+    let stalled: net.Socket | undefined;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+    try {
+      const firstPort = await server.start(0);
+      // A request whose body never finishes arriving, e.g. a stalled proxy.
+      stalled = net.connect(firstPort, "127.0.0.1");
+      stalled.on("error", () => {});
+      await new Promise<void>((resolve) => stalled!.once("connect", resolve));
+      stalled.write(
+        "POST /api/approval HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+          "Authorization: Bearer test-token\r\n" +
+          "Content-Type: application/json\r\nContent-Length: 100\r\n\r\n{",
+      );
+      // A browser snapshot stream that is still connected.
+      const events = await fetch(`http://127.0.0.1:${firstPort}/events`, {
+        headers: { Authorization: "Bearer test-token" },
+      });
+      reader = events.body!.getReader();
+      await reader.read();
+
+      let stopped = false;
+      const stop = server.stop().then(() => {
+        stopped = true;
+      });
+      await Promise.race([
+        stop,
+        new Promise((resolve) => setTimeout(resolve, 2_000)),
+      ]);
+      expect(stopped).toBe(true);
+      expect(server.getUrl()).toBeNull();
+      expect(browserGatewayRegistryRecords.has("restart-instance")).toBe(false);
+
+      const secondPort = await server.start(0);
+      const health = await fetch(`http://127.0.0.1:${secondPort}/health`);
+      expect(health.status).toBe(200);
+      expect(browserGatewayRegistryRecords.get("restart-instance")?.port).toBe(
+        secondPort,
+      );
+    } finally {
+      await reader?.cancel().catch(() => {});
+      stalled?.destroy();
       await server.stop();
       service.dispose();
       hub.dispose();

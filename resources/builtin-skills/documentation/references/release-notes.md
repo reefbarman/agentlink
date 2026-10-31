@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Approving from the browser no longer silently fails after a VS Code window restarts its browser connection. When the window's event loop was busy, a health check could time out and restart the window's local gateway server. Stopping that server waited for every open connection to finish, but connection timeouts are turned off, so the stop never finished. The port was already closed, yet the window stayed registered under it while live updates kept arriving through the relay. The browser showed approval cards, but every **Run** returned a 502 and the card came straight back. Stopping now drops open connections so the restart completes. If a browser decision still fails, the reason now appears above the approval card, including in the embedded VS Code view, which hides the header status.
 - Codex `web_fetch` page-access failures now include a bounded cause (`cache_miss`, `not_accessible` or `fetch_failed`) when the provider reports one, and no longer suggest repeating a read the provider cannot reach. Background agents are pointed to the coordinator for the content instead.
 - Read-only `dyld_info` usage now works with bare `dyld_info`, which is how macOS prints its options. `-help` is still accepted but only produces an unknown-option error. On macOS, read-only `dyld_info -disassemble`/`-uuid` can also inspect Apple system images under `/System/Library` and `/usr/lib`, such as GPU driver bundles. Other external paths, and `xxd` on system files, remain blocked.
 

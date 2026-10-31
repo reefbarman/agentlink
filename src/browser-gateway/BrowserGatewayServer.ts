@@ -280,7 +280,15 @@ export class BrowserGatewayServer implements vscode.Disposable {
     this.sseHub?.dispose();
     const server = this.server;
     if (server?.listening) {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      const closed = new Promise<void>((resolve) =>
+        server.close(() => resolve()),
+      );
+      // close() stops accepting connections but waits for every open socket.
+      // Socket timeouts are disabled, so helper keep-alive and SSE sockets
+      // never end on their own: stop() would hang with the port closed but
+      // still registered, and every browser action would fail.
+      server.closeAllConnections();
+      await closed;
     }
     this.server = null;
     this.sseHub = null;

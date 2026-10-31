@@ -10543,6 +10543,78 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
   });
 
+  it("keeps the approval card and explains why when VS Code cannot be reached", async () => {
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const approvalSnapshot = createSnapshot();
+    approvalSnapshot.ui.approval = {
+      kind: "command",
+      id: "command-approval-1",
+      command: "npm test",
+      subCommands: [],
+    };
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/ui-state")) {
+        return jsonResponse(approvalSnapshot);
+      }
+      if (url.includes("/api/approval")) {
+        return jsonResponse(
+          {
+            error: "proxy_error",
+            detail: "Error: connect ECONNREFUSED 127.0.0.1:50663",
+          },
+          502,
+        );
+      }
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands")) {
+        return jsonResponse({ commands: [] });
+      }
+      if (url.includes("/api/modes")) {
+        return jsonResponse({
+          modes: [{ slug: "code", name: "Code", icon: "symbol-misc" }],
+        });
+      }
+      if (url.includes("/api/models")) {
+        return jsonResponse({ models: [] });
+      }
+      if (url.includes("/api/sessions")) {
+        return jsonResponse({ sessions: [] });
+      }
+      return jsonResponse({ ok: true });
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't reach VS Code");
+    expect(screen.getByRole("button", { name: "Run" })).toBeTruthy();
+  });
+
   it("optimistically dismisses visible approval card after submitting a decision", async () => {
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
     const approvalSnapshot = {
