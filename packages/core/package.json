@@ -615,8 +615,8 @@
   "dependencies": {
     "@agentlink/protocol": "0.35.0",
     "ajv": "8.20.0",
-    "openai": "7.32.0",
-    "undici": "8.11.2"
+    "openai": "7.39.0",
+    "undici": "8.12.3"
   },
   "peerDependencies": {
     "zod": "^4.0.0"
