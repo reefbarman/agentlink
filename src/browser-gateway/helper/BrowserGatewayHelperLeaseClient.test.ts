@@ -410,6 +410,56 @@ describe("BrowserGatewayHelperLeaseClient", () => {
     await client.stop();
   });
 
+  it("releases only after an in-flight heartbeat has finished on the helper", async () => {
+    const heartbeatStarted = createDeferred<void>();
+    const finishHeartbeat = createDeferred<void>();
+    let heartbeatCount = 0;
+    let connected = false;
+    let released = false;
+    globalThis.fetch = vi.fn(async (input) => {
+      const pathname = new URL(String(input)).pathname;
+      if (pathname === "/internal/core-owners/heartbeat") {
+        if (++heartbeatCount === 2) {
+          heartbeatStarted.resolve();
+          // Aborting fetch does not cancel a request the helper is processing.
+          await finishHeartbeat.promise;
+        }
+        connected = true;
+      }
+      if (pathname === "/internal/client/release") {
+        released = true;
+        connected = false;
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+    const client = new BrowserGatewayHelperLeaseClient({
+      helperUrl: "http://127.0.0.1:47137",
+      clientId: "client-drain",
+      clientSharedSecret: "secret-drain",
+      coreOwner: {
+        ownerId: "owner-drain",
+        ownerGenerationId: "generation-drain",
+        ownerKind: "desktop",
+        displayName: "Desktop",
+        scope: { kind: "projectless", scopeId: "ask", displayName: "Ask" },
+      },
+      log: vi.fn(),
+      renewIntervalMs: 60_000,
+    });
+    await client.start();
+    const refresh = client.refresh();
+    await heartbeatStarted.promise;
+    const stop = client.stop();
+    try {
+      expect(released).toBe(false);
+    } finally {
+      finishHeartbeat.resolve();
+      await Promise.all([refresh, stop]);
+    }
+    expect(released).toBe(true);
+    expect(connected).toBe(false);
+  });
+
   it("settles a hung abort-ignoring renewal at its deadline", async () => {
     vi.useFakeTimers();
     const log = vi.fn();
@@ -443,6 +493,60 @@ describe("BrowserGatewayHelperLeaseClient", () => {
     );
     await client.stop();
   });
+
+  it.each(["heartbeat", "register"])(
+    "bounds stop while a %s response body never completes",
+    async (endpoint) => {
+      vi.useFakeTimers();
+      const bodyStarted = createDeferred<void>();
+      let hang = false;
+      let released = false;
+      globalThis.fetch = vi.fn(async (input) => {
+        const pathname = new URL(String(input)).pathname;
+        if (pathname === "/internal/client/release") released = true;
+        if (hang && pathname === `/internal/core-owners/${endpoint}`) {
+          return {
+            ok: true,
+            status: 200,
+            json: () => {
+              bodyStarted.resolve();
+              return new Promise(() => undefined);
+            },
+          } as unknown as Response;
+        }
+        const status =
+          pathname === "/internal/core-owners/heartbeat" &&
+          endpoint === "register"
+            ? 404
+            : 200;
+        return new Response(JSON.stringify({ ok: true }), { status });
+      }) as typeof fetch;
+      const client = new BrowserGatewayHelperLeaseClient({
+        helperUrl: "http://127.0.0.1:47137",
+        clientId: "client-body-timeout",
+        clientSharedSecret: "secret-timeout",
+        coreOwner: {
+          ownerId: "owner-body-timeout",
+          ownerGenerationId: "generation-timeout",
+          ownerKind: "desktop",
+          displayName: "Desktop",
+          scope: { kind: "projectless", scopeId: "ask", displayName: "Ask" },
+        },
+        log: vi.fn(),
+        requestTimeoutMs: 100,
+        renewIntervalMs: 60_000,
+      });
+      await client.start();
+      hang = true;
+      const refresh = client.refresh();
+      await bodyStarted.promise;
+      const stop = client.stop();
+      expect(released).toBe(false);
+      await vi.advanceTimersByTimeAsync(100);
+      await Promise.all([refresh, stop]);
+      expect(released).toBe(true);
+    },
+  );
 
   it("schedules the next renewal after completion using bounded jitter", async () => {
     vi.useFakeTimers();

@@ -73,6 +73,10 @@ export class BrowserGatewayHelperLeaseClient {
       clearTimeout(this.timer);
       this.timer = undefined;
     }
+    // A fetch abort cannot undo a heartbeat already being handled by the
+    // helper. Drain the bounded renewal before releasing, otherwise that late
+    // heartbeat can reconnect the owner after the release has completed.
+    await this.renewal?.promise;
     for (const controller of this.renewalControllers) {
       controller.abort();
     }
@@ -263,7 +267,7 @@ export class BrowserGatewayHelperLeaseClient {
     }
     if (!response.ok) return false;
     try {
-      const body = (await response.json()) as {
+      const body = (await Promise.race([response.json(), deadline])) as {
         productUpdatesSupported?: boolean;
         productUpdateRequest?: { requestId?: unknown; expiresAt?: unknown };
       };
@@ -393,8 +397,10 @@ export class BrowserGatewayHelperLeaseClient {
       return;
     }
     try {
-      const body =
-        (await response.json()) as BrowserGatewayCoreOwnerRegistrationResponse;
+      const body = (await Promise.race([
+        response.json(),
+        deadline,
+      ])) as BrowserGatewayCoreOwnerRegistrationResponse;
       if (
         body.productUpdatesSupported === true &&
         body.productUpdateRequest &&
