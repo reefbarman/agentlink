@@ -13,16 +13,24 @@ import {
   authorizeAgentPluginMcpTool,
   buildAgentPluginStdioEnvironment,
   isAgentPluginMcpConfigCurrent,
+  isWorkspaceMcpRuntimeConfigCurrent,
   loadAgentPluginMcpConfigs,
   loadAgentPluginStdioMcpConfigs,
 } from "./agentPluginMcpRuntime.js";
 
 import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
+import { loadWorkspaceMcpConfigs } from "./mcpConfig.js";
+
+const homedirMock = vi.hoisted(() => vi.fn());
+vi.mock("os", async () => ({
+  ...(await vi.importActual<typeof import("os")>("os")),
+  homedir: homedirMock,
+}));
 
 function projectScope(
   projectId: string,
   rootPath: string,
-): SessionProjectScope {
+): SessionProjectScope & { rootPath: string } {
   return {
     schemaVersion: 1,
     kind: "project",
@@ -63,12 +71,13 @@ describe("agentPluginMcpRuntime", () => {
   let directory: string;
   let pluginRoot: string;
   let pluginData: string;
-  let scope: SessionProjectScope;
+  let scope: ReturnType<typeof projectScope>;
 
   beforeEach(async () => {
     directory = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "agent-plugin-mcp-")),
     );
+    homedirMock.mockReturnValue(path.join(directory, "home"));
     pluginRoot = path.join(directory, "package");
     pluginData = path.join(directory, "data");
     scope = projectScope("project-a", path.join(directory, "workspace-a"));
@@ -106,6 +115,112 @@ describe("agentPluginMcpRuntime", () => {
       ...overrides,
     };
   }
+
+  it.each([
+    ["disabled", { disabled: true }],
+    ["command", { command: "replacement" }],
+    ["arguments", { args: ["other.js"] }],
+    ["environment", { env: { FIXTURE: "changed" } }],
+    ["policy", { toolPolicy: "allow" }],
+    ["timeout", { timeout: 42 }],
+    ["headers", { headers: { "X-Fixture": "changed" } }],
+    ["removed", undefined],
+  ] as const)(
+    "rejects native configs whose effective %s changed on disk",
+    async (_change, overrides) => {
+      const workspaceProjects = [
+        {
+          projectId: scope.projectId,
+          displayName: scope.displayName,
+          rootPath: scope.rootPath,
+        },
+      ];
+      const configPath = path.join(scope.rootPath, ".agentlink", "mcp.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const definition = {
+        command: "node",
+        args: ["fixture.js"],
+        env: { FIXTURE: "original" },
+      };
+      const write = async (entry: unknown) =>
+        fs.writeFile(
+          configPath,
+          JSON.stringify({
+            mcpServers: entry === undefined ? {} : { fixture: entry },
+          }),
+        );
+      await write(definition);
+      const [config] = await loadWorkspaceMcpConfigs(workspaceProjects);
+      expect(config).toBeDefined();
+      const request = { requestingScope: scope, workspaceProjects };
+      await expect(
+        isWorkspaceMcpRuntimeConfigCurrent(config!, request),
+      ).resolves.toBe(true);
+      await write(
+        overrides === undefined ? undefined : { ...definition, ...overrides },
+      );
+      await expect(
+        isWorkspaceMcpRuntimeConfigCurrent(config!, request),
+      ).resolves.toBe(false);
+    },
+  );
+
+  it("compares native configuration records without depending on key order", async () => {
+    const workspaceProjects = [
+      {
+        projectId: scope.projectId,
+        displayName: scope.displayName,
+        rootPath: scope.rootPath,
+      },
+    ];
+    const configPath = path.join(scope.rootPath, ".agentlink", "mcp.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    const write = async (env: Record<string, string>) =>
+      fs.writeFile(
+        configPath,
+        JSON.stringify({ mcpServers: { fixture: { command: "node", env } } }),
+      );
+    await write({ FIRST: "one", SECOND: "two" });
+    const [config] = await loadWorkspaceMcpConfigs(workspaceProjects);
+    await write({ SECOND: "two", FIRST: "one" });
+    const request = { requestingScope: scope, workspaceProjects };
+    await expect(
+      isWorkspaceMcpRuntimeConfigCurrent(config!, request),
+    ).resolves.toBe(true);
+    await expect(
+      isWorkspaceMcpRuntimeConfigCurrent({ ...config!, pluginRoot }, request),
+    ).resolves.toBe(false);
+    await expect(
+      isWorkspaceMcpRuntimeConfigCurrent(config!, {
+        ...request,
+        workspaceProjects: [],
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("checks plugin freshness through the workspace guard and fails closed without a catalog", async () => {
+    const getSnapshot = vi.fn(async () => snapshot(scope, [entry()]));
+    const request = {
+      requestingScope: scope,
+      workspaceProjects: [],
+      pluginCatalog: catalog(getSnapshot),
+      platform: "darwin" as const,
+    };
+    const [config] = await loadAgentPluginMcpConfigs(request);
+    await expect(
+      isWorkspaceMcpRuntimeConfigCurrent(config!, request),
+    ).resolves.toBe(true);
+    await expect(
+      isWorkspaceMcpRuntimeConfigCurrent(config!, {
+        ...request,
+        pluginCatalog: undefined,
+      }),
+    ).resolves.toBe(false);
+    getSnapshot.mockResolvedValueOnce(snapshot(scope, []));
+    await expect(
+      isWorkspaceMcpRuntimeConfigCurrent(config!, request),
+    ).resolves.toBe(false);
+  });
 
   it("projects a stable qualified stdio config with bounded roots and provenance", async () => {
     const getSnapshot = vi.fn(async () => snapshot(scope, [entry()]));

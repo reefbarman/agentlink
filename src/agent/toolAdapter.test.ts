@@ -32,6 +32,7 @@ import { BUILT_IN_MODES, buildUnionAgentMode } from "./modes.js";
 import { TODO_TOOL_NAME } from "./todoTool.js";
 import type { ToolDefinition } from "./providers/types.js";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
+import { collectNativeWebToolResult } from "@agentlink/core/native-web-tools";
 import type { MemoryToolProvider } from "../core/capabilities/memory.js";
 import { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { createActionApprovalReviewer } from "../approvals/actionApprovalReview.js";
@@ -3255,6 +3256,37 @@ describe("spawn_background_agent tool", () => {
       { id: "image_1", name: "user-reference.png", mimeType: "image/png" },
       { id: "image_2", name: "captured-ui.png", mimeType: "image/png" },
     ]);
+  });
+
+  it("preserves generated web-fetch provenance through native tool dispatch", async () => {
+    const result = await dispatchToolCall(
+      "web_fetch",
+      { url: "https://example.com/source.json" },
+      {
+        ...mockCtx,
+        nativeWebToolKinds: ["fetch"],
+        nativeWebToolProvider: {
+          execute: (request) =>
+            collectNativeWebToolResult({
+              provider: "codex",
+              operation: request.kind,
+              input: request.input,
+              events: (async function* () {
+                yield {
+                  type: "text_delta" as const,
+                  text: "Generated summary",
+                };
+              })(),
+            }),
+        },
+      },
+    );
+    const text = result.content.find((entry) => entry.type === "text")?.text;
+    expect(JSON.parse(text ?? "{}")).toMatchObject({
+      content: "Generated summary",
+      content_origin: "model_generated",
+      content_notice: expect.stringContaining("not an exact file or JSON"),
+    });
   });
 
   it("dispatches present_images with images from the current session", async () => {

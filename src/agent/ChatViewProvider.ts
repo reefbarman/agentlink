@@ -165,7 +165,7 @@ import type { AgentPluginCatalogProvider } from "./AgentPluginCatalog.js";
 import {
   agentPluginMcpRuntimeServerName,
   authorizeAgentPluginMcpTool,
-  isAgentPluginMcpConfigCurrent,
+  isWorkspaceMcpRuntimeConfigCurrent,
   loadWorkspaceMcpRuntimeConfigs,
 } from "./agentPluginMcpRuntime.js";
 import {
@@ -1524,12 +1524,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           hubScope: scope.projectId,
           hubGeneration: generation,
           isConfigCurrent: (config) =>
-            this.agentPluginCatalogProvider
-              ? isAgentPluginMcpConfigCurrent(config, {
-                  requestingScope: scope,
-                  pluginCatalog: this.agentPluginCatalogProvider,
-                })
-              : config.provenance?.kind !== "agent-plugin",
+            isWorkspaceMcpRuntimeConfigCurrent(config, {
+              requestingScope: scope,
+              workspaceProjects: this.getWorkspaceMcpProjects(),
+              pluginCatalog: this.agentPluginCatalogProvider,
+            }),
           onBeforeToolCall: (request) =>
             authorizeAgentPluginMcpTool({
               bareToolName: request.bareToolName,

@@ -5290,7 +5290,7 @@ describe("AgentSessionManager background agents", () => {
       mgr.steerAuthorizedBackground(parent.id, spawned.sessionId, question),
     ).toEqual({ accepted: true });
     expect(session.setPendingInterjection).toHaveBeenCalledWith(
-      question,
+      expect.stringContaining(`Coordinator message:\n${question}`),
       expect.any(String),
       undefined,
       question,
@@ -6317,12 +6317,118 @@ describe("AgentSessionManager background agents", () => {
       ),
     ).toEqual({ accepted: true });
     expect(session.setPendingInterjection).toHaveBeenCalledWith(
-      "Focus on the failing test",
+      expect.stringContaining(
+        "Coordinator message:\nFocus on the failing test",
+      ),
       expect.any(String),
       undefined,
       "Focus on the failing test",
     );
   });
+
+  it.each([
+    "Please send intended loader/component names when established so I can integrate while your tests run.",
+    "Stop using tools and return your best findings now.",
+    "Change direction: investigate the loader instead of the component.",
+  ])(
+    "admits native steering context into the ongoing task: %s",
+    async (message) => {
+      const { AgentSession: RealSession } =
+        await vi.importActual<typeof import("./AgentSession.js")>(
+          "./AgentSession.js",
+        );
+      const { AgentEngine: RealEngine } =
+        await vi.importActual<typeof import("./AgentEngine.js")>(
+          "./AgentEngine.js",
+        );
+      const mgr = new AgentSessionManager(
+        config,
+        "/tmp",
+        undefined,
+        false,
+        undefined,
+        undefined,
+        { maxConcurrent: 0 },
+      );
+      mgr.setToolContext(toolCtx);
+      const parent = await mgr.createSession("code");
+      const originalTask =
+        "Implement the final-result loader and component, then test them.";
+      const child = await mgr.spawnBackground({
+        task: "implement",
+        message: originalTask,
+      });
+      const target = mgr.getSession(child.sessionId)!;
+      const originalPrompt = (target.addUserMessage as ReturnType<typeof vi.fn>)
+        .mock.calls[0][0];
+      const transcript = RealSession.createTranscriptOnly({
+        mode: "code",
+        config,
+        projectScope: target.projectScope,
+        projectAvailability: "missing",
+        background: true,
+      });
+      transcript.addUserMessage(originalPrompt);
+      // Keep the production queue and engine admission on the receiving side of
+      // the manager boundary, rather than asserting only a mocked display string.
+      target.setPendingInterjection =
+        transcript.setPendingInterjection.bind(transcript);
+      target.status = "streaming";
+      expect(
+        mgr.steerAuthorizedBackground(parent.id, child.sessionId, message),
+      ).toEqual({ accepted: true });
+      const engine = new RealEngine(new ProviderRegistry());
+      const events = [];
+      for await (const event of (engine as any).admitPendingInterjections(
+        transcript,
+        undefined,
+        new AbortController().signal,
+        async (text: string) => ({ text, images: [], documents: [] }),
+        () => {},
+      )) {
+        events.push(event);
+      }
+      const messages = transcript.getMessages();
+      expect(messages[0].content).toBe(originalPrompt);
+      expect(originalPrompt).toContain(originalTask);
+      const injected = messages[1].content as string;
+      expect(injected).toContain(
+        "Coordinator steering within your ongoing delegated task",
+      );
+      expect(injected).toContain(
+        "not a replacement task or a request to finish by itself",
+      );
+      expect(injected).toContain(
+        "answer briefly in commentary and continue the delegated work",
+      );
+      expect(injected).toContain(
+        "Do not send a final response or call set_task_status merely to answer that update",
+      );
+      expect(injected).toContain(
+        "explicitly asks you to stop, wrap up, or return an early result",
+      );
+      expect(injected).toContain("runtime restrictions remain authoritative");
+      expect(injected.endsWith(`Coordinator message:\n${message}`)).toBe(true);
+      expect(events).toEqual([
+        expect.objectContaining({
+          type: "user_interjection",
+          text: injected,
+          displayText: message,
+        }),
+      ]);
+      expect(mgr.getBackgroundStatus(child.sessionId).done).toBe(false);
+      // A finalised run stays finalised, regardless of the steering prose.
+      target.status = "idle";
+      expect(
+        mgr.steerAuthorizedBackground(parent.id, child.sessionId, message),
+      ).toEqual({
+        accepted: false,
+        reason: "session is not currently running",
+      });
+      expect(transcript.hasPendingInterjections).toBe(false);
+      expect(mocks.runArgs).not.toHaveBeenCalled();
+    },
+  );
 
   it("detaches a descendant subtree into an independent root", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
@@ -7072,6 +7178,7 @@ describe("AgentSessionManager background agents", () => {
           status: "idle",
           getLastFinalMarker: () => undefined,
           getLastAssistantText: () => "Partial review evidence.",
+          getMessages: () => [],
           fleetMetadata: {
             backend: "native",
             terminalReason: `provider_stop:${reason}`,
@@ -7467,6 +7574,138 @@ describe("AgentSessionManager background agents", () => {
       partialOutput: "Recovered partial findings",
     });
   });
+
+  it("recovers earlier native findings and completed-tool evidence after a provider error", async () => {
+    const error =
+      "Claude Code returned an error result: Reached maximum number of turns (1)";
+    const finding = "The retry counter is never reset in src/client.ts:12.";
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        const session = mocks.runArgs.mock.calls.at(-1)![0] as any;
+        session.appendAssistantTurn([
+          { type: "thinking", thinking: "HIDDEN_REASONING" },
+          { type: "text", text: finding },
+          {
+            type: "tool_use",
+            id: "read-client",
+            name: "read_file",
+            input: { path: "src/client.ts" },
+          },
+        ]);
+        yield { type: "text_delta", text: finding };
+        yield {
+          type: "tool_start",
+          toolName: "read_file",
+          toolUseId: "read-client",
+          input: { path: "src/client.ts" },
+        };
+        session.appendToolResults([
+          {
+            type: "tool_result",
+            tool_use_id: "read-client",
+            content: "RAW_TOOL_RESULT",
+          },
+        ]);
+        yield {
+          type: "tool_result",
+          toolName: "read_file",
+          toolUseId: "read-client",
+          input: { path: "src/client.ts" },
+          result: [{ type: "text", text: "RAW_TOOL_RESULT" }],
+          durationMs: 1,
+        };
+        // Model the error prose becoming the latest assistant message.
+        session.appendAssistantTurn([{ type: "text", text: error }]);
+        yield { type: "error", error, retryable: false };
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    const spawned = await mgr.spawnBackground({
+      task: "native failed review",
+      message: "inspect retry handling",
+      expectedResult: "text",
+      taskClass: "review_code",
+      permissionProfile: "review-only",
+    });
+
+    const result = JSON.parse(await mgr.waitForBackground(spawned.sessionId));
+    expect(result).toMatchObject({
+      status: "failed",
+      terminalReason: error,
+      agentRetryable: false,
+      partialOutput: expect.stringContaining(finding),
+    });
+    expect(result.partialOutput).toContain("- read_file path=src/client.ts");
+    expect(result.partialOutput).toContain("not a completed result");
+    expect(result.partialOutput).not.toContain("budget_exhausted");
+    expect(result.partialOutput).not.toContain("HIDDEN_REASONING");
+    expect(result.partialOutput).not.toContain("RAW_TOOL_RESULT");
+    const session = mgr.getSession(spawned.sessionId)!;
+    expect(session.fleetMetadata).toMatchObject({
+      lifecycle: "failed",
+      resultState: "failed",
+      partialResult: result.partialOutput,
+    });
+    expect(mgr.getBackgroundStatus(spawned.sessionId)).toMatchObject({
+      done: true,
+      resultState: "failed",
+      terminalReason: error,
+      agentRetryable: false,
+      partialOutput: result.partialOutput,
+    });
+    const again = (mgr as any).resolveBackgroundResult(session, "fallback", {
+      preferDurableMetadata: true,
+    });
+    expect(again.partialResult).toBe(result.partialOutput);
+  });
+
+  it.each(["failed", "interrupted"])(
+    "bounds recovered visible evidence for native %s runs",
+    (resultState) => {
+      const mgr = new AgentSessionManager(config, "/tmp");
+      const session = {
+        id: "bg-bounded-recovery",
+        status: "error",
+        getLastAssistantText: () => "Provider stopped",
+        getLastFinalMarker: () => undefined,
+        getMessages: () => [
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "HIDDEN_REASONING" },
+              { type: "text", text: "Earlier finding: ".repeat(10_000) },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Most recent finding" }],
+          },
+        ],
+        fleetMetadata: {
+          backend: "native",
+          resultState,
+          terminalReason: "Provider stopped",
+          delegation: { expectedResult: "text" },
+        },
+      };
+      const resolved = (mgr as any).resolveBackgroundResult(
+        session,
+        "fallback",
+        {
+          preferDurableMetadata: true,
+        },
+      );
+      expect(resolved.resultState).toBe(resultState);
+      expect(resolved.partialResult).toContain("Earlier finding:");
+      expect(resolved.partialResult).toContain("Most recent finding");
+      expect(resolved.partialResult).not.toContain("HIDDEN_REASONING");
+      expect(resolved.partialResult.length).toBeLessThan(13 * 1024);
+      expect(JSON.parse(resolved.resultText).status).toBe(resultState);
+    },
+  );
 
   it("publishes native completion only after terminal metadata is durable", async () => {
     let releaseTerminalSave: () => void = () => {};

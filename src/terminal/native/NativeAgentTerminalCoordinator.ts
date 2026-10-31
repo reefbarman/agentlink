@@ -48,6 +48,8 @@ import {
   type NativeAgentRuntimeProvider,
 } from "./NativeAgentRuntimeProvider.js";
 
+import { NativeCommandEnvironmentError } from "./NativeAgentExecutionError.js";
+
 const DEFAULT_DIMENSIONS: TerminalDimensions = { columns: 80, rows: 24 };
 const DEFAULT_RECENTLY_CLOSED_LIMIT = 20;
 const DEFAULT_AGENTLINK_TITLE = "AgentLink";
@@ -551,15 +553,18 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       throw new Error("createCommandId must return a non-empty ID without NUL");
     }
     const envKey = environmentKey(options.env);
+    // A persistent shell's initial environment cannot be changed on reuse.
+    // Cwd is different: the runtime verifies identity and re-enters it before
+    // evaluating the payload, including for explicitly targeted terminals.
     if (channel.envKey !== undefined && channel.envKey !== envKey) {
-      throw new Error(
-        `Native Agent terminal ${before.channelId} has an incompatible command environment`,
+      const previous = Object.fromEntries(
+        JSON.parse(channel.envKey) as [string, string][],
       );
-    }
-    if (before.cwd !== options.cwd) {
-      throw new Error(
-        `Native Agent terminal ${before.channelId} is in ${before.cwd}, not ${options.cwd}`,
-      );
+      const requested = options.env ?? {};
+      const mismatched = [
+        ...new Set([...Object.keys(previous), ...Object.keys(requested)]),
+      ].filter((key) => previous[key] !== requested[key]);
+      throw new NativeCommandEnvironmentError(before.channelId, mismatched);
     }
     if (!this.runtime.hasChannel(before.channelId)) {
       const bootstrap = await this.options.prepareShell({

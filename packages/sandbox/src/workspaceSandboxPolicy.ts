@@ -17,7 +17,12 @@ import {
   type SandboxShellEnvironmentPolicy,
 } from "./sandboxEnvironmentPolicy.js";
 import { resolveWorkspaceGitProtection } from "./gitMetadataProtection.js";
-import { SandboxPreparationError } from "./SandboxPreparationError.js";
+import {
+  SandboxPreparationError,
+  sandboxEnvironmentKeyDiagnostic,
+  sandboxPreparationFailure,
+  type SandboxPreparationPhase,
+} from "./SandboxPreparationError.js";
 import { SandboxStructuralProtectionError } from "./SandboxRuntimeProvider.js";
 import {
   CURRENT_SANDBOX_POLICY_VERSION,
@@ -501,6 +506,21 @@ function buildEnvironment(
     setEntry(name, value, "agent-reserved");
   }
   let explicitNpmCache: string | undefined;
+  const reservedKeys = Object.keys(explicit ?? {}).filter(
+    isReservedEnvironmentName,
+  );
+  if (reservedKeys.length > 0) {
+    throw new SandboxPreparationError(
+      reservedKeys.includes("PATH")
+        ? "reserved_path_override"
+        : "reserved_environment_override",
+      undefined,
+      {
+        phase: "environment",
+        ...sandboxEnvironmentKeyDiagnostic(reservedKeys),
+      },
+    );
+  }
   for (const [name, value] of Object.entries(explicit ?? {})) {
     if (name.toLowerCase() === "npm_config_cache") {
       if (explicitNpmCache !== undefined && explicitNpmCache !== value) {
@@ -509,13 +529,7 @@ function buildEnvironment(
       explicitNpmCache = value;
       continue;
     }
-    if (isReservedEnvironmentName(name)) {
-      throw new SandboxPreparationError(
-        name === "PATH"
-          ? "reserved_path_override"
-          : "reserved_environment_override",
-      );
-    }
+
     setEntry(name, value, "per-command");
   }
   const hostPath = hostEnvironment.PATH?.trim() || DEFAULT_PATH;
@@ -555,12 +569,31 @@ function buildEnvironment(
     explicitNpmCache || path.join(directories.cache, "npm"),
     explicitNpmCache ? "per-command" : "agent-reserved",
   );
-  const budget = budgetSandboxEnvironment(
-    environment,
-    provenance,
-    command,
-    budgetBytes,
-  );
+  let budget: ReturnType<typeof budgetSandboxEnvironment>;
+  try {
+    budget = budgetSandboxEnvironment(
+      environment,
+      provenance,
+      command,
+      budgetBytes,
+    );
+  } catch (error) {
+    // Identify this check without parsing or exposing exception text, values,
+    // command contents, or unbounded environment names.
+    throw new SandboxPreparationError(
+      "preparation_failed",
+      { cause: error },
+      {
+        phase: "environment",
+        category: "environment_budget_failed",
+        ...sandboxEnvironmentKeyDiagnostic(
+          Object.keys(environment).filter(
+            (name) => provenance[name] !== "host-inherited",
+          ),
+        ),
+      },
+    );
+  }
   return {
     policy: resolved.policy,
     provenance,
@@ -582,19 +615,36 @@ export async function prepareWorkspaceSandboxLaunch(
   const linux = backend === "bubblewrap";
   const shareHostTemporaryDirectories =
     options.shareHostTemporaryDirectories ?? true;
-  const workspaceRoots = uniqueSandboxRoots(
-    await Promise.all(options.workspaceRoots.map((root) => realpath(root))),
+  const prepareStage = async <T>(
+    phase: SandboxPreparationPhase,
+    run: () => Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await run();
+    } catch (error) {
+      throw sandboxPreparationFailure(error, phase);
+    }
+  };
+  const workspaceRoots = await prepareStage("workspace_roots", async () =>
+    uniqueSandboxRoots(
+      await Promise.all(options.workspaceRoots.map((root) => realpath(root))),
+    ),
   );
-  const cwd = await realpath(options.cwd);
-  if (!workspaceRoots.some((root) => isWithinSandboxRoot(cwd, root))) {
-    throw new Error("Sandbox cwd must be inside an active workspace root");
-  }
+  const cwd = await prepareStage("working_directory", async () => {
+    const resolved = await realpath(options.cwd);
+    if (!workspaceRoots.some((root) => isWithinSandboxRoot(resolved, root))) {
+      throw new Error("Sandbox cwd must be inside an active workspace root");
+    }
+    return resolved;
+  });
 
-  const directories = await createSandboxPrivateDirectories(
-    options.privateDirectoryPrefix,
+  const directories = await prepareStage("private_directories", () =>
+    createSandboxPrivateDirectories(options.privateDirectoryPrefix),
   );
+  let phase: SandboxPreparationPhase = "inline_files";
   try {
     const inlineFiles = (await options.verifyInlineFiles?.()) ?? [];
+    phase = "git_protection";
     const gitProtection = await Promise.all(
       workspaceRoots.map((root) => resolveWorkspaceGitProtection(root)),
     );
@@ -602,6 +652,7 @@ export async function prepareWorkspaceSandboxLaunch(
       path.join(root, ".agentlink"),
       ...PROTECTED_WORKSPACE_ENTRIES.map((entry) => path.join(root, entry)),
     ]);
+    phase = "workspace_policy_integrity";
     const policyIntegrity = await Promise.all(
       workspaceRoots.map(resolveWorkspacePolicyIntegrityRoots),
     );
@@ -609,7 +660,9 @@ export async function prepareWorkspaceSandboxLaunch(
       (result) => result.roots,
     );
     const policyWarnings = policyIntegrity.flatMap((result) => result.warnings);
+    phase = "developer_toolchain";
     const developerToolchain = await resolveDeveloperToolchain();
+    phase = "trusted_runtime_roots";
     await Promise.all(
       options.trustedRuntimeRoots.map(async (root) => {
         if (!path.isAbsolute(root) || root.includes("\0")) {
@@ -626,6 +679,7 @@ export async function prepareWorkspaceSandboxLaunch(
         }
       }),
     );
+    phase = "temporary_directory";
     const hostTemporaryDirectory = await realpath(
       options.hostTemporaryDirectory,
     );
@@ -635,6 +689,7 @@ export async function prepareWorkspaceSandboxLaunch(
           hostTemporaryDirectory,
         ])
       : [];
+    phase = "environment";
     const environmentResult = buildEnvironment(
       options.explicitEnvironment,
       options.hostEnvironment,
@@ -673,6 +728,7 @@ export async function prepareWorkspaceSandboxLaunch(
     const structurallyProtectedRoots = uniqueSandboxRoots(
       gitProtection.flatMap((item) => item.structural),
     );
+    phase = "read_policy";
     const deniedReadRoots = uniqueSandboxRoots(
       await Promise.all(
         (options.deniedReadRoots ?? []).map(async (root) => {
@@ -698,6 +754,7 @@ export async function prepareWorkspaceSandboxLaunch(
             )),
           ])
         : ["/"];
+    phase = "launch_binding";
     const binding: SandboxLaunchBindingInput = {
       command: options.command,
       cwd,
@@ -826,6 +883,6 @@ export async function prepareWorkspaceSandboxLaunch(
     };
   } catch (error) {
     directories.cleanup();
-    throw error;
+    throw sandboxPreparationFailure(error, phase);
   }
 }

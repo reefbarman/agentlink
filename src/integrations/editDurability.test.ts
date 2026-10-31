@@ -300,6 +300,9 @@ describe("commitAndVerifyEdit", () => {
       expect(await fs.readFile(target.absolutePath, "utf-8")).toBe("old");
       expect(document.content).toBe("new");
       expect(result.next_steps?.join(" ")).not.toContain("returned false");
+      expect(result).not.toHaveProperty("format_on_save");
+      expect(result).not.toHaveProperty("format_on_save_reverted_proposal");
+      expect(result).not.toHaveProperty("format_on_save_edits");
     },
   );
 
@@ -311,11 +314,32 @@ describe("commitAndVerifyEdit", () => {
     const result = await commitAndVerifyEdit(
       request(document, target.absolutePath, target.relativePath, "old"),
     );
-    expect(result.save_failure).toMatchObject({
-      save_outcome: "returned_false",
-      vscode_error_detail: "unavailable",
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "save_failed",
+      durability: {
+        status: "failed",
+        outcome: "diverged",
+        disk_changed: false,
+        requires_reread: true,
+      },
+      save_failure: {
+        save_outcome: "returned_false",
+        vscode_error_detail: "unavailable",
+        document_dirty: true,
+        disk_state: "unchanged",
+        dirty_document_state: "matches_save_attempt",
+        retry_target: "editor_save",
+      },
     });
     expect(result.save_failure).not.toHaveProperty("vscode_error_message");
+    expect(result).not.toHaveProperty("format_on_save");
+    expect(result).not.toHaveProperty("format_on_save_reverted_proposal");
+    expect(result).not.toHaveProperty("format_on_save_edits");
+    expect(result).not.toHaveProperty("hint");
+    expect(await fs.readFile(target.absolutePath, "utf-8")).toBe("old");
+    expect(document.getText()).toBe("new");
+    expect(document.isDirty).toBe(true);
   });
 
   it("records a thrown non-message value as an exception with unavailable detail", async () => {
@@ -572,7 +596,11 @@ describe("commitAndVerifyEdit", () => {
       status: "error",
       reason: "save_reverted_edit",
       durability: { status: "failed", outcome: "reverted" },
+      format_on_save: true,
+      format_on_save_reverted_proposal: true,
+      format_on_save_edits: expect.stringContaining("+old"),
     });
+    expect(result.hint).toContain("A save participant restored");
   });
 
   it("fails when editor and disk diverge after save", async () => {

@@ -259,6 +259,13 @@ export class StaticCommandTierClassifier implements CommandTierClassifier {
     const redirection = classifyRedirection(tokens, ctx, command);
     if (redirection?.tier === "dangerous") return redirection;
 
+    // These tools need their own closed argument grammar, not a blanket safe
+    // command entry: xxd also accepts a positional output file and reverse mode.
+    if (command === "xxd" || command === "dyld_info") {
+      if (redirection) return redirection;
+      return classifyStaticFileInspection(command, args, ctx);
+    }
+
     const semanticClassification =
       command === "git"
         ? classifyGit(args)
@@ -1288,6 +1295,80 @@ function findRedirectionTarget(tokens: string[]): string | undefined {
       .find((arg) => arg && !arg.startsWith("-"));
   }
   return undefined;
+}
+
+/** Allow only bounded hex reads and static Mach-O inspection of one file. */
+function classifyStaticFileInspection(
+  command: "xxd" | "dyld_info",
+  args: string[],
+  ctx: CommandTierContext,
+): CommandTierResult {
+  if (command === "dyld_info" && args.length === 1 && args[0] === "-help") {
+    return safe("dyld_info help", "read_only", command);
+  }
+
+  const invalid = () =>
+    sensitive(
+      command === "xxd"
+        ? "xxd requires [-g 1|2|4|8|16] [-s offset] -l 1..65536 and one regular workspace file"
+        : "dyld_info requires -help or -disassemble/-uuid and one regular workspace file",
+      "unrecognized_operation",
+      command,
+    );
+  const file = args.at(-1);
+  if (
+    !file ||
+    file.startsWith("-") ||
+    file !== file.trim() ||
+    /[\\'"`$*?[\]{}~]/.test(file) ||
+    [...file].some(
+      (char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127,
+    )
+  ) {
+    return invalid();
+  }
+
+  const options = args.slice(0, -1);
+  const seen = new Set<string>();
+  for (let i = 0; i < options.length; i++) {
+    const option = options[i]!;
+    if (seen.has(option)) return invalid();
+    seen.add(option);
+    if (command === "dyld_info") {
+      if (option !== "-disassemble" && option !== "-uuid") return invalid();
+      continue;
+    }
+    if (option !== "-g" && option !== "-s" && option !== "-l") {
+      return invalid();
+    }
+    const rawValue = options[++i];
+    if (!rawValue || !/^(?:[0-9]+|0x[0-9a-fA-F]+)$/.test(rawValue)) {
+      return invalid();
+    }
+    // Leading zeroes can be parsed as octal by command-line tools. Require
+    // canonical decimal or explicit hexadecimal so the checked value is exact.
+    if (/^0[0-9]+$/.test(rawValue)) return invalid();
+    const value = Number(rawValue);
+    if (!Number.isSafeInteger(value) || value < 0) return invalid();
+    if (option === "-g" && ![1, 2, 4, 8, 16].includes(value)) return invalid();
+    if (option === "-l" && (value < 1 || value > 65_536)) return invalid();
+  }
+  if (command === "xxd" ? !seen.has("-l") : seen.size === 0) return invalid();
+
+  const resolved = resolvePathLike(file, ctx.cwd);
+  const physical = resolvePhysicalPath(resolved);
+  if (isSecretPath(resolved) || isSecretPath(physical)) {
+    return dangerous("read targets secret path", "secret_path", command);
+  }
+  if (!isCommandPathInsideWorkspace(resolved, ctx.workspaceRoots)) {
+    return dangerous("read target outside workspace", "external_path", command);
+  }
+  try {
+    if (!fs.statSync(resolved).isFile()) return invalid();
+  } catch {
+    return invalid();
+  }
+  return safe(`static file inspection (${command})`, "read_only", command);
 }
 
 function classifyReadPathGuard(

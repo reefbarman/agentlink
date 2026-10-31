@@ -2752,8 +2752,14 @@ export function BrowserGatewayApp({
           headers: { Authorization: `Bearer ${authToken}` },
           signal: controller.signal,
         });
-        if (!response.ok) {
-          if (!disposed && response.status === 404) setProductUpdate(null);
+        if (response.status === 204 || !response.ok) {
+          if (
+            !disposed &&
+            selectedTabIdRef.current === tabId &&
+            selectedTabGenerationRef.current === generation &&
+            (response.status === 204 || response.status === 404)
+          )
+            setProductUpdate(null);
           return;
         }
         const body = (await response.json()) as {

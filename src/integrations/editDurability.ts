@@ -133,6 +133,7 @@ async function commitAndVerifyEditUnrecorded(
         editorContent: request.document.getText(),
         disk,
         policy,
+        saveOutcome,
       });
       const recovery = await diagnoseEditSaveFailure({
         absolutePath: request.absolutePath,

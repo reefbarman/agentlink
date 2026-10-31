@@ -82,6 +82,8 @@ export interface ClassifyEditDurabilityParams {
   editorContent?: string;
   disk: EditDiskObservation;
   policy?: EditDurabilityPolicy;
+  /** Failed saves do not establish save-participant changes to the disk. */
+  saveOutcome?: "succeeded" | "returned_false" | "exception";
 }
 
 export function normalizeEditorText(content: string): string {
@@ -262,12 +264,16 @@ export function classifyEditDurability(
   }
 
   const finalContent = params.disk.content;
-  const formatOnSaveReport = createFormatOnSaveReport(
-    params.relativePath,
-    expectedDiskContent,
-    finalContent,
-    params.baselineExists ? params.baselineContent : undefined,
-  );
+  const formatOnSaveReport =
+    params.saveOutcome === "returned_false" ||
+    params.saveOutcome === "exception"
+      ? undefined
+      : createFormatOnSaveReport(
+          params.relativePath,
+          expectedDiskContent,
+          finalContent,
+          params.baselineExists ? params.baselineContent : undefined,
+        );
   const finalFields = {
     final_exists: true as const,
     final_content_hash:

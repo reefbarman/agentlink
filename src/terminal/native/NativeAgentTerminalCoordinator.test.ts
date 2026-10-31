@@ -807,6 +807,69 @@ describe("NativeAgentTerminalCoordinator", () => {
     ]);
   });
 
+  it.each(["terminal_id", "terminal_name"] as const)(
+    "forwards a different cwd for runtime repair when targeting by %s",
+    async (targetKind) => {
+      const test = harness();
+      const first = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "cd nested",
+        cwd: "/workspace",
+        terminal_name: "Persistent",
+      });
+      await flush();
+      await finish(test.processes[0], "");
+      await first;
+      test.channelRequests[0].onCwd("/workspace/nested");
+      const second = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "pwd",
+        cwd: "/workspace",
+        [targetKind]:
+          targetKind === "terminal_id" ? "native-agent-1" : "Persistent",
+      });
+      await flush();
+      expect(test.commands[1]).toMatchObject({
+        cwd: "/workspace",
+        command: "pwd",
+      });
+      await finish(test.processes[1], "/workspace");
+      await second;
+      expect(test.prepareShell).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("identifies changed, added, and omitted env keys without exposing values or dispatching", async () => {
+    const test = harness();
+    const first = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "true",
+      cwd: "/workspace",
+      env: { CHANGED: "secret-old", OMITTED: "secret-omitted", SAME: "same" },
+    });
+    await flush();
+    await finish(test.processes[0], "");
+    await first;
+    const error = await test.coordinator
+      .executeCommand({
+        owner: undefined,
+        command: "pwd",
+        cwd: "/workspace",
+        terminal_id: "native-agent-1",
+        env: { CHANGED: "secret-new", ADDED: "secret-added", SAME: "same" },
+      })
+      .catch((reason: unknown) => reason);
+    expect(error).toMatchObject({
+      code: "native_command_environment_mismatch",
+      environmentKeys: ["ADDED", "CHANGED", "OMITTED"],
+      environmentKeyCount: 3,
+    });
+    expect(JSON.stringify(error)).not.toContain("secret");
+    expect(test.commands).toHaveLength(1);
+    expect(test.starts).toHaveLength(1);
+    expect(test.prepareShell).toHaveBeenCalledOnce();
+  });
+
   it("creates another shell for incompatible implicit cwd or environment", async () => {
     const test = harness();
     const first = test.coordinator.executeCommand({

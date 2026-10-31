@@ -901,7 +901,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     }
   });
 
-  it("reports the shell's last startup output when startup times out", async () => {
+  it("reports safe shell and prompt categories without copying startup secrets or paths", async () => {
     vi.useFakeTimers();
     try {
       const pty = new FakeNodePtyProcess();
@@ -910,15 +910,29 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
         { startupTimeoutMs: 25 },
       );
       const channel = launch(runtime);
-      const rejection = expect(channel.ready).rejects.toThrow(
-        /startup timed out after 0\.025s\. Last shell output[^\n]*\nUsing Node v22\n\[oh-my-zsh\] Would you like to update\? \[Y\/n\]$/,
-      );
-
+      const rejection = channel.ready.catch((error: unknown) => error);
       pty.emitData(
-        "\x1b[1;32mUsing Node v22\x1b[0m\r\n\r\n[oh-my-zsh] Would you like to update? [Y/n] ",
+        "\x1b[1;32mTOKEN=private-value /private/profile/path\x1b[0m\r\n[oh-my-zsh] Would you like to update? [Y/n] ",
       );
       await vi.advanceTimersByTimeAsync(25);
-      await rejection;
+      const error = await rejection;
+      expect(error).toMatchObject({
+        code: "native_shell_startup_timeout",
+        diagnostic: {
+          shell: "zsh",
+          profile_source: "configured",
+          login: true,
+          interactive: true,
+          phase: "awaiting_initial_prompt",
+          output: "present",
+          suspected_prompt: "update",
+        },
+      });
+      expect((error as Error).message).not.toMatch(
+        /private-value|\/private\/|oh-my-zsh/,
+      );
+      expect(pty.writes).toEqual([]);
+      expect(pty.kill).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }
@@ -934,7 +948,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
       );
       const channel = launch(runtime);
       const rejection = expect(channel.ready).rejects.toThrow(
-        "The shell printed no output before the deadline.",
+        "startup output: none",
       );
       await vi.advanceTimersByTimeAsync(25);
       await rejection;

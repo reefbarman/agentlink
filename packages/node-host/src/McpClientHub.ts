@@ -296,6 +296,7 @@ interface ConnectedServer {
   status: McpServerStatus;
   error?: string;
   retryCount: number;
+  connectedAt?: number;
   retryTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -1552,7 +1553,7 @@ export class McpClientHub {
         this.onStatusChange?.(this.getServerInfos());
         this.scheduleReconnect(
           cfg,
-          (current.retryCount ?? 0) + 1,
+          this.nextReconnectAttempt(current),
           "transport-error",
           true,
         );
@@ -1717,7 +1718,8 @@ export class McpClientHub {
           await this.authCoordinator.readTokenGeneration(serverIdentityHash),
       });
       signal.throwIfAborted();
-      entry.retryCount = 0;
+      // Keep the recovery budget across short-lived successful connections.
+      // A process that repeatedly connects then crashes must still exhaust it.
       this.authFailureCounts.delete(cfg.name);
       this.invalidRedirectRecoveryAttempted.delete(cfg.name);
       this.authCoordinator.clearManualReauth(serverIdentityHash);
@@ -1737,6 +1739,7 @@ export class McpClientHub {
         oauthProvider.suppressRefreshTokenReauthPrompt = false;
       }
       entry.status = "connected";
+      entry.connectedAt = Date.now();
     } catch (err) {
       if (signal.aborted || this.servers.get(cfg.name) !== entry) return;
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -2270,6 +2273,14 @@ export class McpClientHub {
     }, 0);
   }
 
+  private nextReconnectAttempt(entry: ConnectedServer): number {
+    // Reset lazily rather than creating another lifecycle timer per server.
+    const stable =
+      entry.connectedAt !== undefined &&
+      Date.now() - entry.connectedAt >= 60_000;
+    return (stable ? 0 : entry.retryCount) + 1;
+  }
+
   private scheduleReconnect(
     cfg: McpServerConfig,
     attempt: number,
@@ -2290,7 +2301,12 @@ export class McpClientHub {
     }
 
     const MAX_RETRIES = 5;
-    if (attempt > MAX_RETRIES) return;
+    if (attempt > MAX_RETRIES) {
+      this.log(
+        `[mcp:${cfg.name}] automatic reconnect limit reached; reconnect manually to try again`,
+      );
+      return;
+    }
     const delay = Math.min(1000 * 2 ** (attempt - 1), 30000); // 1s, 2s, 4s, 8s, 16s, cap 30s
     const entry = this.servers.get(cfg.name);
     if (!entry) return;
@@ -2937,7 +2953,10 @@ export class McpClientHub {
           {
             type: "text",
             text: JSON.stringify({
-              error: `MCP server '${serverName}' is no longer authorized by the current plugin catalog`,
+              error:
+                server.config.provenance?.kind === "agent-plugin"
+                  ? `MCP server '${serverName}' is no longer authorized by the current plugin catalog`
+                  : `MCP server '${serverName}' configuration changed or was disabled. Reconnect using the current configuration.`,
             }),
           },
         ],

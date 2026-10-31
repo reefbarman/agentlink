@@ -1,3 +1,8 @@
+import {
+  SandboxPreparationError,
+  sandboxEnvironmentKeyDiagnostic,
+  sandboxPreparationFailure,
+} from "./SandboxPreparationError.js";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   mkdir,
@@ -34,7 +39,11 @@ async function fixture(): Promise<Fixture> {
   return { root, workspace, privateRoot };
 }
 
-function prepare(test: Fixture, workspaceRoots = [test.workspace]) {
+function prepare(
+  test: Fixture,
+  workspaceRoots = [test.workspace],
+  overrides: Partial<Parameters<typeof prepareWorkspaceSandboxLaunch>[0]> = {},
+) {
   return prepareWorkspaceSandboxLaunch({
     workspaceRoots,
     cwd: test.workspace,
@@ -51,6 +60,7 @@ function prepare(test: Fixture, workspaceRoots = [test.workspace]) {
     trustedRuntimeRoots: [],
     temporaryHome: false,
     shareHostTemporaryDirectories: false,
+    ...overrides,
   });
 }
 
@@ -82,6 +92,131 @@ afterEach(async () => {
       .splice(0)
       .map((root) => rm(root, { recursive: true, force: true })),
   );
+});
+
+describe("bounded sandbox preparation diagnostics", () => {
+  it("identifies a missing root in a multi-root workspace without exposing paths", async () => {
+    const test = await fixture();
+    const missing = path.join(test.root, "private-missing-folder");
+    const error = await prepare(test, [test.workspace, missing]).catch(
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(SandboxPreparationError);
+    expect((error as SandboxPreparationError).diagnostic).toEqual({
+      phase: "workspace_roots",
+      category: "not_found",
+    });
+    expect((error as Error).message).not.toContain(missing);
+    expect(await readdir(test.privateRoot)).toEqual([]);
+  });
+
+  it.each([
+    ["working_directory", { cwd: "/not-an-active-workspace" }],
+    [
+      "trusted_runtime_roots",
+      { trustedRuntimeRoots: ["relative-private-path"] },
+    ],
+    [
+      "temporary_directory",
+      { hostTemporaryDirectory: "/missing-private-temp" },
+    ],
+  ] as const)(
+    "identifies the %s preparation check and cleans private directories",
+    async (phase, overrides) => {
+      const test = await fixture();
+      const error = await prepare(test, undefined, {
+        ...overrides,
+        ...(phase === "trusted_runtime_roots"
+          ? { trustedRuntimeRoots: [...overrides.trustedRuntimeRoots] }
+          : {}),
+      }).catch((reason: unknown) => reason);
+      expect(error).toBeInstanceOf(SandboxPreparationError);
+      expect((error as SandboxPreparationError).diagnostic?.phase).toBe(phase);
+      expect((error as Error).message).not.toMatch(/private|relative/);
+      expect(await readdir(test.privateRoot)).toEqual([]);
+    },
+  );
+
+  it("reports all blocked environment keys, including LC_ALL, but never their values", async () => {
+    const test = await fixture();
+    const error = await prepare(test, undefined, {
+      explicitEnvironment: {
+        LC_ALL: "private-locale-value",
+        HOME: "/private/home",
+        SAFE: "allowed",
+      },
+    }).catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(SandboxPreparationError);
+    expect((error as SandboxPreparationError).reason).toBe(
+      "reserved_environment_override",
+    );
+    expect((error as SandboxPreparationError).diagnostic).toEqual({
+      phase: "environment",
+      environment_keys: ["HOME", "LC_ALL"],
+      environment_key_count: 2,
+    });
+    expect(
+      JSON.stringify((error as SandboxPreparationError).diagnostic),
+    ).not.toMatch(/private|allowed|SAFE/);
+    expect(await readdir(test.privateRoot)).toEqual([]);
+  });
+
+  it("identifies budget failures with bounded protected key names and no values", async () => {
+    const test = await fixture();
+    const error = await prepare(test, undefined, {
+      command: "echo private-command-body",
+      explicitEnvironment: {
+        COMMAND_VALUE: "private-environment-value".repeat(100),
+        "/private/key-path": "private-value",
+        ...Object.fromEntries(
+          Array.from({ length: 25 }, (_, i) => [`KEY_${i}`, "private-value"]),
+        ),
+      },
+      hostEnvironment: { PATH: "/usr/bin:/bin", HOST_ONLY: "inherited-value" },
+      environmentBudgetBytes: 1_500,
+    }).catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(SandboxPreparationError);
+    expect(error).toMatchObject({
+      code: "sandbox_preparation_failed",
+      reason: "preparation_failed",
+      commandStarted: false,
+      diagnostic: {
+        phase: "environment",
+        category: "environment_budget_failed",
+        environment_keys: expect.arrayContaining(["COMMAND_VALUE"]),
+      },
+    });
+    const diagnostic = (error as SandboxPreparationError).diagnostic!;
+    expect(diagnostic.environment_keys).toHaveLength(16);
+    expect(diagnostic.environment_key_count).toBeGreaterThan(16);
+    expect(JSON.stringify(error)).not.toMatch(/private|inherited|HOST_ONLY/);
+    expect((error as Error).message).not.toMatch(/private|inherited/);
+    expect(await readdir(test.privateRoot)).toEqual([]);
+  });
+
+  it("bounds key names and omits arbitrary text and OS error details", () => {
+    const keys = [
+      ...Array.from({ length: 25 }, (_, i) => `KEY_${i}`),
+      "/private/path",
+      "line\nbreak",
+      "A".repeat(100),
+    ];
+    const diagnostic = sandboxEnvironmentKeyDiagnostic(keys);
+    expect(diagnostic.environment_keys).toHaveLength(16);
+    expect(diagnostic.environment_key_count).toBe(28);
+    expect(JSON.stringify(diagnostic)).not.toMatch(/private|break/);
+    const error = sandboxPreparationFailure(
+      Object.assign(new Error("secret body at /private/path"), {
+        code: "EPERM",
+      }),
+      "workspace_policy_integrity",
+    ) as SandboxPreparationError;
+    expect(error.diagnostic).toEqual({
+      phase: "workspace_policy_integrity",
+      category: "permission_denied",
+    });
+    expect(error.message).not.toMatch(/secret|private/);
+  });
 });
 
 describe("workspace policy namespace symlinks", () => {

@@ -149,6 +149,9 @@ describe("edit durability classification", () => {
       requires_reread: true,
     });
     expect(result.failureReason).toBe("save_reverted_edit");
+    expect(result.formatOnSaveReport?.format_on_save_reverted_proposal).toBe(
+      true,
+    );
     expect(result.formatOnSaveReport?.hint).toContain(
       "save_without_formatting=true",
     );
@@ -156,6 +159,27 @@ describe("edit durability classification", () => {
       "Do not repeat the same ordinary save",
     );
   });
+
+  it.each(["returned_false", "exception"] as const)(
+    "does not attribute unchanged disk to a formatter after save outcome %s",
+    (saveOutcome) => {
+      const result = classify({
+        disk: { status: "readable", content: "old\n" },
+        saveOutcome,
+      });
+
+      expect(result.durability).toMatchObject({
+        status: "failed",
+        outcome: "diverged",
+        disk_changed: false,
+        editor_content_hash: hashEditContent("new\n"),
+        final_content_hash: hashEditContent("old\n"),
+        requires_reread: true,
+      });
+      expect(result.failureReason).toBe("editor_disk_diverged");
+      expect(result).not.toHaveProperty("formatOnSaveReport");
+    },
+  );
 
   it("fails on genuine normalized editor/disk divergence", () => {
     const result = classify({

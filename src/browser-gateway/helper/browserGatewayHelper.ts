@@ -3902,7 +3902,19 @@ export class BrowserGatewayHelper {
       !snapshot ||
       (expectedGeneration !== null && expectedGeneration !== generationId)
     ) {
-      writeJson(res, 404, { error: "updates_unavailable" });
+      // An optional update owner may not be connected at all. Routine polling
+      // should not flood the browser console with expected 404s. Explicit
+      // owner/generation requests and mutations still fail closed.
+      if (
+        !check &&
+        !requested.has("ownerId") &&
+        !requested.has("generationId")
+      ) {
+        res.writeHead(204, { "Cache-Control": "no-store" });
+        res.end();
+      } else {
+        writeJson(res, 404, { error: "updates_unavailable" });
+      }
       return;
     }
     const pending = check

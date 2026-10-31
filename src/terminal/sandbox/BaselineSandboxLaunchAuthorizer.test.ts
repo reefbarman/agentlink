@@ -392,15 +392,26 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       hostEnvironment: { PATH: "/usr/bin:/bin" },
     });
     try {
-      await expect(
-        authorizer.authorize(
+      const error = await authorizer
+        .authorize(
           request(test.workspace, {
             env: { COMMAND_VALUE: "x".repeat(1_000) },
           }),
-        ),
-      ).rejects.toThrow(
-        /protected environment contributors exceed.*COMMAND_VALUE/,
-      );
+        )
+        .catch((reason: unknown) => reason);
+      expect(error).toBeInstanceOf(SandboxPreparationError);
+      expect(error).toMatchObject({
+        code: "sandbox_preparation_failed",
+        reason: "preparation_failed",
+        commandStarted: false,
+        diagnostic: {
+          phase: "environment",
+          category: "environment_budget_failed",
+          environment_keys: expect.arrayContaining(["COMMAND_VALUE"]),
+        },
+      });
+      expect(JSON.stringify(error)).not.toContain("x".repeat(1_000));
+      expect(await readdir(test.privateRoot)).toEqual([]);
     } finally {
       await test.dispose();
     }
@@ -1408,7 +1419,16 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
     try {
       await expect(
         test.authorizer.authorize(request(test.workspace, { cwd: test.root })),
-      ).rejects.toThrow("inside an active workspace root");
+      ).rejects.toMatchObject({
+        name: "SandboxPreparationError",
+        code: "sandbox_preparation_failed",
+        reason: "preparation_failed",
+        commandStarted: false,
+        diagnostic: {
+          phase: "working_directory",
+          category: "validation_failed",
+        },
+      });
       await expect(
         test.authorizer.authorize(
           request(test.workspace, {
@@ -1434,7 +1454,16 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
             ],
           }),
         ),
-      ).rejects.toThrow("changed after materialization");
+      ).rejects.toMatchObject({
+        name: "SandboxPreparationError",
+        code: "sandbox_preparation_failed",
+        reason: "preparation_failed",
+        commandStarted: false,
+        diagnostic: {
+          phase: "inline_files",
+          category: "validation_failed",
+        },
+      });
       await expect.poll(async () => readdir(test.privateRoot)).toEqual([]);
     } finally {
       await rm(inlineRoot, { recursive: true, force: true });

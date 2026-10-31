@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
 
 import type {
   AgentPluginCatalogMcpServer,
@@ -41,6 +42,34 @@ export async function loadWorkspaceMcpRuntimeConfigs(
     loadAgentPluginMcpConfigs(request),
   ]);
   return [...native, ...plugins];
+}
+
+/** Re-read native definitions too, so stale windows cannot restart removed or disabled servers. */
+export async function isWorkspaceMcpRuntimeConfigCurrent(
+  config: Readonly<McpServerConfig>,
+  request: Readonly<
+    Omit<LoadWorkspaceMcpRuntimeConfigsRequest, "pluginCatalog"> & {
+      pluginCatalog?: AgentPluginCatalogProvider;
+    }
+  >,
+): Promise<boolean> {
+  if (config.provenance?.kind === "agent-plugin") {
+    return request.pluginCatalog
+      ? isAgentPluginMcpConfigCurrent(config, {
+          ...request,
+          pluginCatalog: request.pluginCatalog,
+        })
+      : false;
+  }
+  if (config.pluginRoot !== undefined || config.pluginData !== undefined)
+    return false;
+  const configs = await loadWorkspaceMcpConfigs(request.workspaceProjects);
+  return configs.some(
+    (current) =>
+      current.name === config.name &&
+      !current.disabled &&
+      isDeepStrictEqual(current, config),
+  );
 }
 
 /** Projects effective plugin MCP servers for one requesting project. */

@@ -16,12 +16,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import {
+  NativeShellStartupTimeoutError,
+  type NativeShellStartupDiagnostic,
+} from "./NativeAgentExecutionError.js";
 
 const PROMPT_IDLE_READY_DELAY_MS = 25;
-/** Raw startup bytes retained so a startup timeout can name its blocker. */
+/** Bounded startup bytes used only for safe diagnostic categories, never errors. */
 const STARTUP_OUTPUT_RAW_LIMIT = 8 * 1024;
-/** Cleaned startup text included in a startup timeout error. */
-const STARTUP_OUTPUT_REPORT_LIMIT = 600;
 
 export interface NativeAgentShellLaunch {
   profile: ResolvedHostShellProfile;
@@ -403,22 +405,35 @@ class PersistentNativeChannel {
     this.commandStarted = false;
   }
 
-  /**
-   * Cleaned tail of what the shell printed before becoming ready. Startup
-   * blockers (update prompts, trust prompts, tool installers) usually name
-   * themselves here, so a timeout can report them instead of failing blind.
-   */
-  startupOutputTail(): string {
-    const cleaned = cleanTerminalOutput(this.startupOutput)
-      // oxlint-disable-next-line no-control-regex -- drop residual control bytes from shell output
-      .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, "")
-      .split("\n")
-      .map((line) => line.trimEnd())
-      .filter((line) => line.length > 0)
-      .join("\n");
-    return cleaned.length > STARTUP_OUTPUT_REPORT_LIMIT
-      ? `…${cleaned.slice(-STARTUP_OUTPUT_REPORT_LIMIT)}`
-      : cleaned;
+  startupDiagnostic(): NativeShellStartupDiagnostic {
+    const text = cleanTerminalOutput(this.startupOutput).trim();
+    const args = this.launch.profile.shellArgs;
+    const hasFlag = (long: string, short: string) =>
+      args.some(
+        (arg) =>
+          arg === long || new RegExp(`^-[a-zA-Z]*${short}[a-zA-Z]*$`).test(arg),
+      );
+    return {
+      shell: this.launch.shell,
+      profile_source: this.launch.profile.provenance,
+      login: hasFlag("--login", "l"),
+      interactive: hasFlag("--interactive", "i"),
+      phase: this.promptRendering
+        ? "rendering_initial_prompt"
+        : this.initialPromptStarted
+          ? "awaiting_prompt_idle"
+          : "awaiting_initial_prompt",
+      output: text ? "present" : "none",
+      suspected_prompt: /(?:password|passphrase|token)\s*:/i.test(text)
+        ? "credential"
+        : /(?:would you like to update|update[^\n]*\[y\/n\])/i.test(text)
+          ? "update"
+          : /(?:\[y\/n\]|\(yes\/no\)|press (?:enter|return)|trust[^\n]*\?)/i.test(
+                text,
+              )
+            ? "confirmation"
+            : "none_detected",
+    };
   }
 
   close(): boolean {
@@ -660,13 +675,12 @@ export class NodePtyNativeAgentRuntimeProvider implements NativeAgentRuntimeProv
         channel.ready,
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => {
-            const tail = channel.startupOutputTail();
-            const seconds = this.startupTimeoutMs / 1000;
-            const message = tail
-              ? `Native Agent shell integration startup timed out after ${seconds}s. Last shell output before the deadline (a prompt here usually means startup is waiting for input):\n${tail}`
-              : `Native Agent shell integration startup timed out after ${seconds}s. The shell printed no output before the deadline.`;
-            this.log?.(`[native-agent-terminal] ${message}`);
-            reject(new Error(message));
+            const error = new NativeShellStartupTimeoutError(
+              this.startupTimeoutMs / 1000,
+              channel.startupDiagnostic(),
+            );
+            this.log?.(`[native-agent-terminal] ${error.message}`);
+            reject(error);
           }, this.startupTimeoutMs);
           timer.unref();
         }),

@@ -282,6 +282,8 @@ describe("executeCodexStandaloneWeb", () => {
         })) as typeof globalThis.fetch,
     });
     expect(result.content).toBe(output);
+    expect(result.content_origin).toBe("provider_page");
+    expect(result.content_notice).toContain("not a verified byte-for-byte");
     expect(result.activities[0]?.status).toBe("completed");
   });
 

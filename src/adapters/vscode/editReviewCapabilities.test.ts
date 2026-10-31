@@ -399,6 +399,7 @@ describe("createVscodeEditReviewProvider", () => {
           concurrent_change: false,
           review_state: "dirty_document_preserved",
           vscode_error_detail: "unavailable",
+          save_outcome: "returned_false",
           retryable: true,
         },
         next_steps: [
@@ -412,6 +413,12 @@ describe("createVscodeEditReviewProvider", () => {
       );
       expect(doc.save).toHaveBeenCalledOnce();
       expect(fs.readFileSync(filePath, "utf-8")).toBe("old");
+      expect(doc.isDirty).toBe(true);
+      expect(doc.getText()).toBe("new");
+      expect(result).not.toHaveProperty("format_on_save");
+      expect(result).not.toHaveProperty("format_on_save_reverted_proposal");
+      expect(result).not.toHaveProperty("format_on_save_edits");
+      expect(result.save_failure).not.toHaveProperty("vscode_error_message");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

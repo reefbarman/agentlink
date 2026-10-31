@@ -16,6 +16,8 @@ import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
 
 import { McpClientHub } from "./McpClientHub.js";
 import type { McpServerConfig } from "./mcpConfig.js";
+import * as mcpConfig from "./mcpConfig.js";
+import { isWorkspaceMcpRuntimeConfigCurrent } from "./agentPluginMcpRuntime.js";
 
 interface Page<T> {
   items: T[];
@@ -213,6 +215,22 @@ function setCatalogPages<T>(
     const page = pages[params?.cursor ?? "first"];
     if (!page) throw new Error(`Unexpected ${key} cursor ${params?.cursor}`);
     return { [key]: page.items, nextCursor: page.nextCursor };
+  });
+}
+
+function nextConnected(hub: McpClientHub): Promise<void> {
+  return new Promise((resolve) => {
+    const previous = hub.onStatusChange;
+    hub.onStatusChange = (infos) => {
+      previous?.(infos);
+      if (
+        infos.length > 0 &&
+        infos.every((info) => info.status === "connected")
+      ) {
+        hub.onStatusChange = previous;
+        resolve();
+      }
+    };
   });
 }
 
@@ -518,6 +536,160 @@ describe("McpClientHub protocol correctness", () => {
         expect(mocks.connect).toHaveBeenCalledTimes(2);
         expect(hub.getServerInfos()[0]?.status).toBe("connected");
       });
+    } finally {
+      await hub.disconnectAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["node", "mcp-remote"])(
+    "bounds successful connect-then-crash loops for %s and allows manual recovery",
+    async (command) => {
+      vi.useFakeTimers();
+      const hub = new McpClientHub(new FakeMemento());
+      const onLog = vi.fn();
+      hub.onLog = onLog;
+      const crashConfig = {
+        ...config,
+        command,
+        args:
+          command === "mcp-remote"
+            ? ["https://mcp.example.test/service"]
+            : config.args,
+      };
+      try {
+        await hub.connect([crashConfig], {
+          interactiveServerNames: new Set([config.name]),
+        });
+        for (let attempt = 1; attempt <= 5; attempt += 1) {
+          mocks.stdioTransports.at(-1)?.onclose?.();
+          const delay = 1_000 * 2 ** (attempt - 1);
+          await vi.advanceTimersByTimeAsync(delay - 1);
+          expect(mocks.connect).toHaveBeenCalledTimes(attempt);
+          const connected = nextConnected(hub);
+          await vi.advanceTimersByTimeAsync(1);
+          await connected;
+          expect(mocks.connect).toHaveBeenCalledTimes(attempt + 1);
+          expect(hub.getServerInfos()[0]?.status).toBe("connected");
+        }
+        mocks.stdioTransports.at(-1)?.onclose?.();
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(mocks.connect).toHaveBeenCalledTimes(6);
+        expect(hub.getServerInfos()[0]?.status).toBe("disconnected");
+        expect(JSON.stringify(onLog.mock.calls)).toContain(
+          "automatic reconnect limit reached",
+        );
+        await hub.reconnectServer(config.name);
+        expect(mocks.connect).toHaveBeenCalledTimes(7);
+        mocks.stdioTransports.at(-1)?.onclose?.();
+        const connected = nextConnected(hub);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await connected;
+        expect(mocks.connect).toHaveBeenCalledTimes(8);
+      } finally {
+        await hub.disconnectAll();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("resets the reconnect budget only after a stable connection", async () => {
+    vi.useFakeTimers();
+    const hub = new McpClientHub(new FakeMemento());
+    try {
+      await hub.connect([config]);
+      mocks.stdioTransports.at(-1)?.onclose?.();
+      const firstRecovery = nextConnected(hub);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await firstRecovery;
+      await vi.advanceTimersByTimeAsync(59_999);
+      mocks.stdioTransports.at(-1)?.onclose?.();
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(mocks.connect).toHaveBeenCalledTimes(2);
+      const secondRecovery = nextConnected(hub);
+      await vi.advanceTimersByTimeAsync(1);
+      await secondRecovery;
+      expect(mocks.connect).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(60_000);
+      mocks.stdioTransports.at(-1)?.onclose?.();
+      const thirdRecovery = nextConnected(hub);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await thirdRecovery;
+      expect(mocks.connect).toHaveBeenCalledTimes(4);
+      expect(hub.getServerInfos()[0]?.status).toBe("connected");
+    } finally {
+      await hub.disconnectAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["disabled", "changed", "removed"])(
+    "does not start a scheduled retry after the configuration is %s",
+    async (change) => {
+      vi.useFakeTimers();
+      const workspaceProjects = [
+        {
+          projectId: "retry-project",
+          displayName: "Retry project",
+          rootPath: "/fixture/retry-project",
+        },
+      ];
+      const loadConfigs = vi
+        .spyOn(mcpConfig, "loadWorkspaceMcpConfigs")
+        .mockResolvedValue([config]);
+      const isConfigCurrent = vi.fn((candidate: McpServerConfig) =>
+        isWorkspaceMcpRuntimeConfigCurrent(candidate, {
+          workspaceProjects,
+          requestingScope: {
+            schemaVersion: 1,
+            kind: "project",
+            ...workspaceProjects[0]!,
+            workspaceFolderUri: "file:///fixture/retry-project",
+          },
+        }),
+      );
+      const hub = new McpClientHub(new FakeMemento(), "unknown", {
+        isConfigCurrent,
+      });
+      try {
+        await hub.connect([config]);
+        mocks.stdioTransports.at(-1)?.onclose?.();
+        loadConfigs.mockResolvedValue(
+          change === "removed"
+            ? []
+            : [
+                {
+                  ...config,
+                  ...(change === "disabled"
+                    ? { disabled: true }
+                    : { command: "replacement" }),
+                },
+              ],
+        );
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(isConfigCurrent).toHaveBeenCalledTimes(2);
+        expect(loadConfigs).toHaveBeenLastCalledWith(workspaceProjects);
+        expect(mocks.connect).toHaveBeenCalledTimes(1);
+        expect(mocks.stdioTransports).toHaveLength(1);
+        expect(hub.getServerInfos()).toEqual([]);
+      } finally {
+        await hub.disconnectAll();
+        loadConfigs.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("cancels a pending reconnect on disconnect", async () => {
+    vi.useFakeTimers();
+    const hub = new McpClientHub(new FakeMemento());
+    try {
+      await hub.connect([config]);
+      mocks.stdioTransports.at(-1)?.onclose?.();
+      await hub.disconnectAll();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(mocks.connect).toHaveBeenCalledTimes(1);
+      expect(hub.getServerInfos()).toEqual([]);
     } finally {
       await hub.disconnectAll();
       vi.useRealTimers();
@@ -849,7 +1021,7 @@ describe("McpClientHub protocol correctness", () => {
     expect(mocks.stdioTransportOptions).toBeUndefined();
   });
 
-  it("does not dispatch stale or policy-denied plugin tool calls", async () => {
+  it("does not dispatch stale or policy-denied tool calls", async () => {
     const isConfigCurrent = vi.fn(async () => true);
     const onBeforeToolCall = vi.fn(async () => "deny" as const);
     const hub = new McpClientHub(new FakeMemento(), "unknown", {
@@ -863,6 +1035,14 @@ describe("McpClientHub protocol correctness", () => {
     expect(stale).toMatchObject({
       isError: true,
       error: { kind: "mcp_catalog_changed" },
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining(
+            "configuration changed or was disabled",
+          ),
+        },
+      ],
     });
     expect(onBeforeToolCall).not.toHaveBeenCalled();
     expect(mocks.callTool).not.toHaveBeenCalled();

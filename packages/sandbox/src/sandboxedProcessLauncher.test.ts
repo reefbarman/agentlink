@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { SandboxHelperClient } from "./SandboxHelperClient.js";
 import type { SandboxHelperLaunchRequest } from "./sandboxHelperProtocol.js";
+import { SandboxPreparationError } from "./SandboxPreparationError.js";
 import { createNodeSandboxHelperTransportFactory } from "./NodeSandboxHelperTransport.js";
 import { launchSandboxedProcess } from "./sandboxedProcessLauncher.js";
 import os from "node:os";
@@ -418,11 +419,21 @@ describe("launchSandboxedProcess", () => {
       },
       () => undefined,
     );
-    await expect(handle.started).rejects.toThrow(
-      "Sandbox cwd must be inside an active workspace root",
-    );
+    const expectedError = {
+      name: "SandboxPreparationError",
+      code: "sandbox_preparation_failed",
+      reason: "preparation_failed",
+      commandStarted: false,
+      diagnostic: {
+        phase: "working_directory",
+        category: "validation_failed",
+      },
+    };
+    await expect(handle.started).rejects.toMatchObject(expectedError);
     const exit = await handle.exited;
-    expect(exit.error?.message).toContain("inside an active workspace root");
+    expect(exit.error).toBeInstanceOf(SandboxPreparationError);
+    expect(exit.error).toMatchObject(expectedError);
+    expect(JSON.stringify(exit.error)).not.toContain(outside);
     expect(fake.launches).toEqual([]);
   });
 

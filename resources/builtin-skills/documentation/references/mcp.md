@@ -83,6 +83,8 @@ Plugin MCP entries appear read-only in the main MCP Manager and in the Agent Plu
 
 ## Behavior notes
 
+- Repeated connect-then-crash cycles have a shared maximum of five automatic reconnects, with 1/2/4/8/16-second delays. A successful connection resets that budget only after staying connected for at least 60 seconds; a manual reconnect starts a fresh budget. In VS Code, retries re-read the effective configuration and stop if the server was removed, disabled or changed, so stale queued work cannot restart an old definition.
+
 - Saving and connecting are separate: a valid config stays saved even when the server is offline or needs auth.
 - MCP tool results are passed to the model as the server returned them, with one narrow exception. When a result contains the OpenAI/ChatGPT device sign-in callback URL (`https://auth.openai.com/deviceauth/callback`), for example in a browser server's page list, the `code` and `state` values are replaced with `REDACTED` in text, structured content and metadata before the model sees them. The rest of the URL and every other URL are unchanged. This is not a general secret scanner, and tool arguments, navigation and sign-in itself are not affected. Using a dedicated browser profile for automation still keeps unrelated tabs out of results entirely.
 - HTTP OAuth is coordinated across project hubs and open VS Code windows. Automatic connection recovery can open at most one authorization flow for a server at a time; other attempts pause with a **Reauthenticate** action instead of opening duplicate browser tabs. A short post-flow cooldown blocks repeated automatic prompts, while an explicit Reauthenticate may bypass the cooldown after any active flow finishes.

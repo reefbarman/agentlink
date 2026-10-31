@@ -1232,6 +1232,35 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     document.documentElement.removeAttribute("style");
   });
 
+  it("treats an absent product-update owner as empty status without parsing a body", async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    const originalFetch = fetchMock.getMockImplementation()!;
+    const emptyStatus = new Response(null, { status: 204 });
+    const parseBody = vi.spyOn(emptyStatus, "json");
+    fetchMock.mockImplementation((input, init) =>
+      String(input).includes("/api/ask-agent/product-updates")
+        ? Promise.resolve(emptyStatus)
+        : originalFetch(input, init),
+    );
+    await act(async () => {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "",
+          workspaceName: "Ask Agent",
+          routeByInstance: true,
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/ask-agent/product-updates",
+        expect.objectContaining({ credentials: "same-origin" }),
+      ),
+    );
+    expect(parseBody).not.toHaveBeenCalled();
+  });
+
   it("forwards expanded Ask Agent tool details through the app's real provider and renderer", async () => {
     const source: TranscriptDisplayBlock = {
       type: "tool_call",

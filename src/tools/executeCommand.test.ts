@@ -5,6 +5,10 @@ import {
   SandboxAvailabilityError,
 } from "../terminal/sandbox/AgentTerminalProviderRouter.js";
 import {
+  NativeCommandEnvironmentError,
+  NativeShellStartupTimeoutError,
+} from "../terminal/native/NativeAgentExecutionError.js";
+import {
   SandboxHelperFailure,
   SandboxPreCommandLaunchError,
   SandboxProtectedRootDriftError,
@@ -9779,6 +9783,8 @@ describe("handleExecuteCommand", () => {
         status: "rejected_by_user",
         prior_review: { status: "stale", outcome: "allow" },
       });
+      expect(textPayload(result).prior_review).not.toHaveProperty("risk");
+      expect(textPayload(result).prior_review).not.toHaveProperty("rationale");
       expect(executeCommand).not.toHaveBeenCalled();
     });
 
@@ -9838,70 +9844,92 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("falls through to the human card when the reviewer asks the user", async () => {
-    getConfiguration.mockReturnValue({
-      get: vi.fn((key: string, fallback?: unknown) =>
-        key === "masterBypass" ? false : fallback,
-      ),
-    });
-    const enqueueCommandApproval = vi.fn(() => ({
-      promise: Promise.resolve({ decision: "accept" }),
-    }));
-    const review = vi.fn(async () => ({
-      outcome: "deny" as const,
-      risk: "high" as const,
-      userAuthorization: "unknown" as const,
+  it.each([
+    { status: "reviewed", rationale: "Intent is ambiguous" },
+    {
+      status: "reviewed",
       rationale: "Intent is ambiguous",
-      model: "review-model",
-      status: "reviewed" as const,
-    }));
-    const { handleExecuteCommand } = await import("./executeCommand.js");
-
-    const result = await handleExecuteCommand(
-      { command: "git fetch --depth=1 origin" },
-      {
-        isCommandApproved: () => false,
-        findMatchingCommandRule: () => undefined,
-      } as never,
-      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
-      "session-review-escalate",
-      undefined,
-      {
-        terminalProvider,
-        getCommandApprovalPolicy: () => "approve-for-me",
-        commandApprovalReviewer: { review },
-        isSessionActive: () => true,
-      },
-    );
-
-    expect(review).toHaveBeenCalledTimes(1);
-    expect(enqueueCommandApproval).toHaveBeenCalledTimes(1);
-    expect(enqueueCommandApproval).toHaveBeenCalledWith(
-      "git fetch --depth=1 origin",
-      "git fetch --depth=1 origin",
-      expect.objectContaining({
-        commandReview: expect.objectContaining({
-          outcome: "deny",
-          risk: "high",
-          userAuthorization: "unknown",
-          rationale: "Intent is ambiguous",
+      editedCommand: "git fetch --depth=2 origin",
+    },
+    { status: "reviewed", rationale: "Bounded decision summary. ".repeat(40) },
+    { status: "invalid", rationale: "unsafe provider response body" },
+    { status: "unavailable", rationale: "unsafe provider failure body" },
+  ] as const)(
+    "retains only a bounded validated prior-review summary after human override ($status)",
+    async (scenario) => {
+      const { status, rationale } = scenario;
+      const editedCommand =
+        "editedCommand" in scenario ? scenario.editedCommand : undefined;
+      getConfiguration.mockReturnValue({
+        get: vi.fn((key: string, fallback?: unknown) =>
+          key === "masterBypass" ? false : fallback,
+        ),
+      });
+      const enqueueCommandApproval = vi.fn(() => ({
+        promise: Promise.resolve({
+          decision: "accept",
+          ...(editedCommand ? { editedCommand } : {}),
         }),
-      }),
-    );
-    // The human override is recorded beside, never in place of, the denial.
-    expect(textPayload(result).approval).toEqual({
-      by: "human",
-      prior_review: {
-        review_id: expect.any(String),
-        status: "reviewed",
-        outcome: "deny",
+      }));
+      const review = vi.fn(async () => ({
+        outcome: "deny" as const,
+        risk: "high" as const,
+        userAuthorization: "unknown" as const,
+        rationale,
         model: "review-model",
-      },
-    });
-    expect(textPayload(result).approval.prior_review.review_id).toBe(
-      (review.mock.calls[0] as unknown as [{ reviewId: string }])[0].reviewId,
-    );
-  });
+        status,
+      }));
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        { command: "git fetch --depth=1 origin" },
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: () => undefined,
+        } as never,
+        { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+        "session-review-escalate",
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: { review },
+          isSessionActive: () => true,
+        },
+      );
+
+      expect(review).toHaveBeenCalledTimes(1);
+      expect(enqueueCommandApproval).toHaveBeenCalledTimes(1);
+      expect(enqueueCommandApproval).toHaveBeenCalledWith(
+        "git fetch --depth=1 origin",
+        "git fetch --depth=1 origin",
+        expect.objectContaining({
+          commandReview: expect.objectContaining({
+            outcome: "deny",
+            risk: "high",
+            userAuthorization: "unknown",
+            rationale: rationale.slice(0, 500),
+          }),
+        }),
+      );
+      // The human override is recorded beside, never in place of, the denial.
+      expect(textPayload(result).approval).toEqual({
+        by: editedCommand ? "human_edited" : "human",
+        prior_review: {
+          review_id: expect.any(String),
+          status,
+          outcome: "deny",
+          model: "review-model",
+          ...(status === "reviewed"
+            ? { risk: "high", rationale: rationale.slice(0, 500) }
+            : {}),
+        },
+      });
+      expect(textPayload(result).approval.prior_review.review_id).toBe(
+        (review.mock.calls[0] as unknown as [{ reviewId: string }])[0].reviewId,
+      );
+    },
+  );
 
   it("hands the circuit-tripping Guardian denial to the human card with its evidence", async () => {
     getConfiguration.mockReturnValue({
@@ -12254,9 +12282,135 @@ describe("handleExecuteCommand", () => {
     },
   );
 
+  it("returns bounded native env mismatch diagnostics and exact same-authority recovery", async () => {
+    executeCommand.mockRejectedValue(
+      new NativeCommandEnvironmentError("native-1", [
+        "OMITTED",
+        "CHANGED",
+        "bad/path",
+        ...Array.from({ length: 20 }, (_, i) => `KEY_${i}`),
+      ]),
+    );
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const result = await handleExecuteCommand(
+      { command: "pwd", terminal_id: "native-1" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "native-env-mismatch",
+      undefined,
+      { terminalProvider },
+    );
+    const payload = textPayload(result);
+    expect(payload).toMatchObject({
+      error_code: "native_command_environment_mismatch",
+      command_sent: false,
+      process_launched: false,
+      environment_key_count: 23,
+      retry_guidance: {
+        automatic_retry: false,
+        options: [
+          {
+            omit_parameters: ["terminal_id", "terminal_name"],
+            preserve_parameters: [
+              "command",
+              "cwd",
+              "env",
+              "sandbox_permissions",
+            ],
+            same_authority: true,
+          },
+        ],
+      },
+    });
+    expect(payload.environment_keys).toHaveLength(16);
+    expect(JSON.stringify(payload)).not.toContain("bad/path");
+    expect(executeCommand).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [
+      "reserved_environment_override",
+      {
+        phase: "environment",
+        environment_keys: ["LC_ALL"],
+        environment_key_count: 1,
+      },
+    ],
+    [
+      "preparation_failed",
+      { phase: "workspace_policy_integrity", category: "permission_denied" },
+    ],
+  ] as const)(
+    "preserves safe %s diagnostic through the tool boundary",
+    async (reason, diagnostic) => {
+      terminalProvider.prepareExecution.mockRejectedValueOnce(
+        new SandboxPreparationError(
+          reason,
+          { cause: new Error("secret-value /private/path") },
+          diagnostic,
+        ),
+      );
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const result = await handleExecuteCommand(
+        { command: "pwd" },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "sandbox-diagnostic",
+        undefined,
+        { terminalProvider },
+      );
+      const payload = textPayload(result);
+      expect(payload).toMatchObject({
+        error_code: "sandbox_preparation_failed",
+        preparation_diagnostic: diagnostic,
+        command_sent: false,
+        process_launched: false,
+        retry_safe: false,
+        retry_guidance: { automatic_retry: false },
+      });
+      expect(JSON.stringify(payload)).not.toMatch(
+        /secret-value|\/private\/path/,
+      );
+      expect(executeCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves safe native startup diagnostics through the tool boundary", async () => {
+    const diagnostic = {
+      shell: "zsh",
+      profile_source: "configured",
+      login: true,
+      interactive: true,
+      phase: "rendering_initial_prompt",
+      output: "present",
+      suspected_prompt: "credential",
+    } as const;
+    executeCommand.mockRejectedValue(
+      new NativeShellStartupTimeoutError(15, diagnostic),
+    );
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const result = await handleExecuteCommand(
+      { command: "pwd" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "startup-diagnostic",
+      undefined,
+      { terminalProvider },
+    );
+    expect(textPayload(result)).toMatchObject({
+      startup_diagnostic: diagnostic,
+      command_sent: false,
+      process_launched: false,
+      retry_guidance: { automatic_retry: false },
+    });
+    expect(executeCommand).toHaveBeenCalledOnce();
+  });
+
   it("returns structured retry guidance when native shell startup times out before launch", async () => {
     executeCommand.mockRejectedValue(
-      new Error("Native Agent shell integration startup timed out"),
+      new Error(
+        "Native Agent shell integration startup timed out: secret-value /private/path",
+      ),
     );
 
     const { handleExecuteCommand } = await import("./executeCommand.js");
@@ -12269,6 +12423,9 @@ describe("handleExecuteCommand", () => {
       { terminalProvider },
     );
 
+    expect(JSON.stringify(textPayload(result))).not.toMatch(
+      /secret-value|\/private\/path/,
+    );
     expect(textPayload(result)).toMatchObject({
       status: "retry_required",
       error_code: "native_shell_startup_timeout",

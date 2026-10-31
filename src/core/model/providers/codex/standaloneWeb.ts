@@ -215,6 +215,13 @@ export async function executeCodexStandaloneWeb(
       },
     ],
     content,
+    ...(request.operation === "fetch"
+      ? {
+          content_origin: "provider_page" as const,
+          content_notice:
+            "This is the provider's page-access output, not a verified byte-for-byte copy of the original file or JSON response. For exact-source checks, verify it with an approved source-preserving reader.",
+        }
+      : {}),
     citations,
     ...visibleContent.metadata,
   };

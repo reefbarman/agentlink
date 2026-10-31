@@ -1476,7 +1476,16 @@ describe("BrowserGatewayHelper proxy routing", () => {
     };
     const updatesUrl = `${base}/api/ask-agent/product-updates`;
     expect((await fetch(updatesUrl)).status).toBe(401);
-    expect((await fetch(updatesUrl, { headers })).status).toBe(404);
+    const unavailable = await fetch(updatesUrl, { headers });
+    expect(unavailable.status).toBe(204);
+    expect(unavailable.headers.get("cache-control")).toBe("no-store");
+    expect(await unavailable.text()).toBe("");
+    expect(
+      (await fetch(`${updatesUrl}?ownerId=missing`, { headers })).status,
+    ).toBe(404);
+    expect(
+      (await fetch(`${updatesUrl}/check`, { method: "POST", headers })).status,
+    ).toBe(404);
     let finish!: (value: ReleaseDiscovery) => void;
     const checked = new Promise<ReleaseDiscovery>((resolve) => {
       finish = resolve;
@@ -1570,7 +1579,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       service.dispose();
       await lease.stop();
     }
-    expect((await fetch(updatesUrl, { headers })).status).toBe(404);
+    expect((await fetch(updatesUrl, { headers })).status).toBe(204);
   });
 
   it("tracks authenticated neutral core owner registration and release", async () => {

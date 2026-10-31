@@ -344,6 +344,8 @@ material, not as current workspace truth. Inspect the current workspace before
 acting, reconcile stale TODO/status claims, and use predecessor transcript
 recall only when exact history is needed.`;
 const MAX_BACKGROUND_PARTIAL_RESULT_CHARS = 40 * 1024;
+const BACKGROUND_EVIDENCE_RECOVERY_MARKER = "[background evidence recovery]";
+const MAX_BACKGROUND_RECOVERED_EVIDENCE_CHARS = 12 * 1024;
 /**
  * Terminal results get a larger budget than streaming partials: they are
  * written once per session, and tail-truncating a finished review at 40 KB
@@ -13153,8 +13155,21 @@ export class AgentSessionManager {
     ) {
       return { accepted: false, reason: "session is not currently running" };
     }
+    // Native steering joins the existing assignment, not a new standalone ask.
+    // Keep this distinction model-visible without guessing the message's intent
+    // or changing the runtime's completion/stop authority.
+    const steeringText =
+      session.fleetMetadata?.backend === "native"
+        ? `## Coordinator steering within your ongoing delegated task
+This is a coordinator message within your existing delegated assignment, not a replacement task or a request to finish by itself. Apply any explicit change of direction below.
+For a progress or coordination question, answer briefly in commentary and continue the delegated work. Do not send a final response or call set_task_status merely to answer that update.
+Finish when the delegated task is complete, or when the coordinator explicitly asks you to stop, wrap up, or return an early result. Existing tool, mode, approval, write-ownership, and runtime restrictions remain authoritative.
+
+Coordinator message:
+${instruction}`
+        : instruction;
     const accepted = session.setPendingInterjection(
-      instruction,
+      steeringText,
       crypto.randomUUID(),
       undefined,
       instruction,
@@ -13837,6 +13852,9 @@ export class AgentSessionManager {
     const emptyTextMarker =
       marker?.result?.type === "text" && !marker.result.text.trim();
     const durablePartialResult =
+      (options?.preferDurableMetadata
+        ? session.fleetMetadata?.partialResult
+        : undefined) ??
       this.bgPartialResults.get(session.id) ??
       session.fleetMetadata?.partialResult;
     let partialResult =
@@ -13966,6 +13984,51 @@ export class AgentSessionManager {
         partialResult = partialResult?.trim()
           ? `${partialResult.trimEnd()}\n\n${digest}`
           : digest;
+      }
+    }
+
+    if (
+      (resultState === "failed" || resultState === "interrupted") &&
+      session.fleetMetadata?.backend === "native" &&
+      !partialResult?.includes(BACKGROUND_EVIDENCE_RECOVERY_MARKER)
+    ) {
+      // A provider error can become the last assistant message, hiding findings
+      // from earlier turns. Recover visible text only, never thinking or raw tool
+      // results. Completed-tool inputs identify sources the coordinator can revisit.
+      const messages = session.getMessages();
+      const recoveredText: string[] = [];
+      let remaining = MAX_BACKGROUND_RECOVERED_EVIDENCE_CHARS;
+      for (let i = messages.length - 1; i >= 0 && remaining > 0; i -= 1) {
+        const message = messages[i];
+        if (message.role !== "assistant" || !Array.isArray(message.content)) {
+          continue;
+        }
+        const text = message.content
+          .filter((block) => block.type === "text")
+          .map((block) => block.text)
+          .join("\n")
+          .trim();
+        if (!text || partialResult?.includes(text)) continue;
+        const bounded = text.slice(0, remaining);
+        recoveredText.unshift(bounded);
+        remaining -= bounded.length;
+      }
+      const digest = buildBudgetEvidenceDigest(messages);
+      const toolEvidence = digest
+        ? `Completed tool calls (identifying inputs only; results are not included):\n${digest.slice(digest.indexOf("\n") + 1)}`.slice(
+            0,
+            MAX_BACKGROUND_RECOVERED_EVIDENCE_CHARS,
+          )
+        : undefined;
+      if (recoveredText.length || toolEvidence) {
+        partialResult = [
+          partialResult?.trimEnd(),
+          `${BACKGROUND_EVIDENCE_RECOVERY_MARKER} Partial evidence from an unsuccessful run, not a completed result. Recovery is bounded; earlier text or tool references may be omitted.`,
+          ...recoveredText,
+          toolEvidence,
+        ]
+          .filter(Boolean)
+          .join("\n\n");
       }
     }
 

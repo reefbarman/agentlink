@@ -45,6 +45,25 @@ describe("native web tool definitions", () => {
   });
 });
 
+describe("native web fetch provenance", () => {
+  it("labels hosted model text even when it resembles raw JSON", async () => {
+    const text = '{"model_generated":true}';
+    const result = await collectNativeWebToolResult({
+      provider: "codex",
+      operation: "fetch",
+      input: { url: "https://example.com/api" },
+      events: (async function* (): AsyncGenerator<CoreModelStreamEvent> {
+        yield { type: "text_delta", text };
+        yield { type: "done" };
+      })(),
+    });
+    expect(result.content).toBe(text);
+    expect(result.content_origin).toBe("model_generated");
+    expect(result.content_notice).toContain("not an exact file or JSON");
+    expect(result.content_notice).toContain("approved source-preserving");
+  });
+});
+
 describe("native web provider continuation", () => {
   it("replays pause_turn privately and aggregates the visible result", async () => {
     const pausedMessage: CoreModelMessage = {

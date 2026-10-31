@@ -35,6 +35,10 @@ import {
 import { SandboxAvailabilityError } from "../terminal/sandbox/AgentTerminalProviderRouter.js";
 import { SandboxPreparationError } from "../terminal/sandbox/SandboxPreparationError.js";
 import {
+  NativeCommandEnvironmentError,
+  NativeShellStartupTimeoutError,
+} from "../terminal/native/NativeAgentExecutionError.js";
+import {
   SandboxPreparationDriftError,
   TerminalTargetRecoveryError,
 } from "../core/capabilities/terminalTargetError.js";
@@ -168,6 +172,8 @@ interface PriorCommandReview {
   status: CommandApprovalReviewResult["status"] | "stale";
   outcome: CommandApprovalReviewResult["outcome"];
   model: string;
+  risk?: CommandApprovalReviewResult["risk"];
+  rationale?: string;
 }
 
 /** Bounded re-reviews when human input arrives while a review is running. */
@@ -445,6 +451,7 @@ type ExecuteCommandRetryGuidance = {
     | "managed_network_connect_timeout"
     | "pnpm_store_mismatch"
     | "native_shell_startup_timeout"
+    | "native_command_environment_mismatch"
     | "sandbox_unavailable";
   message: string;
   automatic_retry: false;
@@ -4256,13 +4263,13 @@ async function executeCommandWithAudit(
         reserved_path_override:
           'Sandbox PATH is host-managed and cannot be overridden through env. Remove env.PATH and put an inline export such as export PATH="/desired/bin:$PATH" before the command in each reviewed sandbox call. Shell changes do not persist between sandbox calls.',
         reserved_environment_override:
-          "Remove reserved sandbox environment overrides from env. Host-managed HOME, temporary directories, proxy settings, loader settings, and other reserved entries cannot be replaced through per-call environment input.",
+          "Remove the reported environment_keys from env. HOME, temporary directories, PATH, locale variables (including LANG and LC_ALL), proxy settings, loader settings, and other reserved entries are host-managed. Do not move reserved overrides inline to bypass this check.",
         conflicting_npm_cache_overrides:
           "The per-command env contains conflicting case-insensitive npm_config_cache aliases. Remove the duplicates or give them the same value; prefer one canonical npm_config_cache entry. No command was launched and no cache values are reported.",
         unsupported_shell_profile:
           "The attested sandbox helper does not support shellEnvironment.useProfile. Disable that host sandbox setting and request a fresh reviewed execution; do not bypass the sandbox or silently change host configuration.",
         preparation_failed:
-          "Sandbox preparation failed before launch, not during the availability attestation. Inspect managed terminal availability, the requested environment, capabilities, workspace/protected-path integrity, and host sandbox policy. The output channel records only the bounded preparation_failed category. Repair the request or host setup before requesting a fresh reviewed execution; do not repeatedly retry or switch to native execution.",
+          "Sandbox preparation failed before launch, not during availability attestation. Use preparation_diagnostic.phase and category to identify the failed check. Repair the indicated request or host setup before a fresh reviewed execution; do not repeatedly retry, relax protections, or switch to native execution.",
       }[err.reason];
       return {
         content: [
@@ -4274,6 +4281,10 @@ async function executeCommandWithAudit(
                 "The sandbox execution could not be prepared before launch.",
               error_code: err.code,
               preparation_failure: err.reason,
+              preparation_diagnostic: err.diagnostic ?? {
+                phase: "host_preparation",
+                category: "unclassified",
+              },
               command: params.command,
               command_sent: false,
               process_launched: false,
@@ -4286,6 +4297,40 @@ async function executeCommandWithAudit(
                 options: [
                   {
                     action: "repair_sandbox_preparation_request_or_host",
+                    ...(err.diagnostic?.environment_keys
+                      ? { remove_env_keys: err.diagnostic.environment_keys }
+                      : {}),
+                    ...(err.diagnostic?.phase
+                      ? {
+                          check: err.diagnostic.phase,
+                          repair: {
+                            workspace_roots:
+                              "Verify all active workspace folders exist and are accessible to the host, then reopen any stale folder.",
+                            working_directory:
+                              "Choose an existing cwd inside an active workspace folder.",
+                            private_directories:
+                              "Check the host sandbox temporary-directory configuration, permissions, and free space.",
+                            inline_files:
+                              "Repair or recreate the reviewed inline file inputs.",
+                            git_protection:
+                              "Inspect workspace Git metadata integrity and permissions. Do not remove protected metadata.",
+                            workspace_policy_integrity:
+                              "Inspect workspace policy files and protected namespaces for inaccessible or invalid entries. Do not disable protection checks.",
+                            developer_toolchain:
+                              "Inspect the host developer-toolchain configuration and permissions.",
+                            trusted_runtime_roots:
+                              "Repair the installed sandbox runtime directories, then reload the host.",
+                            temporary_directory:
+                              "Repair the configured host temporary directory or its permissions.",
+                            environment:
+                              "Remove reported reserved keys or repair the host sandbox environment policy.",
+                            read_policy:
+                              "Repair the host sandbox read-root configuration without relaxing denied paths.",
+                            launch_binding:
+                              "Inspect the installed sandbox policy and runtime configuration before a fresh review.",
+                          }[err.diagnostic.phase],
+                        }
+                      : {}),
                     fresh_review_after_repair: true,
                   },
                 ],
@@ -4382,6 +4427,47 @@ async function executeCommandWithAudit(
               process_launched: false,
               retry_safe: true,
               failure_stage: err.failureStage,
+            }),
+          },
+        ],
+      };
+    }
+    if (err instanceof NativeCommandEnvironmentError) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "retry_required",
+              error: err.message,
+              error_code: err.code,
+              terminal_id: err.terminalId,
+              environment_keys: err.environmentKeys,
+              environment_key_count: err.environmentKeyCount,
+              command: params.command,
+              command_sent: false,
+              process_launched: false,
+              retry_safe: true,
+              failure_stage: "preparation",
+              retry_guidance: {
+                code: err.code,
+                message:
+                  "The selected persistent terminal was created with different per-command env. The reported keys changed, were added, or were omitted. Reuse it only with the original env, or submit the same command and env without terminal_id or terminal_name to select a compatible idle terminal or create a new one. No environment values are reported and no terminal was changed automatically.",
+                automatic_retry: false,
+                options: [
+                  {
+                    action: "retry_without_terminal_target",
+                    omit_parameters: ["terminal_id", "terminal_name"],
+                    preserve_parameters: [
+                      "command",
+                      "cwd",
+                      "env",
+                      "sandbox_permissions",
+                    ],
+                    same_authority: true,
+                  },
+                ],
+              } satisfies ExecuteCommandRetryGuidance,
             }),
           },
         ],
@@ -4637,8 +4723,14 @@ async function executeCommandWithAudit(
             type: "text",
             text: JSON.stringify({
               status: "retry_required",
-              error: message,
+              error:
+                err instanceof NativeShellStartupTimeoutError
+                  ? err.message
+                  : "Native Agent shell integration startup timed out before command dispatch. Legacy unstructured startup output is omitted.",
               error_code: "native_shell_startup_timeout",
+              ...(err instanceof NativeShellStartupTimeoutError
+                ? { startup_diagnostic: err.diagnostic }
+                : {}),
               command: commandToRun,
               ...(commandToRun !== params.command
                 ? { original_command: params.command, command_modified: true }
@@ -4650,11 +4742,12 @@ async function executeCommandWithAudit(
               retry_guidance: {
                 code: "native_shell_startup_timeout",
                 message:
-                  "The Native Agent shell did not become ready before the startup deadline; the command did not launch and that terminal was closed. The error includes the shell's last startup output when it printed any; an interactive prompt there (for example an Oh My Zsh update prompt, a version-manager install prompt, or a trust prompt) is the blocker to report to the user. Inspect the AgentLink output channel and the selected host terminal profile. In a normal VS Code terminal, check whether shell startup completes without prompts or hangs (for example in .zshrc/.bashrc or a toolchain initializer). Repair that blocker before retrying the same command in a new terminal. Reloading alone does not repair shell startup; do not repeatedly retry or silently bypass user startup files.",
+                  "The Native Agent shell did not become ready before the startup deadline; the command did not launch and that terminal was closed. startup_diagnostic reports safe shell/profile and launch-phase categories, plus a suspected prompt category when detected; raw startup output is withheld because it may contain credentials or private paths. In a normal VS Code terminal using the configured default profile (or host shell for fallback), check whether startup completes without prompts or hangs in .zshrc/.bashrc or a toolchain initializer. Repair the blocker before retrying the same command in a new terminal, omitting the closed terminal_id. Reloading alone does not repair shell startup; do not repeatedly retry or silently bypass user startup files.",
                 automatic_retry: false,
                 options: [
                   {
                     action: "inspect_host_shell_startup_then_repair",
+                    omit_parameters_after_repair: ["terminal_id"],
                     same_command_after_repair: true,
                   },
                 ],
@@ -5273,6 +5366,14 @@ async function approveSubCommands(
         status: staleReview ? "stale" : review.status,
         outcome: review.outcome,
         model: review.model,
+        // Only the validated, user-facing decision summary, never raw provider
+        // output, reasoning, or failure bodies. Superseded reviews are not risk evidence.
+        ...(!staleReview && review.status === "reviewed"
+          ? {
+              risk: review.risk,
+              rationale: review.rationale.slice(0, 500),
+            }
+          : {}),
       };
       if (staleReview) {
         // A decision made against superseded context is not a denial signal.
