@@ -230,7 +230,13 @@ function runStep(step, { cwd, logDirectory, env }) {
   return { id: step.id, label: step.label, passed, ms, log: logPath };
 }
 
-function buildSteps({ worktree, triggered, linux, nodeMajor, hasActionlint }) {
+export function buildSteps({
+  worktree,
+  triggered,
+  linux,
+  nodeMajor,
+  hasActionlint,
+}) {
   const steps = [
     { id: "npm-ci", label: "npm ci", command: "npm ci", blocking: true },
     { id: "lint", label: "npm run lint", command: "npm run lint" },
@@ -265,12 +271,9 @@ function buildSteps({ worktree, triggered, linux, nodeMajor, hasActionlint }) {
   if (linux) {
     // git archive streams exactly the committed tree into the container, so
     // host node_modules and native binaries never leak in.
-    const inner = [
+    const checks = [
       "set -e",
-      // Read the archive from stdin first, before anything else can consume it.
-      "mkdir /work && cd /work && tar -x",
-      "apt-get update -qq </dev/null",
-      "apt-get install -y -qq --no-install-recommends zsh </dev/null >/dev/null",
+      "cd /work",
       "git init -q && git add -A && git -c user.name=preflight -c user.email=preflight@localhost commit -qm preflight",
       "npm ci",
       "e=0",
@@ -279,10 +282,21 @@ function buildSteps({ worktree, triggered, linux, nodeMajor, hasActionlint }) {
       "npm test || e=1",
       "exit $e",
     ].join("\n");
+    const inner = [
+      "set -e",
+      // Read the archive from stdin first, before anything else can consume it.
+      "mkdir /work && cd /work && tar -x",
+      "apt-get update -qq </dev/null",
+      "apt-get install -y -qq --no-install-recommends zsh </dev/null >/dev/null",
+      // CI uses an unprivileged runner. Running tests as root defeats the
+      // permission failures that the suite deliberately exercises.
+      "chown -R node:node /work /home/node/.npm",
+      `runuser -u node -- bash -c ${shellQuote(checks)}`,
+    ].join("\n");
     steps.push({
       id: "linux",
       label: `Linux container (node:${nodeMajor}): lint, build, test`,
-      command: `git archive --format=tar HEAD | docker run --rm -i -e CI=true -v agentlink-preflight-npm:/root/.npm node:${nodeMajor}-bookworm bash -c ${shellQuote(inner)}`,
+      command: `git archive --format=tar HEAD | docker run --rm -i -e CI=true -v agentlink-preflight-npm:/home/node/.npm node:${nodeMajor}-bookworm bash -c ${shellQuote(inner)}`,
     });
   }
   return steps.map((step) => ({ ...step, cwd: worktree }));

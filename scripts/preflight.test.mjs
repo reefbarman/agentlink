@@ -1,4 +1,5 @@
 import {
+  buildSteps,
   nvmrcMajor,
   parsePrePushInput,
   selectTriggeredChecks,
@@ -66,6 +67,21 @@ test("parses branch updates from pre-push input and skips deletions and tags", (
       remoteRef: "refs/heads/main",
     },
   ]);
+});
+
+test("runs Linux verification as the unprivileged container user", () => {
+  const steps = buildSteps({
+    worktree: "/fixture",
+    triggered: [],
+    linux: true,
+    nodeMajor: 22,
+    hasActionlint: false,
+  });
+  const linux = steps.find((step) => step.id === "linux");
+  assert.match(linux.command, /runuser -u node -- bash -c/u);
+  assert.match(linux.command, /chown -R node:node \/work \/home\/node\/\.npm/u);
+  assert.match(linux.command, /agentlink-preflight-npm:\/home\/node\/\.npm/u);
+  assert.equal(linux.cwd, "/fixture");
 });
 
 test("reads the major version from .nvmrc", () => {

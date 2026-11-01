@@ -66,7 +66,11 @@ function onMacOS() {
   Object.defineProperty(process, "platform", { value: "darwin" });
 }
 
-beforeEach(onMacOS);
+beforeEach(() => {
+  // The in-memory keyring mock needs no real desktop session. Keep generic
+  // tests on the host platform; Linux diagnostics override this fixture.
+  vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/mock-keyring-bus");
+});
 
 afterEach(async () => {
   Object.defineProperty(process, "platform", { value: hostPlatform });
