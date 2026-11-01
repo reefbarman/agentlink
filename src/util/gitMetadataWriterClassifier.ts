@@ -283,13 +283,36 @@ function classifyCommit(args: readonly string[]): boolean {
       "--no-gpg-sign",
       "-q",
       "--quiet",
+      "-o",
+      "--only",
     ]),
-    new Set(["-m", "--message", "--author", "--date", "--cleanup"]),
+    new Set([
+      "-m",
+      "--message",
+      "-F",
+      "--file",
+      "--author",
+      "--date",
+      "--cleanup",
+    ]),
   );
   if (!parsed) return false;
   if (parsed.operands.length > 0 && parsed.separatorIndex === undefined)
     return false;
-  const hasMessage = hasAny(parsed.options, ["-m", "--message"]);
+  // A message file must be a real path, never stdin.
+  if (
+    [
+      ...(parsed.options.get("-F") ?? []),
+      ...(parsed.options.get("--file") ?? []),
+    ].some((value) => value === "-")
+  )
+    return false;
+  const hasMessage = hasAny(parsed.options, [
+    "-m",
+    "--message",
+    "-F",
+    "--file",
+  ]);
   return (
     hasMessage ||
     (parsed.options.has("--amend") && parsed.options.has("--no-edit"))
@@ -842,9 +865,57 @@ function classifyLsFilesPipedGitAdd(
   return "add";
 }
 
+/**
+ * A literal checksum list piped into a SHA-256 check, used as a content guard
+ * before a commit (for example `printf '<hash>  <path>\n' | shasum -a 256 -c`).
+ */
+function isReadOnlyChecksumVerification(command: string): boolean {
+  const scan = scanShellLexBoundaries(command, {
+    separators: ["|"],
+    comments: true,
+  });
+  const boundary = scan.boundaries[0];
+  if (
+    scan.boundaries.length !== 1 ||
+    boundary.kind === "comment" ||
+    boundary.operator !== "|"
+  )
+    return false;
+  const producerText = command.slice(0, boundary.start).trim();
+  const consumerText = command.slice(boundary.end).trim();
+  if (
+    hasUnsupportedShellSyntax(producerText) ||
+    hasUnsupportedShellSyntax(consumerText)
+  )
+    return false;
+  const producer = scanShellLexWords(producerText).words.map(({ raw }) =>
+    decodeWord(raw),
+  );
+  const consumer = scanShellLexWords(consumerText).words.map(({ raw }) =>
+    decodeWord(raw),
+  );
+  if (
+    producer.some((word) => word === null) ||
+    consumer.some((word) => word === null) ||
+    producer[0] !== "printf" ||
+    producer.length < 2 ||
+    producer[1]!.startsWith("-")
+  )
+    return false;
+  const sink = consumer.join(" ");
+  return [
+    "shasum -a 256 -c",
+    "shasum -a 256 --check",
+    "shasum -c -a 256",
+    "sha256sum -c",
+    "sha256sum --check",
+  ].some((form) => sink === form || sink === `${form} -`);
+}
+
 function isDirectGitInspection(command: string): boolean {
   if (isDirectGitStatusFollowup(command)) return true;
   if (isReadOnlyGitSubstitutionTest(command)) return true;
+  if (isReadOnlyChecksumVerification(command)) return true;
   if (!command.trim() || hasUnsupportedShellSyntax(command)) return false;
   const scan = scanShellLexWords(command);
   if (scan.words[0]?.raw !== "git") return false;
@@ -893,12 +964,31 @@ function isDirectGitInspection(command: string): boolean {
             ])
           : undefined;
   if (!flags) return false;
-  const parsed = parseArguments(args as string[], flags, new Set());
-  return Boolean(
-    parsed &&
-    ((subcommand !== "log" && subcommand !== "show") ||
-      parsed.options.size > 0),
-  );
+  const isLog = subcommand === "log" || subcommand === "show";
+  // `git log -1` style counts are read-only limits.
+  const inspectionArgs = isLog
+    ? (args as string[]).filter((arg) => !/^-\d+$/.test(arg))
+    : (args as string[]);
+  const hasCount = inspectionArgs.length !== args.length;
+  const valueOptions: ReadonlySet<string> =
+    subcommand === "diff"
+      ? new Set(["--diff-filter"])
+      : isLog
+        ? new Set(["-n", "--max-count"])
+        : new Set();
+  const parsed = parseArguments(inspectionArgs, flags, valueOptions);
+  if (!parsed) return false;
+  if (
+    !(parsed.options.get("--diff-filter") ?? []).every((value) =>
+      /^[ACDMRTUXB*]+$/i.test(value),
+    ) ||
+    ![
+      ...(parsed.options.get("-n") ?? []),
+      ...(parsed.options.get("--max-count") ?? []),
+    ].every((value) => /^\d+$/.test(value))
+  )
+    return false;
+  return !isLog || parsed.options.size > 0 || hasCount;
 }
 
 /**
@@ -968,9 +1058,13 @@ export function classifyPredictableGitMetadataWriter(
       continue;
     return null;
   }
+  // Inline files serve as an apply patch or a commit message file; the
+  // retry guidance then resubmits the template with fresh files.
   if (
     subcommands.length === 0 ||
-    (input.hasInlineFiles && !subcommands.includes("apply"))
+    (input.hasInlineFiles &&
+      !subcommands.includes("apply") &&
+      !subcommands.includes("commit"))
   )
     return null;
   return {

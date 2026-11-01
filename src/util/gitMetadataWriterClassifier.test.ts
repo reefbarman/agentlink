@@ -404,6 +404,19 @@ describe("classifyPredictableGitMetadataWriter", () => {
       "git ls-files -z -- plans | xargs -0 git add -- && git commit -m 'stage tracked plan files'",
       ["add", "commit"],
     ],
+    // Reported: a checksum content guard before an explicit-path commit.
+    [
+      "printf '%s\\n' 'aa11  plans/a.md' 'bb22  plans/b.md' | shasum -a 256 -c && git diff --check -- plans/a.md plans/b.md && git diff --cached --quiet && git commit --only -m \"docs(plan): align owners\" -- plans/a.md plans/b.md",
+      ["commit"],
+    ],
+    [
+      "printf 'aa11  a.md\\n' | sha256sum -c && git commit -o -m fix -- a.md",
+      ["commit"],
+    ],
+    [
+      "git add a.ts && git diff --cached --name-only --diff-filter=A -- plans && git commit -q -m fix && git log -1 --oneline && git log -n 2 --stat",
+      ["add", "commit"],
+    ],
   ] as const)("classifies writer chain: %s", (command, subcommands) => {
     expect(classify(command)).toEqual({
       kind: "predictable_git_metadata_writer",
@@ -451,6 +464,30 @@ describe("classifyPredictableGitMetadataWriter", () => {
     expect(
       classify("git apply --cached --check patch", { files: true }),
     ).toBeNull();
+  });
+
+  it("recognises a commit message read from a materialised inline file", () => {
+    expect(
+      classify(
+        "git add a.ts && git commit -q -F '/tmp/agentlink-cmd-x/msg' && git log -1 --oneline",
+        { files: true },
+      ),
+    ).toEqual({
+      kind: "predictable_git_metadata_writer",
+      subcommands: ["add", "commit"],
+    });
+    expect(classify("git commit -F -", { files: true })).toBeNull();
+    expect(classify("git add a.ts", { files: true })).toBeNull();
+  });
+
+  it.each([
+    "printf 'aa  a.md\\n' | shasum -c -a 1 && git commit -m fix",
+    "printf 'aa  a.md\\n' | shasum -a 256 -c | tee out && git commit -m fix",
+    "cat sums | shasum -a 256 -c && git commit -m fix",
+    "git diff --diff-filter=A;rm -- && git commit -m fix",
+    "git log -n x && git commit -m fix",
+  ])("rejects unrecognised guards: %s", (command) => {
+    expect(classify(command)).toBeNull();
   });
 
   it("rejects request data that changes execution outside the command string", () => {
