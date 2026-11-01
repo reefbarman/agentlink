@@ -120,6 +120,10 @@ For other workspaces, run **AgentLink: Manage Index Storage** from the Command P
 - Close all other VS Code and AgentLink windows before either action, then confirm in the dialog. The current workspace and stores with live writer processes are blocked. This local maintenance command is not available through browser remote.
 - Normal indexing maintains existing search indexes rather than replacing every index after each change. Automatic pruning still retains recent versions for concurrent readers. Do not manually remove files inside a LanceDB table by age.
 
+## The extension host keeps crashing out of memory
+
+If a window's extension host restarts repeatedly (VS Code logs "crashed with code 5", or a JavaScript heap out-of-memory error), turn on `agentlink.diagnostics.heapProfiling` and reload the window. AgentLink then samples heap allocations and, each time heap use first passes 35%, 60% and 85% of the limit, writes a `.heapprofile` (open it in Chrome DevTools' Memory tab) plus a `.txt` summary of the top allocating functions to `~/.agentlink/diagnostics`. Reproduce the crash once, then share those files. Turn the setting off afterwards. Session history files are not changed by a crash, but chats created and not yet saved before it can be lost.
+
 ## A sandbox helper failed during a command
 
 - Read the `sandbox_helper_failed` result's failure category and launch evidence. `unknown` means AgentLink cannot establish whether the command started, not that retrying is safe.

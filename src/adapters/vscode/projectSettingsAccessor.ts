@@ -37,6 +37,7 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
 
 export const APPLICATION_SCOPED_AGENTLINK_SETTINGS = [
   "updates.automaticChecks",
+  "diagnostics.heapProfiling",
   "modeModelPreferences",
   "modeReasoningEffortPreferences",
   "modelCondenseThresholds",

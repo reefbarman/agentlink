@@ -84,6 +84,7 @@ import { beginSharedMemoryMigration } from "./storage/retrieval/sharedMemoryMigr
 import { migrateSharedMemoryStore } from "./storage/retrieval/sharedMemoryStoreMigration.js";
 import { cleanupLegacyCodeRetrievalStore } from "./storage/retrieval/legacyCodeRetrievalCleanup.js";
 import { prewarmLanceDbNativeModule } from "./storage/retrieval/lanceDbRuntime.js";
+import { HeapPressureProfiler } from "./integrations/HeapPressureProfiler.js";
 import { cleanupSupersededCodeIndexGenerations } from "./storage/retrieval/supersededCodeIndexGenerationCleanup.js";
 import { CODE_INDEX_STORAGE_GENERATION } from "./indexer/codeRetrievalIdentity.js";
 import { SkillCatalogRetrievalService } from "./core/catalog/SkillCatalogRetrievalService.js";
@@ -547,6 +548,19 @@ export async function activate(
 
   outputChannel = vscode.window.createOutputChannel("AgentLink");
   context.subscriptions.push(outputChannel);
+
+  if (getConfig<boolean>("diagnostics.heapProfiling")) {
+    const heapProfiler = new HeapPressureProfiler({
+      directory: path.join(os.homedir(), ".agentlink", "diagnostics"),
+      log,
+    });
+    context.subscriptions.push(heapProfiler);
+    void heapProfiler.start().catch((error: unknown) => {
+      log(
+        `[heap-profiler] could not start: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  }
 
   // macOS checks a freshly installed native addon on first load, which holds
   // the extension host for seconds with LanceDB's ~250 MB binary. Take that

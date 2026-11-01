@@ -419,6 +419,12 @@
           "default": 24,
           "description": "Maximum simultaneous model requests per provider across foreground sessions, background agents, maintenance work, and native web tools. When the limit is saturated, foreground requests queue visibly and take priority over background and maintenance work. Higher values improve parallel throughput but can increase provider rate-limit errors and usage costs."
         },
+        "agentlink.diagnostics.heapProfiling": {
+          "scope": "application",
+          "type": "boolean",
+          "default": false,
+          "description": "Diagnose extension host out-of-memory crashes. When on, AgentLink samples JavaScript heap allocations and writes a heap profile plus a top-allocators summary to ~/.agentlink/diagnostics each time heap use first passes 35%, 60% and 85% of the limit. Takes effect after a window reload. Leave off unless investigating a crash."
+        },
         "agentlink.disabledProviders": {
           "scope": "window",
           "type": "array",

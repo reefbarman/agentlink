@@ -115,6 +115,8 @@ For guided setup, example connection files, and Claude Code authentication throu
 
 ## Terminal, worktrees, misc
 
+- `diagnostics.heapProfiling` — off by default. Samples extension-host heap allocations and writes heap profiles to `~/.agentlink/diagnostics` as memory use rises, for diagnosing out-of-memory crashes. Takes effect after a window reload.
+
 - `terminal.enabled`, `terminal.nodePath` — AgentLink terminals (sandbox-backed on macOS; unsandboxed AgentLink Terminal on local glibc Linux)
 - `terminal.environmentPolicy` — sandbox command environment inheritance; the default inherits all host variables, including credential-like names, while helper-reserved variables remain host-controlled
 - `worktreeDirectorySuffix` — sibling worktree container naming for the manual `/worktree` flow

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- New `agentlink.diagnostics.heapProfiling` setting (off by default) for diagnosing extension host out-of-memory crashes. When on, AgentLink samples heap allocations and writes a heap profile plus a top-allocators summary to `~/.agentlink/diagnostics` each time heap use first passes 35%, 60% and 85% of the limit.
 - `write_file` accepts an optional `expected_content_hash`, which is the SHA-256 of the content the rewrite was based on (read_file's context-view `working_set.content_hash` or a previous edit's `post_edit_content_hash`). It is checked inside the write lock before review. If another agent or the user changed the file in the meantime, nothing is written and the result returns `content_hash_mismatch` with both hashes, so the change can be merged instead of silently overwritten.
 - A background review that stops early (blocked, interrupted or cancelled) no longer opens with "Review found no issues." when it returned no findings. Its partial result now says the review did not complete and is not a clean result, or how many issues were found before it stopped.
 - When a `compose` result is too large, `recovery.children` now lists child calls in the order the script made them, with a zero-based `call_index` and a short input summary. Previously a fast failure in a `toolAllSettled` batch was listed first and looked like the first call had failed.
