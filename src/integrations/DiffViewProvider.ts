@@ -23,6 +23,10 @@ import {
   documentMatchesTarget,
 } from "./editDurability.js";
 import { DIFF_VIEW_URI_SCHEME } from "./diffViewContentProvider.js";
+import {
+  isOrphanedAgentProposalBuffer,
+  recordAgentProposalBuffer,
+} from "./agentProposalBuffers.js";
 import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
 import { diffSnapshotHub } from "../browser-gateway/DiffSnapshotHub.js";
 import { randomUUID } from "crypto";
@@ -348,7 +352,14 @@ export class DiffViewProvider {
       if (
         existingDoc?.isDirty &&
         existingDoc.getText() !== this.originalContent &&
-        existingDoc.getText() !== newContent
+        existingDoc.getText() !== newContent &&
+        // An earlier AgentLink proposal left over unchanged disk text holds
+        // no user edits, so this review may replace it.
+        !isOrphanedAgentProposalBuffer(
+          this.absolutePath,
+          existingDoc.getText(),
+          this.originalContent,
+        )
       ) {
         throw new Error("File has divergent unsaved editor changes");
       }
@@ -447,6 +458,11 @@ export class DiffViewProvider {
       }
       throw new Error("Unable to apply proposed editor changes");
     }
+    recordAgentProposalBuffer(
+      this.absolutePath,
+      newContent,
+      this.originalContent,
+    );
     this.diagnosticSnapshot?.recordPostChangeDocumentVersion();
 
     // Scroll to the first change

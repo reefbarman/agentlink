@@ -179,6 +179,28 @@ afterEach(() => {
 });
 
 describe("handleGetContext", () => {
+  it("points a file VS Code cannot open at a streamed content read", async () => {
+    const { handleGetContext } = await import("./getContext.js");
+    const providers = makeProviders("/tmp/huge.dis", "huge.dis", "");
+    providers.documentProvider = {
+      async resolveDocument() {
+        throw new Error(
+          "Files above 50MB cannot be synchronized with extensions.",
+        );
+      },
+    };
+    const result = await handleGetContext(
+      { path: "huge.dis", offset: 900, limit: 20 },
+      "too-large",
+      providers,
+    );
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(getText(result))).toMatchObject({
+      status: "file_too_large_for_context_view",
+      next_read: { path: "huge.dis", view: "content", offset: 900, limit: 20 },
+    });
+  });
+
   it("bounds minified content and pages the same line without dedupe suppressing it", async () => {
     const dir = makeTempWorkspace();
     const filePath = path.join(dir, "messages.json");

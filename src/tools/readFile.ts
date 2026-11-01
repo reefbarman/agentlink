@@ -47,6 +47,11 @@ import {
   isStructuredConfigPath,
   redactStructuredSecrets,
 } from "../shared/structuredSecretRedaction.js";
+import {
+  READ_FILE_STREAM_THRESHOLD_BYTES,
+  READ_FILE_STREAMED_LINE_MAX_CHARS,
+  streamReadFileContentWindow,
+} from "./readFileStreaming.js";
 
 // --- Image support ---
 
@@ -738,11 +743,21 @@ async function handleReadFileImpl(
       };
     }
 
-    // Read file and stat in parallel
-    const [raw, stat] = await Promise.all([
-      fs.readFile(filePath, "utf-8"),
-      fs.stat(filePath),
-    ]);
+    const stat = await fs.stat(filePath);
+    // Stream a bounded window from large text files instead of loading them.
+    // Structured config keeps the whole-file path so secret redaction applies.
+    if (
+      stat.size > READ_FILE_STREAM_THRESHOLD_BYTES &&
+      !isStructuredConfigPath(filePath)
+    ) {
+      return await readLargeTextFile(
+        filePath,
+        params,
+        stat,
+        enrichmentProvider,
+      );
+    }
+    const raw = await fs.readFile(filePath, "utf-8");
 
     const structuredRedaction = isStructuredConfigPath(filePath)
       ? redactStructuredSecrets(filePath, raw)
@@ -918,6 +933,54 @@ async function handleReadFileImpl(
       release();
     }
   }
+}
+
+/**
+ * Content view for a text file too large to load whole (and above VS Code's
+ * document limit). Symbols are skipped because they need an open document.
+ */
+async function readLargeTextFile(
+  filePath: string,
+  params: ReadFileParams,
+  stat: { size: number; mtime: Date },
+  enrichmentProvider: ReadFileEnrichmentProvider,
+): Promise<ToolResult> {
+  const window = await streamReadFileContentWindow(filePath, params);
+  if (window.status === "error") {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: window.error, path: params.path }),
+        },
+      ],
+    };
+  }
+  const largeFile = {
+    streamed: true,
+    note: `File is ${(stat.size / 1024 / 1024).toFixed(1)} MB, so only the requested lines were read. Symbols are omitted, anchors match within a single line, and lines longer than ${READ_FILE_STREAMED_LINE_MAX_CHARS} characters are cut.`,
+  };
+  const result: Record<string, unknown> = {
+    total_lines: window.totalLines,
+    showing: window.status === "empty" ? "0-0" : window.showing,
+  };
+  if (window.status === "window") {
+    if (window.truncated) result.truncated = true;
+    if (window.anchorMatch) result.anchor_match = window.anchorMatch;
+    if (window.longLinesCut) result.long_lines_cut = window.longLinesCut;
+  }
+  result.size = stat.size;
+  result.modified = stat.mtime.toISOString();
+  result.large_file = largeFile;
+  const gitStatus = await enrichmentProvider.getGitStatus(filePath);
+  if (gitStatus) result.git_status = gitStatus;
+  const language = enrichmentProvider.detectLanguage(filePath);
+  if (language) result.language = language;
+  result.content = window.status === "window" ? window.numbered : "";
+  if (window.status === "empty") result.path = params.path;
+  return {
+    content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+  };
 }
 
 export async function handleReadFile(

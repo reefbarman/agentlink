@@ -90,6 +90,7 @@ describe("handleReadFile outside-workspace approval ordering", () => {
 
     const enoent = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
     readFileMock.mockRejectedValue(enoent);
+    statMock.mockRejectedValue(enoent);
 
     approveOutsideWorkspaceAccessMock.mockResolvedValue({
       approved: false,
@@ -133,6 +134,7 @@ describe("handleReadFile outside-workspace approval ordering", () => {
 
     const enoent = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
     readFileMock.mockRejectedValue(enoent);
+    statMock.mockRejectedValue(enoent);
 
     approveOutsideWorkspaceAccessMock.mockResolvedValue({ approved: true });
 
@@ -529,6 +531,7 @@ describe("handleReadFile outside-workspace approval ordering", () => {
 
     const enoent = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
     readFileMock.mockRejectedValue(enoent);
+    statMock.mockRejectedValue(enoent);
 
     const approvalManager = {
       isPathTrusted: vi.fn(() => true),

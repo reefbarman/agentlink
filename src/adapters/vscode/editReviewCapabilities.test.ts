@@ -12,6 +12,10 @@ import {
 } from "./editReviewCapabilities.js";
 
 import { DiffViewProvider } from "../../integrations/DiffViewProvider.js";
+import {
+  clearAgentProposalBuffers,
+  recordAgentProposalBuffer,
+} from "../../integrations/agentProposalBuffers.js";
 import type { CommitAndVerifyEditResult } from "../../integrations/editDurability.js";
 import type { MultiFileEditFile } from "../../core/capabilities/editReview.js";
 import { withFileLock } from "../../util/fileLock.js";
@@ -709,6 +713,91 @@ describe("createVscodeEditReviewProvider", () => {
       expect(applyEdit).toHaveBeenCalledOnce();
       expect(doc.save).toHaveBeenCalledOnce();
     } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "replaces an orphaned failed agent proposal over unchanged disk",
+      buffer: "<<<<<<< malformed agent proposal",
+      disk: "disk baseline",
+      expectRecovered: true,
+    },
+    {
+      name: "keeps a conflict once the user edited the orphaned proposal",
+      buffer: "<<<<<<< malformed agent proposal + user typing",
+      disk: "disk baseline",
+      expectRecovered: false,
+    },
+    {
+      name: "keeps a conflict once disk changed under the orphaned proposal",
+      buffer: "<<<<<<< malformed agent proposal",
+      disk: "disk changed elsewhere",
+      expectRecovered: false,
+    },
+  ])("$name", async ({ buffer, disk, expectRecovered }) => {
+    const tempDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
+    );
+    const filePath = path.join(tempDir, "file.ts");
+    fs.writeFileSync(filePath, disk, "utf-8");
+    // An earlier edit wrote this proposal into the buffer, then failed.
+    recordAgentProposalBuffer(
+      filePath,
+      "<<<<<<< malformed agent proposal",
+      "disk baseline",
+    );
+    let documentContent = buffer;
+    let dirty = true;
+    const doc = {
+      getText: vi.fn(() => documentContent),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { scheme: "file", fsPath: filePath },
+      get isDirty() {
+        return dirty;
+      },
+      save: vi.fn(async () => {
+        fs.writeFileSync(filePath, documentContent, "utf-8");
+        dirty = false;
+        return true;
+      }),
+    };
+    textDocuments.push(doc);
+    openTextDocument.mockResolvedValue(doc);
+    if (expectRecovered) {
+      applyEdit.mockImplementationOnce(async () => {
+        documentContent = "corrected content";
+        return true;
+      });
+    }
+
+    try {
+      const result = await createVscodeEditReviewProvider().reviewAndApply({
+        mode: "auto",
+        absolutePath: filePath,
+        relativePath: "file.ts",
+        content: "corrected content",
+        outsideWorkspace: false,
+        diagnosticDelay: 0,
+        sessionId: "session-1",
+      });
+
+      if (expectRecovered) {
+        expect(result).toMatchObject({
+          status: "accepted",
+          recovered_dirty_buffer: "buffer_replaced_failed_proposal",
+          finalContent: "corrected content",
+        });
+        expect(applyEdit).toHaveBeenCalledOnce();
+      } else {
+        expect(result).toMatchObject({ reason: "dirty_document_conflict" });
+        expect(applyEdit).not.toHaveBeenCalled();
+        expect(doc.save).not.toHaveBeenCalled();
+        expect(fs.readFileSync(filePath, "utf-8")).toBe(disk);
+      }
+    } finally {
+      clearAgentProposalBuffers();
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });

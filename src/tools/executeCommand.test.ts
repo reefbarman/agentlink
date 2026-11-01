@@ -7225,6 +7225,107 @@ describe("handleExecuteCommand", () => {
     },
   );
 
+  it("keeps reviewing a command's network requests after its tool call returns", async () => {
+    // Background commands outlive the execute_command call, whose abort
+    // signal fires when it returns; their later requests must still pass.
+    let networkCallback:
+      | ((request: unknown, signal: AbortSignal) => Promise<string>)
+      | undefined;
+    const prepareExecution = vi.fn(async (options, routeContext) => {
+      networkCallback = options.onManagedNetworkRequest;
+      return {
+        security: {
+          auditId: "audit-network-background",
+          route: "sandbox" as const,
+          executionSurface: "verified-sandbox" as const,
+          confinement: "verified-baseline" as const,
+          routeReason: "verified-local-macos" as const,
+          ...routeContext,
+          executionPolicy: "sandbox-baseline-v2" as const,
+          preparedAt: 100,
+        },
+        execute: async () => ({
+          exit_code: 0,
+          output: "",
+          output_captured: true,
+          terminal_id: "sandbox-network-background",
+          command_sent: true,
+          process_launched: true,
+          backgrounded: true,
+          is_running: true,
+          execution_mode: "sandbox_pty" as const,
+        }),
+        dispose: vi.fn(),
+      };
+    });
+    let sessionActive = true;
+    const toolCall = new AbortController();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    await handleExecuteCommand(
+      {
+        command: "gh run watch 1 --repo owner/repo",
+        background: true,
+        sandbox_permissions: "require_managed_network",
+        reason: "Watch a CI run.",
+      },
+      {
+        isCommandApproved: () => true,
+        findMatchingCommandRule: vi.fn(),
+        evaluateNetworkRules: () => ({
+          key: "https://api.github.com:443",
+          decision: "allow" as const,
+          matches: [],
+        }),
+      } as never,
+      {
+        isRecentlyApproved: () => true,
+        enqueueCommandApproval: vi.fn(),
+        enqueueNetworkApproval: vi.fn(),
+      } as never,
+      "session-network-background",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+        isSessionActive: () => sessionActive,
+        toolAbortSignal: toolCall.signal,
+      },
+    );
+    toolCall.abort();
+    const request = {
+      requestId: "network-background-1",
+      sessionId: "session-network-background",
+      auditId: "audit-network-background",
+      terminalId: "sandbox-network-background",
+      commandId: "command-network-background",
+      generation: 1,
+      command: "gh run watch 1 --repo owner/repo",
+      cwd: "/workspace",
+      host: "api.github.com",
+      protocol: "https" as const,
+      port: 443,
+      address: "140.82.112.6",
+      family: 4 as const,
+      dnsAnswers: [{ address: "140.82.112.6", family: 4 as const }],
+      destinationClass: "public" as const,
+    };
+
+    expect(networkCallback).toBeDefined();
+    await expect(
+      networkCallback!(request, new AbortController().signal),
+    ).resolves.toBe("allow-once");
+    // Ending the command's own lifetime, or the session, still rejects.
+    const ended = new AbortController();
+    ended.abort();
+    await expect(networkCallback!(request, ended.signal)).resolves.toBe(
+      "reject",
+    );
+    sessionActive = false;
+    await expect(
+      networkCallback!(request, new AbortController().signal),
+    ).resolves.toBe("reject");
+  });
+
   it("rejects a forbidden managed-network destination without review or UI", async () => {
     const decision = vi.fn();
     const prepareExecution = vi.fn(async (options, routeContext) => ({

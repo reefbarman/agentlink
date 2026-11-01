@@ -52,6 +52,10 @@ import {
   applyWorkspaceEditAndSaveWithoutFormatting,
 } from "./workspaceEditOrchestration.js";
 import type { CommitAndVerifyEditResult } from "../../integrations/editDurability.js";
+import {
+  isOrphanedAgentProposalBuffer,
+  recordAgentProposalBuffer,
+} from "../../integrations/agentProposalBuffers.js";
 import { approveOutsideWorkspaceAccess } from "../../tools/pathAccessUI.js";
 import { getConfiguredMasterBypass } from "./agentLinkConfig.js";
 import { canonicalizePath, getRelativePath } from "../../util/paths.js";
@@ -352,6 +356,7 @@ type DirtyBufferRecovery = NonNullable<
 
 function reconcileDirtyDocument(params: {
   document: vscode.TextDocument | undefined;
+  absolutePath: string;
   baselineContent: string;
   proposedContent: string;
 }): DirtyBufferRecovery | undefined {
@@ -362,6 +367,15 @@ function reconcileDirtyDocument(params: {
   }
   if (bufferContent === params.baselineContent) {
     return "buffer_matched_disk";
+  }
+  if (
+    isOrphanedAgentProposalBuffer(
+      params.absolutePath,
+      bufferContent,
+      params.baselineContent,
+    )
+  ) {
+    return "buffer_replaced_failed_proposal";
   }
   return undefined;
 }
@@ -452,6 +466,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
             );
             const recoveredDirtyBuffer = reconcileDirtyDocument({
               document: doc,
+              absolutePath: params.absolutePath,
               baselineContent,
               proposedContent: content,
             });
@@ -523,6 +538,11 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                   })),
                 };
               }
+              recordAgentProposalBuffer(
+                params.absolutePath,
+                content,
+                baselineContent,
+              );
             }
             snap.recordPostChangeDocumentVersion();
             const commit = await commitAndVerifyEdit({
@@ -581,6 +601,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
         let content = prepared.content;
         let recoveredDirtyBuffer = reconcileDirtyDocument({
           document: existingDocument,
+          absolutePath: params.absolutePath,
           baselineContent: baseline.content,
           proposedContent: content,
         });
@@ -619,6 +640,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
             };
             recoveredDirtyBuffer = reconcileDirtyDocument({
               document: existingDocument,
+              absolutePath: params.absolutePath,
               baselineContent: baseline.content,
               proposedContent: content,
             });
@@ -700,6 +722,11 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                       })),
                     };
                   }
+                  recordAgentProposalBuffer(
+                    params.absolutePath,
+                    content,
+                    baseline.content,
+                  );
                 }
                 snap.recordPostChangeDocumentVersion();
                 const commit = await commitAndVerifyEdit({

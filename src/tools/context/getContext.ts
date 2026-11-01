@@ -238,8 +238,36 @@ export async function handleGetContext(
       const { error, ...details } = payload;
       return errorResult(String(error), details);
     }
+    if (isDocumentTooLargeError(err)) {
+      // VS Code cannot open the file as a document; the content view streams
+      // the requested lines from disk instead.
+      return errorResult(
+        "This file is too large for the context view. Read the same lines with the content view, which streams them from disk.",
+        {
+          path: params.path,
+          status: "file_too_large_for_context_view",
+          next_read: {
+            path: params.path,
+            view: "content",
+            offset: Math.max(1, Math.trunc(params.offset ?? 1)),
+            limit: Math.min(
+              Math.max(1, Math.trunc(params.limit ?? DEFAULT_LIMIT)),
+              MAX_LIMIT,
+            ),
+          },
+        },
+      );
+    }
     return handleToolError(err, { path: params.path });
   }
+}
+
+/** VS Code refuses documents above its extension synchronization limit. */
+function isDocumentTooLargeError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.message.includes("cannot be synchronized with extensions")
+  );
 }
 
 function boundSymbolOutline(

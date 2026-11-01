@@ -206,6 +206,12 @@ export interface ExecuteCommandProviders {
   retainedCommandReviewDenials?: RetainedCommandReviewDenials;
   isSessionActive?: (sessionId: string) => boolean;
   toolAbortSignal?: AbortSignal;
+  /**
+   * Internal: follows toolAbortSignal only while the execute_command call
+   * runs, so a command's later network requests are not rejected by the
+   * routine abort when the call returns.
+   */
+  networkReviewAbortSignal?: AbortSignal;
   getUserObjective?: (sessionId: string) => string | undefined;
   getReviewContext?: (sessionId: string) => CommandReviewContextEntry[];
   getReviewContextWithMetadata?: (
@@ -2460,15 +2466,30 @@ export async function handleExecuteCommand(
     decisions: [],
     omittedCount: 0,
   };
-  const result = await executeCommandWithAudit(
-    params,
-    approvalManager,
-    approvalPanel,
-    sessionId,
-    trackerCtx,
-    providers,
-    authorizationAudit,
-  );
+  // The engine aborts a tool call's signal when the call returns, which for
+  // a background command is right after launch. Network review must still
+  // honour a real cancellation while the call runs, but not that routine
+  // end-of-call abort, so it watches a signal that stops following the tool
+  // signal once this handler returns.
+  const toolSignal = providers.toolAbortSignal;
+  const callScope = new AbortController();
+  const forwardAbort = () => callScope.abort(toolSignal?.reason);
+  if (toolSignal?.aborted) callScope.abort(toolSignal.reason);
+  else toolSignal?.addEventListener("abort", forwardAbort, { once: true });
+  let result: ToolResult;
+  try {
+    result = await executeCommandWithAudit(
+      params,
+      approvalManager,
+      approvalPanel,
+      sessionId,
+      trackerCtx,
+      { ...providers, networkReviewAbortSignal: callScope.signal },
+      authorizationAudit,
+    );
+  } finally {
+    toolSignal?.removeEventListener("abort", forwardAbort);
+  }
   if (authorizationAudit.decisions.length || authorizationAudit.omittedCount) {
     result.uiMeta = {
       ...result.uiMeta,
@@ -2932,7 +2953,12 @@ async function executeCommandWithAudit(
                     signal,
                     approvalManager,
                     approvalPanel,
-                    providers,
+                    // `signal` follows the command's own lifetime; the tool
+                    // call only cancels review while the call is running.
+                    {
+                      ...providers,
+                      toolAbortSignal: providers.networkReviewAbortSignal,
+                    },
                     approvalMode,
                     authorizationAudit,
                   );
