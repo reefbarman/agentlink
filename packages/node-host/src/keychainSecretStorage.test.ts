@@ -13,7 +13,7 @@ import {
   LinuxCredentialStoreUnavailableError,
   createKeychainSecretStorage,
 } from "./keychainSecretStorage.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createCodexOAuthRuntime } from "./codexOAuthRuntime.js";
 import { spawnSync } from "node:child_process";
@@ -65,6 +65,8 @@ const hostPlatform = process.platform;
 function onMacOS() {
   Object.defineProperty(process, "platform", { value: "darwin" });
 }
+
+beforeEach(onMacOS);
 
 afterEach(async () => {
   Object.defineProperty(process, "platform", { value: hostPlatform });

@@ -54,7 +54,12 @@ function sha256(value: string): string {
 
 function normalizePrompt(value: string): string {
   return value
-    .replaceAll(repoRoot, "<repo>")
+    .replaceAll(repoRoot, (match, offset, source) => {
+      // A short checkout path such as /work must not rewrite literal examples
+      // rooted at /workspace, which would make the baseline host-dependent.
+      const next = source[offset + match.length];
+      return next && /[\w.-]/.test(next) ? match : "<repo>";
+    })
     .replaceAll(isolatedHome, "<home>")
     .replace(/^[-] Git branch:.*$/gm, "- Git branch: <branch>")
     .replace(/^[-] Git status:.*$/gm, "- Git status: <status>")
@@ -320,6 +325,12 @@ afterAll(() => {
 });
 
 describe("unified context Stage 0 baselines", () => {
+  it("normalizes checkout paths without rewriting paths sharing their prefix", () => {
+    expect(
+      normalizePrompt(`${repoRoot}/src\n${repoRoot}\n${repoRoot}space/example`),
+    ).toBe(`<repo>/src\n<repo>\n${repoRoot}space/example`);
+  });
+
   it("validates versioned acceptance, disposition, skill, retrieval, and memory fixture contracts", () => {
     const acceptance = readJson<{
       schemaVersion: number;

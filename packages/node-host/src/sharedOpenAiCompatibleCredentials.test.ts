@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSharedOpenAiCompatibleCredentialStore,
   openAiCompatibleApiKeyAccount,
@@ -13,6 +13,11 @@ import { AGENTLINK_SHARED_KEYCHAIN_SERVICE } from "./keychainSecretStorage.js";
 const values = new Map<string, string>();
 const entries: Array<{ service: string; account: string }> = [];
 const roots: string[] = [];
+const hostPlatform = process.platform;
+
+beforeEach(() => {
+  Object.defineProperty(process, "platform", { value: "darwin" });
+});
 
 vi.mock("@napi-rs/keyring", () => ({
   AsyncEntry: class {
@@ -38,6 +43,7 @@ vi.mock("@napi-rs/keyring", () => ({
 }));
 
 afterEach(async () => {
+  Object.defineProperty(process, "platform", { value: hostPlatform });
   values.clear();
   entries.splice(0);
   await Promise.all(

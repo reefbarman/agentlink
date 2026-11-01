@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   AGENTLINK_SHARED_KEYCHAIN_SERVICE,
@@ -35,6 +35,11 @@ vi.mock("@napi-rs/keyring", () => ({
 }));
 
 const temporaryRoots: string[] = [];
+const hostPlatform = process.platform;
+
+beforeEach(() => {
+  Object.defineProperty(process, "platform", { value: "darwin" });
+});
 
 function credentials(accountId: string, token: string): CodexCredentials {
   return {
@@ -66,6 +71,7 @@ const request = {
 };
 
 afterEach(async () => {
+  Object.defineProperty(process, "platform", { value: hostPlatform });
   values.clear();
   await Promise.all(
     temporaryRoots

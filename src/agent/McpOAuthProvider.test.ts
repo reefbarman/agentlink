@@ -296,7 +296,16 @@ describe("McpOAuthProvider cancellation", () => {
       name: "AbortError",
     });
     await vi.waitFor(() => expect(server.listenerCount("request")).toBe(1));
-    const response = await fetch(`${provider.redirectUrl}?code=test-code`);
+    // localhost can resolve to IPv4 for fetch but IPv6 for listen() in a
+    // headless Linux container. Exercise cancellation on the bound listener.
+    const address = server.address();
+    if (!address || typeof address === "string")
+      throw new Error("callback_not_listening");
+    const callback = new URL(provider.redirectUrl);
+    callback.hostname =
+      address.family === "IPv6" ? `[${address.address}]` : address.address;
+    callback.searchParams.set("code", "test-code");
+    const response = await fetch(callback);
     await response.text();
     await vi.waitFor(() => expect(snapshotSpy).toHaveBeenCalledOnce());
     provider.stop();

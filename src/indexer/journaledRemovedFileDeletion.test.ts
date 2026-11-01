@@ -11,6 +11,8 @@ import {
 
 import { executeJournaledRemovedFileDeletes } from "./journaledRemovedFileDeletion.js";
 
+vi.mock("fs", { spy: true });
+
 function removal(file: string, pointIds: string[]) {
   return {
     operationId: `operation-${file}`,
@@ -186,13 +188,24 @@ describe("journaled removed-file deletion", () => {
     });
     const checkpointCompleted = vi.fn();
 
-    if (process.platform === "win32") return;
-    fs.chmodSync(directory, 0o500);
+    // chmod does not deny writes when the Linux preflight container runs as
+    // root. Inject the failed atomic replacement instead, on every platform.
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation(() => {
+      throw Object.assign(new Error("journal cleanup denied"), {
+        code: "EACCES",
+      });
+    });
     try {
-      await expect(execute({ checkpointCompleted })).rejects.toThrow();
+      await expect(execute({ checkpointCompleted })).rejects.toThrow(
+        "journal cleanup denied",
+      );
       expect(checkpointCompleted).toHaveBeenCalledWith(["src/removed.ts"]);
+      expect(loadFileIndexJournal(journalPath)).toMatchObject({
+        status: "valid",
+        journal: { operations: [{ file: "src/removed.ts" }] },
+      });
     } finally {
-      fs.chmodSync(directory, 0o700);
+      rename.mockRestore();
     }
   });
 
