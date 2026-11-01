@@ -181,6 +181,11 @@ export interface CoreModelCapabilities {
   supportsCaching: boolean;
   supportsImages: boolean;
   supportsToolUse: boolean;
+  /**
+   * PDF document input is accepted. Only consulted by translators whose wire
+   * format needs an explicit opt-in (OpenAI-compatible Chat Completions).
+   */
+  supportsDocuments?: boolean;
   /** Provider-native constrained output supported by this exact model/endpoint. */
   structuredOutput?: "json_schema";
   /** Sampling temperature is supported on both complete and stream operations. */

@@ -20,7 +20,7 @@ This is separate from OpenAI-compatible connections such as Meridian. Those conn
 2. Choose **OpenRouter** or a generic compatible endpoint. Enter its API root, for example `https://openrouter.ai/api/v1` or `http://127.0.0.1:1234/v1`. Do not include `/chat/completions`: AgentLink appends it.
 3. Select or create a named API-key credential. Choose no authentication only when the server permits it, such as a loopback-only local server.
 4. Let AgentLink query `/models`, then select a model. If discovery is unavailable, enter the server's exact model ID manually.
-5. Review the context and output limits, tool calling, thinking, and image support. Missing catalog metadata uses editable conservative defaults, not verified capabilities. Coding-agent use requires working function/tool calls, not just text completion.
+5. Review the context and output limits, tool calling, thinking, image, and PDF document support. Missing catalog metadata uses editable conservative defaults, not verified capabilities. Coding-agent use requires working function/tool calls, not just text completion.
 6. Save, select the model with `/model`, and send a short request. A saved credential does not establish connectivity, model entitlement, or available quota.
 
 The wizard is **add-only**: each run creates one model backed by one connection. To edit or remove models, share one endpoint across multiple models, or configure advanced fields, edit `~/.agentlink/openai-compatible.json`.
@@ -62,6 +62,7 @@ The file uses this envelope. If it already exists, merge entries into its `conne
 - Omit `authKey` for a no-auth server. Do not add a dummy key merely because another client's example requires one.
 - `contextWindow` and `maxOutputTokens` describe the served model's limits. VS Code agent responses default to 8,192 tokens; optional model-level `agentMaxTokens` overrides that request size and must not exceed `maxOutputTokens`.
 - Declare thinking only when supported. Generic connections send no effort field by default. If the endpoint documents one, set connection-level `reasoningEffortMode` to `reasoning_effort`, `reasoning.effort`, or `output_config.effort`, and declare the model's supported `reasoningEfforts` and `defaultReasoningEffort`. These are wire contracts, not interchangeable spellings.
+- Optional model-level `supportsDocuments: true` sends PDF attachments (and PDFs returned by tools) as standard Chat Completions `file` inputs. Enable it only when the endpoint accepts them. When it is off, AgentLink replaces each PDF with a short note to the model instead of failing the request. Text, Markdown, CSV and JSON documents are always sent as text. Discovery sets it from OpenRouter's `file` input modality or a Meridian-style `capabilities.pdf_input` entry.
 - Optional model-level `modelFamily: "anthropic"` or `"openai"` selects vendor-appropriate prompt guidance. It does not change the endpoint, credential, or API format.
 - Optional model-level `promptProfile: "compatibility"` or `"reasoning"` selects the fuller or compact instruction profile. Omit it for automatic selection. This is local AgentLink configuration, not an upstream API parameter; invalid values are rejected.
 
@@ -116,7 +117,7 @@ Run **AgentLink: Configure OpenAI-compatible Model** and choose a generic endpoi
 - Authentication: none for the default unprotected loopback server, or a named credential containing your `MERIDIAN_API_KEY` when enabled.
 - Model: choose an ID from Meridian's `/v1/models` response. Review the served context window and output limit, especially if extended context requires extra usage or account access.
 
-After saving, edit that connection in `~/.agentlink/openai-compatible.json` to enable `meridianSessionAffinity`, and set `modelFamily: "anthropic"` on its Claude model. The following is a complete no-auth example for a server offering `claude-sonnet-4-6`; use your catalog's model and limits if they differ. Thinking and images are conservatively disabled here and can be enabled after verifying your server's support.
+After saving, edit that connection in `~/.agentlink/openai-compatible.json` to enable `meridianSessionAffinity`, and set `modelFamily: "anthropic"` on its Claude model. The following is a complete no-auth example for a server offering `claude-sonnet-4-6`; use your catalog's model and limits if they differ. Thinking, images and PDF documents are conservatively disabled here and can be enabled after verifying your server's support. PDF input through Meridian's Chat Completions endpoint needs a Meridian version that maps `file` parts to Claude documents; older versions drop them.
 
 ```json
 {

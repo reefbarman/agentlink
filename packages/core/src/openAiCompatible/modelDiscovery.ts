@@ -34,6 +34,8 @@ export interface DiscoveredOpenAiCompatibleModel {
   supportsToolUse: boolean;
   supportsThinking: boolean;
   supportsImages: boolean;
+  /** PDF input through Chat Completions `file` parts. */
+  supportsDocuments: boolean;
   reasoningEfforts?: CoreReasoningEffort[];
   defaultReasoningEffort?: CoreReasoningEffort;
   provenance: {
@@ -43,6 +45,7 @@ export interface DiscoveredOpenAiCompatibleModel {
     supportsToolUse: OpenAiCompatibleDiscoveryProvenance;
     supportsThinking: OpenAiCompatibleDiscoveryProvenance;
     supportsImages: OpenAiCompatibleDiscoveryProvenance;
+    supportsDocuments: OpenAiCompatibleDiscoveryProvenance;
     reasoningEfforts?: OpenAiCompatibleDiscoveryProvenance;
     defaultReasoningEffort?: OpenAiCompatibleDiscoveryProvenance;
   };
@@ -216,8 +219,9 @@ function parseOpenRouterModel(
   const defaultReasoningEffort = supportsThinking
     ? reasoningEfforts.find((effort) => effort === reasoning?.default_effort)
     : undefined;
-  const supportsImages =
-    stringArray(architecture?.input_modalities)?.includes("image") ?? false;
+  const inputModalities = stringArray(architecture?.input_modalities);
+  const supportsImages = inputModalities?.includes("image") ?? false;
+  const supportsDocuments = inputModalities?.includes("file") ?? false;
   const discoveredDisplayName = boundedString(
     value.name,
     MAX_DISPLAY_NAME_LENGTH,
@@ -231,6 +235,7 @@ function parseOpenRouterModel(
     supportsToolUse,
     supportsThinking,
     supportsImages,
+    supportsDocuments,
     ...(supportsThinking ? { reasoningEfforts } : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     provenance: {
@@ -240,6 +245,7 @@ function parseOpenRouterModel(
       supportsToolUse: "discovered",
       supportsThinking: supportsThinking ? "discovered" : "default",
       supportsImages: "discovered",
+      supportsDocuments: "discovered",
       ...(supportsThinking ? { reasoningEfforts: "discovered" } : {}),
       ...(defaultReasoningEffort
         ? { defaultReasoningEffort: "discovered" }
@@ -269,6 +275,9 @@ function parseGenericModel(
     : undefined;
   const discoveredThinking =
     typeof thinking?.supported === "boolean" ? thinking.supported : undefined;
+  // Anthropic-style capability objects, as served by Meridian's /v1/models.
+  const discoveredImages = supportedCapability(capabilities?.image_input);
+  const discoveredDocuments = supportedCapability(capabilities?.pdf_input);
   const candidateMaxOutput = positiveInteger(value.max_completion_tokens);
   const discoveredMaxOutput =
     candidateMaxOutput && candidateMaxOutput <= contextWindow
@@ -283,7 +292,8 @@ function parseGenericModel(
       discoveredMaxOutput ?? Math.min(DEFAULT_MAX_OUTPUT_TOKENS, contextWindow),
     supportsToolUse: false,
     supportsThinking: discoveredThinking ?? false,
-    supportsImages: false,
+    supportsImages: discoveredImages ?? false,
+    supportsDocuments: discoveredDocuments ?? false,
     provenance: {
       displayName: displayName ? "discovered" : "default",
       contextWindow: discoveredContext ? "discovered" : "default",
@@ -291,9 +301,17 @@ function parseGenericModel(
       supportsToolUse: "default",
       supportsThinking:
         discoveredThinking === undefined ? "default" : "discovered",
-      supportsImages: "default",
+      supportsImages: discoveredImages === undefined ? "default" : "discovered",
+      supportsDocuments:
+        discoveredDocuments === undefined ? "default" : "discovered",
     },
   };
+}
+
+function supportedCapability(value: unknown): boolean | undefined {
+  return isRecord(value) && typeof value.supported === "boolean"
+    ? value.supported
+    : undefined;
 }
 
 async function readBoundedJson(

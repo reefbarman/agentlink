@@ -324,19 +324,20 @@ Connection fields:
 
 Model fields:
 
-| Field                        | Required | Behavior                                                                                                     |
-| ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------ |
-| `id`, `model`, `displayName` | yes      | Stable local ID, opaque wire ID, and selector label                                                          |
-| `contextWindow`              | yes      | Declared positive context window used for budgeting                                                          |
-| `maxInputTokens`             | no       | Optional stricter positive input limit                                                                       |
-| `maxOutputTokens`            | yes      | Declared positive provider output limit                                                                      |
-| `agentMaxTokens`             | no       | Built-in VS Code agent response limit (positive, at most `maxOutputTokens`); defaults to 8,192               |
-| `supportsToolUse`            | yes      | Controls function definitions and automatic agent/background eligibility; `false` models show **Chat only**  |
-| `supportsThinking`           | no       | Enables reasoning UI; defaults to `false`                                                                    |
-| `reasoningEfforts`           | no       | Allowed AgentLink effort values when thinking is enabled                                                     |
-| `defaultReasoningEffort`     | no       | Must be included in `reasoningEfforts`                                                                       |
-| `supportsImages`             | no       | Enables standard `image_url` data-URI input; defaults to `false`                                             |
-| `modelFamily`                | no       | Prompt behavior for a proxy-hosted vendor model: `anthropic` or `openai`; does not change API transport/auth |
+| Field                        | Required | Behavior                                                                                                       |
+| ---------------------------- | -------- | -------------------------------------------------------------------------------------------------------------- |
+| `id`, `model`, `displayName` | yes      | Stable local ID, opaque wire ID, and selector label                                                            |
+| `contextWindow`              | yes      | Declared positive context window used for budgeting                                                            |
+| `maxInputTokens`             | no       | Optional stricter positive input limit                                                                         |
+| `maxOutputTokens`            | yes      | Declared positive provider output limit                                                                        |
+| `agentMaxTokens`             | no       | Built-in VS Code agent response limit (positive, at most `maxOutputTokens`); defaults to 8,192                 |
+| `supportsToolUse`            | yes      | Controls function definitions and automatic agent/background eligibility; `false` models show **Chat only**    |
+| `supportsThinking`           | no       | Enables reasoning UI; defaults to `false`                                                                      |
+| `reasoningEfforts`           | no       | Allowed AgentLink effort values when thinking is enabled                                                       |
+| `defaultReasoningEffort`     | no       | Must be included in `reasoningEfforts`                                                                         |
+| `supportsImages`             | no       | Enables standard `image_url` data-URI input; defaults to `false`                                               |
+| `supportsDocuments`          | no       | Sends PDFs as standard `file` inputs; when `false` (default) PDFs become a note and text documents are inlined |
+| `modelFamily`                | no       | Prompt behavior for a proxy-hosted vendor model: `anthropic` or `openai`; does not change API transport/auth   |
 
 Security and compatibility notes:
 

@@ -51,7 +51,7 @@ interface ModelPick extends vscode.QuickPickItem {
 }
 
 interface CapabilityPick extends vscode.QuickPickItem {
-  capability: "tools" | "thinking" | "images";
+  capability: "tools" | "thinking" | "images" | "documents";
 }
 
 interface ReasoningPick extends vscode.QuickPickItem {
@@ -186,6 +186,7 @@ export async function configureOpenAiCompatibleModel(
     supportsToolUse: discovered.supportsToolUse,
     supportsThinking: discovered.supportsThinking,
     supportsImages: discovered.supportsImages,
+    supportsDocuments: discovered.supportsDocuments,
     ...(discovered.reasoningEfforts
       ? { reasoningEfforts: discovered.reasoningEfforts }
       : {}),
@@ -503,6 +504,7 @@ async function enterManualModel(): Promise<
     supportsToolUse: false,
     supportsThinking: false,
     supportsImages: false,
+    supportsDocuments: false,
     provenance: {
       displayName: "default",
       contextWindow: "default",
@@ -510,6 +512,7 @@ async function enterManualModel(): Promise<
       supportsToolUse: "default",
       supportsThinking: "default",
       supportsImages: "default",
+      supportsDocuments: "default",
     },
   };
 }
@@ -567,6 +570,7 @@ function formatDraftSummary(
     draft.supportsToolUse ? "tools" : "chat only",
     draft.supportsThinking ? "reasoning" : undefined,
     draft.supportsImages ? "images" : undefined,
+    draft.supportsDocuments ? "PDF documents" : undefined,
   ].filter(Boolean);
   return [
     `${draft.displayName} (${draft.model})`,
@@ -616,6 +620,12 @@ async function editModelDraft(
       capability: "images",
       picked: draft.supportsImages,
     },
+    {
+      label: "PDF document input",
+      description: "Send PDFs as standard file inputs",
+      capability: "documents",
+      picked: draft.supportsDocuments,
+    },
   ];
   const capabilities = await vscode.window.showQuickPick(capabilityItems, {
     title: "Model capabilities",
@@ -663,6 +673,7 @@ async function editModelDraft(
     supportsToolUse: selected.has("tools"),
     supportsThinking: selected.has("thinking"),
     supportsImages: selected.has("images"),
+    supportsDocuments: selected.has("documents"),
     ...(reasoningEfforts ? { reasoningEfforts } : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(!reasoningEfforts
@@ -675,6 +686,7 @@ async function editModelDraft(
       supportsToolUse: "default",
       supportsThinking: "default",
       supportsImages: "default",
+      supportsDocuments: "default",
       ...(reasoningEfforts
         ? {
             reasoningEfforts: "default",

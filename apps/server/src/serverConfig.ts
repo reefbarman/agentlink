@@ -333,6 +333,7 @@ export interface AssistantServerCompatibleModelConfig {
   readonly reasoningEfforts?: readonly CoreReasoningEffort[];
   readonly defaultReasoningEffort?: CoreReasoningEffort;
   readonly supportsImages?: boolean;
+  readonly supportsDocuments?: boolean;
   readonly promptProfile?: "compatibility" | "reasoning";
 }
 
@@ -1054,6 +1055,7 @@ function compatibleModel(
     "reasoningEfforts",
     "defaultReasoningEffort",
     "supportsImages",
+    "supportsDocuments",
     "promptProfile",
   ]);
   const contextWindow = positiveInteger(
@@ -1075,6 +1077,7 @@ function compatibleModel(
     "supportsToolUse",
     "supportsThinking",
     "supportsImages",
+    "supportsDocuments",
   ] as const) {
     if (item[key] !== undefined && typeof item[key] !== "boolean") {
       throw new Error(`${label}.${key} must be a boolean`);
@@ -1128,6 +1131,7 @@ function compatibleModel(
             item.defaultReasoningEffort as CoreReasoningEffort,
         }),
     ...(item.supportsImages === true ? { supportsImages: true } : {}),
+    ...(item.supportsDocuments === true ? { supportsDocuments: true } : {}),
     ...(item.promptProfile === undefined
       ? {}
       : {

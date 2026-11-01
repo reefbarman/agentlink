@@ -26,7 +26,7 @@ describe("discoverOpenAiCompatibleModels", () => {
               name: "MoonshotAI: Kimi K3",
               context_length: 1_048_576,
               architecture: {
-                input_modalities: ["text", "image"],
+                input_modalities: ["text", "image", "file"],
                 output_modalities: ["text"],
               },
               top_provider: {
@@ -73,6 +73,7 @@ describe("discoverOpenAiCompatibleModels", () => {
         supportsToolUse: true,
         supportsThinking: true,
         supportsImages: true,
+        supportsDocuments: true,
         reasoningEfforts: ["max", "high", "low"],
         defaultReasoningEffort: "max",
         provenance: {
@@ -82,6 +83,7 @@ describe("discoverOpenAiCompatibleModels", () => {
           supportsToolUse: "discovered",
           supportsThinking: "discovered",
           supportsImages: "discovered",
+          supportsDocuments: "discovered",
           reasoningEfforts: "discovered",
           defaultReasoningEffort: "discovered",
         },
@@ -117,6 +119,7 @@ describe("discoverOpenAiCompatibleModels", () => {
       supportsToolUse: false,
       supportsThinking: false,
       supportsImages: false,
+      supportsDocuments: false,
       provenance: {
         displayName: "default",
         contextWindow: "discovered",
@@ -124,6 +127,7 @@ describe("discoverOpenAiCompatibleModels", () => {
         supportsToolUse: "discovered",
         supportsThinking: "default",
         supportsImages: "discovered",
+        supportsDocuments: "discovered",
       },
     });
     expect(models[0]).not.toHaveProperty("reasoningEfforts");
@@ -158,6 +162,7 @@ describe("discoverOpenAiCompatibleModels", () => {
         supportsToolUse: false,
         supportsThinking: false,
         supportsImages: false,
+        supportsDocuments: false,
         provenance: {
           displayName: "discovered",
           contextWindow: "discovered",
@@ -165,6 +170,7 @@ describe("discoverOpenAiCompatibleModels", () => {
           supportsToolUse: "default",
           supportsThinking: "default",
           supportsImages: "default",
+          supportsDocuments: "default",
         },
       },
       {
@@ -175,6 +181,7 @@ describe("discoverOpenAiCompatibleModels", () => {
         supportsToolUse: false,
         supportsThinking: false,
         supportsImages: false,
+        supportsDocuments: false,
         provenance: {
           displayName: "default",
           contextWindow: "default",
@@ -182,6 +189,7 @@ describe("discoverOpenAiCompatibleModels", () => {
           supportsToolUse: "default",
           supportsThinking: "default",
           supportsImages: "default",
+          supportsDocuments: "default",
         },
       },
     ]);
@@ -210,6 +218,8 @@ describe("discoverOpenAiCompatibleModels", () => {
                     enabled: { supported: false },
                   },
                 },
+                image_input: { supported: true },
+                pdf_input: { supported: true },
               },
             },
             {
@@ -230,14 +240,16 @@ describe("discoverOpenAiCompatibleModels", () => {
         maxOutputTokens: 4_096,
         supportsToolUse: false,
         supportsThinking: true,
-        supportsImages: false,
+        supportsImages: true,
+        supportsDocuments: true,
         provenance: {
           displayName: "discovered",
           contextWindow: "discovered",
           maxOutputTokens: "default",
           supportsToolUse: "default",
           supportsThinking: "discovered",
-          supportsImages: "default",
+          supportsImages: "discovered",
+          supportsDocuments: "discovered",
         },
       },
       expect.objectContaining({
@@ -245,6 +257,8 @@ describe("discoverOpenAiCompatibleModels", () => {
         displayName: "Claude Haiku 4.5",
         contextWindow: 200_000,
         supportsThinking: false,
+        supportsImages: false,
+        supportsDocuments: false,
         provenance: expect.objectContaining({
           supportsThinking: "discovered",
         }),

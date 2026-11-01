@@ -23,6 +23,18 @@ const capabilities: CoreModelCapabilities = {
   defaultReasoningEffort: "medium",
 };
 
+function pdf(title: string, data: string) {
+  return {
+    type: "document" as const,
+    title,
+    source: {
+      type: "base64" as const,
+      media_type: "application/pdf" as const,
+      data,
+    },
+  };
+}
+
 function model(
   overrides: Partial<CoreModelCapabilities> = {},
 ): OpenAiCompatibleRuntimeModel {
@@ -292,7 +304,7 @@ describe("translateOpenAiCompatibleMessages", () => {
         role: "tool",
         tool_call_id: "call_1",
         content:
-          "result\n[Image attached in the following user message]\n[Document omitted from tool result]",
+          'result\n[Image attached in the following user message]\n[PDF document "untitled" omitted: the selected model does not accept PDF input through this OpenAI-compatible connection]',
       },
       {
         role: "user",
@@ -408,7 +420,7 @@ describe("translateOpenAiCompatibleMessages", () => {
     ]);
   });
 
-  it("rejects unsupported user images and documents clearly", () => {
+  it("rejects unsupported user images clearly", () => {
     expect(() =>
       translateOpenAiCompatibleMessages({
         providerId: "openai-compatible:test",
@@ -430,28 +442,177 @@ describe("translateOpenAiCompatibleMessages", () => {
         ],
       }),
     ).toThrowError(OpenAiCompatibleCapabilityError);
+  });
 
-    expect(() =>
-      translateOpenAiCompatibleMessages({
-        providerId: "openai-compatible:test",
-        supportsImages: true,
-        messages: [
+  it("sends user PDFs as file parts when the model accepts documents", () => {
+    const request = buildOpenAiCompatibleChatRequest({
+      providerId: "openai-compatible:test",
+      profile: "generic",
+      reasoningEffortMode: "none",
+      model: model({ supportsDocuments: true }),
+      systemPrompt: "system",
+      maxTokens: 100,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "summarize" },
+            pdf("report.pdf", "JVBERi0x"),
+          ],
+        },
+      ],
+    });
+
+    expect(request.messages.slice(1)).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "summarize" },
           {
-            role: "user",
-            content: [
-              {
-                type: "document",
-                source: {
-                  type: "base64",
-                  media_type: "application/pdf",
-                  data: "abc",
-                },
-              },
-            ],
+            type: "file",
+            file: {
+              filename: "report.pdf",
+              file_data: "data:application/pdf;base64,JVBERi0x",
+            },
           },
         ],
+      },
+    ]);
+  });
+
+  it("replaces unsupported PDFs with a note and inlines text documents", () => {
+    const wire = translateOpenAiCompatibleMessages({
+      providerId: "openai-compatible:test",
+      supportsImages: true,
+      messages: [
+        {
+          role: "user",
+          content: [
+            pdf("report.pdf", "must-not-leak"),
+            {
+              type: "document",
+              title: "notes.md",
+              source: {
+                type: "base64",
+                media_type: "text/markdown",
+                data: Buffer.from("# Héllo").toString("base64"),
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(wire).toEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: '[PDF document "report.pdf" omitted: the selected model does not accept PDF input through this OpenAI-compatible connection]',
+          },
+          { type: "text", text: "[Document: notes.md]\n# Héllo" },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(wire)).not.toContain("must-not-leak");
+  });
+
+  it("notes text documents whose contents are not valid UTF-8", () => {
+    const wire = translateOpenAiCompatibleMessages({
+      providerId: "openai-compatible:test",
+      supportsImages: false,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "document",
+              title: "bad.txt",
+              source: {
+                type: "base64",
+                media_type: "text/plain",
+                data: Buffer.from([0xff, 0xfe]).toString("base64"),
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(wire).toEqual([
+      {
+        role: "user",
+        content:
+          '[Document "bad.txt" omitted: its contents could not be decoded as text]',
+      },
+    ]);
+  });
+
+  it("forwards tool-result PDFs after the tool group when documents are supported", () => {
+    const content: CoreModelMessage["content"] = [
+      {
+        type: "tool_result",
+        tool_use_id: "call_1",
+        content: [
+          { type: "text", text: "read" },
+          pdf("spec.pdf", "JVBERi0y"),
+          {
+            type: "document",
+            title: "data.json",
+            source: {
+              type: "base64",
+              media_type: "application/json",
+              data: Buffer.from('{"a":1}').toString("base64"),
+            },
+          },
+        ],
+      },
+    ];
+
+    expect(
+      translateOpenAiCompatibleMessages({
+        providerId: "openai-compatible:test",
+        supportsImages: false,
+        supportsDocuments: true,
+        messages: [{ role: "user", content }],
       }),
-    ).toThrow(/does not support document input/);
+    ).toEqual([
+      {
+        role: "tool",
+        tool_call_id: "call_1",
+        content:
+          'read\n[Document attached in the following user message]\n[Document: data.json]\n{"a":1}',
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Media output of tool call call_1:" },
+          {
+            type: "file",
+            file: {
+              filename: "spec.pdf",
+              file_data: "data:application/pdf;base64,JVBERi0y",
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      translateOpenAiCompatibleMessages({
+        providerId: "openai-compatible:test",
+        supportsImages: false,
+        messages: [{ role: "user", content }],
+      }),
+    ).toEqual([
+      {
+        role: "tool",
+        tool_call_id: "call_1",
+        content:
+          'read\n[PDF document "spec.pdf" omitted: the selected model does not accept PDF input through this OpenAI-compatible connection]\n[Document: data.json]\n{"a":1}',
+      },
+    ]);
   });
 
   it("replays exact-owner non-degraded reasoning and rejects other owners", () => {

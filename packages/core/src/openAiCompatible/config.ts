@@ -160,6 +160,7 @@ export interface OpenAiCompatibleModelDto {
   reasoningEfforts?: CoreReasoningEffort[];
   defaultReasoningEffort?: CoreReasoningEffort;
   supportsImages?: boolean;
+  supportsDocuments?: boolean;
   structuredOutput?: "json_schema";
   modelFamily?: OpenAiCompatibleModelFamily;
   promptProfile?: PromptProfile;
@@ -621,6 +622,11 @@ function parseModel(
     `${path}.supportsImages`,
     context,
   );
+  const supportsDocuments = readOptionalBoolean(
+    raw.supportsDocuments,
+    `${path}.supportsDocuments`,
+    context,
+  );
   const modelFamily = parseModelFamily(
     raw.modelFamily,
     `${path}.modelFamily`,
@@ -771,6 +777,7 @@ function parseModel(
       supportsThinking: supportsThinking ?? false,
       supportsCaching: false,
       supportsImages: supportsImages ?? false,
+      ...(supportsDocuments ? { supportsDocuments: true } : {}),
       supportsToolUse,
       ...(structuredOutput ? { structuredOutput } : {}),
       contextWindow,

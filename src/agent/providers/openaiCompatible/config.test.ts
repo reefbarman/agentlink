@@ -197,6 +197,7 @@ describe("normalizeOpenAiCompatibleConnections", () => {
             reasoningEfforts: ["low", "medium", "high"],
             defaultReasoningEffort: "medium",
             supportsImages: true,
+            supportsDocuments: true,
             modelFamily: "anthropic",
             promptProfile: "reasoning",
           }),
@@ -251,6 +252,7 @@ describe("normalizeOpenAiCompatibleConnections", () => {
             supportsThinking: true,
             supportsCaching: false,
             supportsImages: true,
+            supportsDocuments: true,
             supportsToolUse: true,
             contextWindow: 131_072,
             maxInputTokens: 120_000,
@@ -272,6 +274,14 @@ describe("normalizeOpenAiCompatibleConnections", () => {
       "agentMaxTokens",
     );
     expect(result.connections[1].authKey).toBe("shared-key");
+    expect(
+      result.connections[0].runtimeProfile.models.deepseek.capabilities,
+    ).not.toHaveProperty("supportsDocuments");
+    expect(
+      issuePaths([
+        connection({ models: [model({ supportsDocuments: "yes" })] }),
+      ]),
+    ).toContain("$[0].models[0].supportsDocuments");
   });
 
   it("rejects agent output limits beyond the model ceiling or invalid values", () => {

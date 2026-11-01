@@ -38,6 +38,7 @@ export interface OpenAiCompatibleProviderModel {
   reasoningEfforts?: OpenAiCompatibleModelDto["reasoningEfforts"];
   defaultReasoningEffort?: OpenAiCompatibleModelDto["defaultReasoningEffort"];
   supportsImages?: boolean;
+  supportsDocuments?: boolean;
   structuredOutput?: "json_schema";
   modelFamily?: OpenAiCompatibleModelFamily;
   promptProfile?: OpenAiCompatibleModelDto["promptProfile"];
@@ -99,6 +100,7 @@ export function createOpenAICompatibleProvider(
       reasoningEfforts: model.reasoningEfforts,
       defaultReasoningEffort: model.defaultReasoningEffort,
       supportsImages: model.supportsImages,
+      supportsDocuments: model.supportsDocuments,
       structuredOutput: model.structuredOutput,
       modelFamily: model.modelFamily,
       promptProfile: model.promptProfile,

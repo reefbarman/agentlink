@@ -63,6 +63,7 @@ function discoveredModel(): DiscoveredOpenAiCompatibleModel {
     supportsToolUse: true,
     supportsThinking: true,
     supportsImages: true,
+    supportsDocuments: true,
     reasoningEfforts: ["max", "high", "low"],
     defaultReasoningEffort: "max" as const,
     provenance: {
@@ -72,6 +73,7 @@ function discoveredModel(): DiscoveredOpenAiCompatibleModel {
       supportsToolUse: "discovered" as const,
       supportsThinking: "discovered" as const,
       supportsImages: "discovered" as const,
+      supportsDocuments: "discovered" as const,
       reasoningEfforts: "discovered" as const,
       defaultReasoningEffort: "discovered" as const,
     },

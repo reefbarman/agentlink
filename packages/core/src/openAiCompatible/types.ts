@@ -64,9 +64,16 @@ export interface OpenAiCompatibleWireImagePart {
   image_url: { url: string };
 }
 
+/** Chat Completions file input carrying an inline base64 data URL. */
+export interface OpenAiCompatibleWireFilePart {
+  type: "file";
+  file: { filename: string; file_data: string };
+}
+
 export type OpenAiCompatibleWireContentPart =
   | OpenAiCompatibleWireTextPart
-  | OpenAiCompatibleWireImagePart;
+  | OpenAiCompatibleWireImagePart
+  | OpenAiCompatibleWireFilePart;
 
 export interface OpenAiCompatibleWireToolCall {
   id: string;

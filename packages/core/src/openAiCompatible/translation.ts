@@ -50,6 +50,7 @@ export function buildOpenAiCompatibleChatRequest(args: {
         providerId: args.providerId,
         messages: args.messages,
         supportsImages: args.model.capabilities.supportsImages,
+        supportsDocuments: args.model.capabilities.supportsDocuments === true,
       }),
     ],
     max_tokens: args.maxTokens,
@@ -113,7 +114,13 @@ export function translateOpenAiCompatibleMessages(args: {
   providerId: string;
   messages: readonly CoreModelMessage[];
   supportsImages: boolean;
+  /** PDF documents are sent as `file` parts; otherwise replaced by a note. */
+  supportsDocuments?: boolean;
 }): OpenAiCompatibleWireMessage[] {
+  const support: MediaSupport = {
+    images: args.supportsImages,
+    documents: args.supportsDocuments === true,
+  };
   const result: OpenAiCompatibleWireMessage[] = [];
   for (const message of args.messages) {
     const replay = readOpenAiCompatibleReplay(message, args.providerId);
@@ -121,9 +128,14 @@ export function translateOpenAiCompatibleMessages(args: {
       result.push(translateAssistantMessage(message, replay));
       continue;
     }
-    translateUserMessage(message, args.supportsImages, result);
+    translateUserMessage(message, support, result);
   }
   return result;
+}
+
+interface MediaSupport {
+  images: boolean;
+  documents: boolean;
 }
 
 export function translateOpenAiCompatibleTools(
@@ -179,7 +191,7 @@ function translateAssistantMessage(
 
 function translateUserMessage(
   message: CoreModelMessage,
-  supportsImages: boolean,
+  support: MediaSupport,
   result: OpenAiCompatibleWireMessage[],
 ): void {
   if (typeof message.content === "string") {
@@ -190,7 +202,8 @@ function translateUserMessage(
   let userParts: OpenAiCompatibleWireContentPart[] = [];
   // Chat Completions only accepts text in `tool` messages, and every tool
   // message must directly follow the assistant tool call. Tool-result images
-  // are therefore deferred into the user message that follows the tool group.
+  // and PDFs are therefore deferred into the user message that follows the
+  // tool group.
   let pendingToolMedia: OpenAiCompatibleWireContentPart[] = [];
   const movePendingToolMedia = () => {
     userParts.push(...pendingToolMedia);
@@ -211,21 +224,19 @@ function translateUserMessage(
   for (const block of message.content) {
     if (block.type === "tool_result") {
       flushUserParts();
-      const images = supportsImages
-        ? collectToolResultImages(block.content)
-        : [];
+      const media = collectToolResultMedia(block.content, support);
       result.push({
         role: "tool",
         tool_call_id: block.tool_use_id,
-        content: flattenToolResult(block.content, images.length > 0),
+        content: flattenToolResult(block.content, support),
       });
-      if (images.length > 0) {
+      if (media.length > 0) {
         pendingToolMedia.push(
           {
             type: "text",
             text: `Media output of tool call ${block.tool_use_id}:`,
           },
-          ...images.map(toImagePart),
+          ...media,
         );
       }
       continue;
@@ -234,16 +245,14 @@ function translateUserMessage(
     if (block.type === "text") {
       userParts.push({ type: "text", text: block.text });
     } else if (block.type === "image") {
-      if (!supportsImages) {
+      if (!support.images) {
         throw new OpenAiCompatibleCapabilityError(
           "The selected OpenAI-compatible model does not support image input",
         );
       }
       userParts.push(toImagePart(block));
     } else if (block.type === "document") {
-      throw new OpenAiCompatibleCapabilityError(
-        "OpenAI-compatible Chat Completions does not support document input",
-      );
+      userParts.push(toDocumentPart(block, support.documents));
     }
   }
   movePendingToolMedia();
@@ -251,6 +260,66 @@ function translateUserMessage(
 }
 
 type CoreModelImageBlock = Extract<CoreModelContentBlock, { type: "image" }>;
+type CoreModelDocumentBlock = Extract<
+  CoreModelContentBlock,
+  { type: "document" }
+>;
+
+/**
+ * Text-based documents are inlined as text for every model; only PDFs need
+ * the `file` part, and only when the model is configured to accept it.
+ * Unsupported PDFs become a note so one attachment cannot fail every later
+ * request in the conversation.
+ */
+function toDocumentPart(
+  document: CoreModelDocumentBlock,
+  supportsDocuments: boolean,
+): OpenAiCompatibleWireContentPart {
+  if (document.source.media_type !== "application/pdf") {
+    return { type: "text", text: inlineTextDocument(document) };
+  }
+  if (supportsDocuments) return toFilePart(document);
+  return { type: "text", text: unsupportedPdfNote(document) };
+}
+
+function toFilePart(
+  document: CoreModelDocumentBlock,
+): OpenAiCompatibleWireContentPart {
+  return {
+    type: "file",
+    file: {
+      filename: document.title ?? "document.pdf",
+      file_data: `data:${document.source.media_type};base64,${document.source.data}`,
+    },
+  };
+}
+
+function inlineTextDocument(document: CoreModelDocumentBlock): string {
+  const title = document.title ?? "untitled";
+  const text = decodeBase64Utf8(document.source.data);
+  if (text === undefined) {
+    return `[Document "${title}" omitted: its contents could not be decoded as text]`;
+  }
+  return `[Document: ${title}]\n${text}`;
+}
+
+function unsupportedPdfNote(document: CoreModelDocumentBlock): string {
+  const title = document.title ?? "untitled";
+  return `[PDF document "${title}" omitted: the selected model does not accept PDF input through this OpenAI-compatible connection]`;
+}
+
+function decodeBase64Utf8(data: string): string | undefined {
+  try {
+    const binary = atob(data);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
+}
 
 function toImagePart(
   image: CoreModelImageBlock,
@@ -263,37 +332,50 @@ function toImagePart(
   };
 }
 
-function collectToolResultImages(
+function collectToolResultMedia(
   content: string | CoreModelContentBlock[],
-): CoreModelImageBlock[] {
+  support: MediaSupport,
+): OpenAiCompatibleWireContentPart[] {
   if (typeof content === "string") return [];
   return content.flatMap((block) => {
-    if (block.type === "image") return [block];
+    if (block.type === "image" && support.images) return [toImagePart(block)];
+    if (
+      block.type === "document" &&
+      block.source.media_type === "application/pdf" &&
+      support.documents
+    ) {
+      return [toFilePart(block)];
+    }
     if (block.type === "tool_result")
-      return collectToolResultImages(block.content);
+      return collectToolResultMedia(block.content, support);
     return [];
   });
 }
 
 function flattenToolResult(
   content: string | CoreModelContentBlock[],
-  imagesForwarded: boolean,
+  support: MediaSupport,
 ): string {
   if (typeof content === "string") return content;
   return content
     .map((block) => {
       if (block.type === "text") return block.text;
       if (block.type === "image")
-        return imagesForwarded
+        return support.images
           ? "[Image attached in the following user message]"
           : "[Image omitted from tool result]";
-      if (block.type === "document")
-        return "[Document omitted from tool result]";
+      if (block.type === "document") {
+        if (block.source.media_type !== "application/pdf")
+          return inlineTextDocument(block);
+        return support.documents
+          ? "[Document attached in the following user message]"
+          : unsupportedPdfNote(block);
+      }
       if (block.type === "thinking") return block.thinking;
       if (block.type === "tool_use")
         return `[Nested tool call ${block.name} omitted]`;
       if (block.type === "tool_result")
-        return flattenToolResult(block.content, imagesForwarded);
+        return flattenToolResult(block.content, support);
       return "[Provider activity omitted from tool result]";
     })
     .join("\n");

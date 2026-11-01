@@ -817,6 +817,11 @@
                       "type": "boolean",
                       "default": false
                     },
+                    "supportsDocuments": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "Send PDF attachments as standard Chat Completions file inputs. When false, PDFs are replaced by a note to the model; text documents are always sent as text."
+                    },
                     "modelFamily": {
                       "type": "string",
                       "enum": [
