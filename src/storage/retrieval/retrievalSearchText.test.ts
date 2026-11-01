@@ -94,4 +94,36 @@ describe("retrieval chunk search text", () => {
       MAX_RETRIEVAL_CHUNK_METADATA_SEARCH_CHARS + 1 + chunk.content.length,
     );
   });
+
+  it("matches join-then-slice at every truncation boundary", () => {
+    // Stored code-index search text is compared with this output, so the
+    // bounded join must stay byte-identical to the original formula.
+    const max = MAX_RETRIEVAL_CHUNK_METADATA_SEARCH_CHARS;
+    const prefix = [
+      source.id,
+      source.revision.id,
+      source.path,
+      source.title,
+      chunk.location?.path,
+      ...(chunk.location?.scope ?? []),
+    ].join("\n");
+    for (const firstLength of [
+      max - prefix.length - 2,
+      max - prefix.length - 1,
+      max - prefix.length,
+      max - prefix.length + 1,
+      max * 2,
+    ]) {
+      const metadata = { a: "a".repeat(firstLength), b: "b".repeat(50) };
+      const text = buildRetrievalChunkSearchText({
+        chunk: { ...chunk, metadata: {} },
+        source: { ...source, metadata },
+        relations: [],
+      });
+      const expected = [prefix, metadata.a, metadata.b]
+        .join("\n")
+        .slice(0, max);
+      expect(text).toBe(`${expected}\n${chunk.content}`);
+    }
+  });
 });
