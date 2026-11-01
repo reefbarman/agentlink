@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.36.1 — 2026-11-01
+
+- set_task_status now rejects continuation fields with waiting_for_user, failed calls no longer end the turn or show as final-status cards, legacy waiting cards hide next-step actions, and prompts steer the agent to finish safe work before waiting.
+
 ## 0.36.0 — 2026-11-01
 
 - `@agentlink/core/background-agent-tools` adds VS Code's `appendOwnershipHandoff` (with a `"workspace"` backend for hosts where a child without owned paths cannot write) and the `OWNED_PATHS_PROPERTY` and `FORBIDDEN_PATHS_PROPERTY` schemas. VS Code delegates to them unchanged.

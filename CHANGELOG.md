@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.68.27
+
+- set_task_status now rejects continuation fields with waiting_for_user, failed calls no longer end the turn or show as final-status cards, legacy waiting cards hide next-step actions, and prompts steer the agent to finish safe work before waiting.
+
 ## 1.68.26
 
 - Messages queued or interjected from the browser on a VS Code chat no longer disappear. When the browser showed a chat tab that VS Code wasn't focused on, sending while it worked was rejected and the queued message silently vanished. Messages queued on the focused tab were also lost when VS Code switched tabs before the turn ended. Browser-queued messages are now kept per chat, shown in that chat's queue, can be interjected, steered or paused, and send when that chat's turn ends.
