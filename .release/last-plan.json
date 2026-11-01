@@ -1,18 +1,21 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "40ac068492d4dac552eeb1cf7c1380225594781c",
-  "createdAt": "2026-10-26T05:20:42.690Z",
+  "sourceSha": "3e6f892dfad6f8e08295d93e21a112e00e896c92",
+  "createdAt": "2026-11-01T02:57:41.322Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
-    "omitted": []
+    "omitted": [
+      "aa97003f70116eacd6b5b8be0ce76b131fa39c6a",
+      "ccdaf2148268e0cb43cf52bdb3d93ed40e8521dd"
+    ]
   },
   "overrides": [],
   "units": {
     "vscode": {
       "published": "1.67.1",
       "baselineRef": "v1.67.1",
-      "reserved": "1.68.5",
+      "reserved": "1.68.26",
       "commits": [
         "1ffeeac1beb356905435b31877662c402e478ce3",
         "e7c98f1166dffaefcdb7ac8e992997be298c919f",
@@ -52,18 +55,87 @@
         "b1a1960eec2317954a848c9922780b915471c19d",
         "5f8a885bef584dfc85fc2ac8fc43fe09fc4f8972",
         "d269054de487ba3068cbbd5159f797c7592546bf",
-        "40ac068492d4dac552eeb1cf7c1380225594781c"
+        "40ac068492d4dac552eeb1cf7c1380225594781c",
+        "9defc585a5837d451bea158c9d6cd116a1352c58",
+        "47acf1e59b4463acc2d0f24499edc2cf6ccfe264",
+        "0713d4a94c7a63b2ae80ab6e78dd955534ab1005",
+        "eb484ddb1599ddd8dc1043e82c0de9624853b1dd",
+        "b08e6ea3c37ff3e11c86a1fa814cc151f1679069",
+        "a9856388593c261bd92c1f8ed40d3c92a2a3a242",
+        "22b18a1bcbd3d5cc7d27cc24d8a8d8fc43ef80cd",
+        "0254c4947c9510c87a62b78ded46275af20880d1",
+        "50d9c264bec3fe34f49225e9c608453ac85ffde9",
+        "10d16263b5c0e52e6b145be85cc621f3190d835d",
+        "5a86dd352b459cd96b467c166de8d7ed66400620",
+        "58827d2bc6e6746a40b5b3d50b1e7cd6de27ee0c",
+        "d85e46b7932d82835bbdb3efe5e366304ab5dafb",
+        "61aeea499f9bb83d356c566adba79b60d064adcb",
+        "504fc3879daaa28ba5a6f0aef4a54b952d4faf66",
+        "b32f62cf3645b9587910aa417ef356bd732f5f0d",
+        "10d0b3782d9ff4209e072f7c11c415cf6caa3e55",
+        "3fa28bdef49feaad99b45eebca6e6b47d797b013",
+        "a01de529f657f9c543eabd938c19c4e22894a0d4",
+        "a8ce13396f2b2fed9cd12c6eff0ccd1bb00606df",
+        "d5b308a5b4b0aa51d464572495ad4d176c42b942",
+        "c5f5f5ee42dc78f5188fae29b547a6dc02cbc74e",
+        "1d3e2af57ad2d931d0b742920f7348a84dcd2fae",
+        "cce375bed0c93512570ea187c118e8816423fc1c",
+        "f6732ce7fbe048a52b6b3d78d3caa184844430ba",
+        "d3947361cdb2adeb3c010298b871d994cec12f07",
+        "908f8a1e3131405d0d64910e655f0d61f48b723b",
+        "997df9834983735a6ed10f99ee98ab51b5f24861",
+        "79c837fdac14dd4e2987342749b0114e65667792",
+        "c27ebbfb8e79942f1941337a0ab42d57715989be",
+        "73cd67552780aeb81b26b4debced936cfa2b5c08",
+        "be8d14028d3ada2faa7f89b2bf55742edf30b894",
+        "e34267c7a3f965fa78a70970c7d443619377cba6",
+        "fe9d9f1c9cbcc42b7399c9876e35ff57f88c7536",
+        "a3b4a544046be6d157c82912f6c608cb4618267c",
+        "849207f4851c531ed6dd012393837e5838f758b3",
+        "fcd2231a84eb5ce9cfade2dd568efbd7a613b60b",
+        "d093d7eb21aa691b43acb082444602dfdde47270",
+        "0fccaf3e4b55321acc0b7aae35fb969a84ae9bd2",
+        "398956888ea9dabf2d772b9870ec4d065ccc98f8",
+        "a8db2342595555ee50a0d3c90c0f4e565c2604ae",
+        "b2e59b000e330cea1e909ffc73cee7b2e86562b9",
+        "edbbcb5d0a6bc26adfe66411d09a4a769e5dd93b",
+        "c59648b0a61817e12982343a076415181f5766e2",
+        "4c209c22b8db65c08a9d50a3cf8c27e6a7815e6d",
+        "46ba4f5c08b443cee38d0bd9b631211f25437c5d",
+        "ff0b9b30e7872d33ae98d5dcb0914f294d589eff",
+        "8c1af1b7d6da03b6bf5ad37cb23721e694269a42",
+        "1983bb90e97dd17dbd5a6d6521dcfc0029df7c75",
+        "156fe68c14e6da81ce4ecf23246edc659b63d153",
+        "4a2121c935f7912c6a41e79b1f8d6f8f5f667f11",
+        "828e2ae3489eb3a898f8b61bb659a1998706a785",
+        "622cc3251015f8a6691bb3bbc82367313b16de63",
+        "e07a975a8a41163dfff349e902d33b779ae5a088",
+        "16f231565e26396c31880bf3ed973f8efc425925",
+        "bc4d4187b8cc800e84906bf048997f3b57031fd7",
+        "5633aefa3c39f54c53bb7a09d9a9ab35998dccfe",
+        "221b3295c7eaadca57c7125bfe78fcb4cc1806c9",
+        "e03a1bb782cc17914bc80fa7420e9cfe9353e380",
+        "6a7b1b631b3e80a425636ccd7ceb043b4668a849",
+        "d049bc076229da0166c6db076cd84d4ecb2e2b42",
+        "f9ca50d6c09f53b22896edae7ef62fd67842773e",
+        "aa97003f70116eacd6b5b8be0ce76b131fa39c6a",
+        "2c783bfb6428e8c1e3aa9f4d5477467efa17892a",
+        "ccdaf2148268e0cb43cf52bdb3d93ed40e8521dd"
       ],
-      "unknownPaths": ["vitest.eval.config.mts"],
+      "unknownPaths": [
+        ".githooks/pre-push",
+        ".nvmrc",
+        "vitest.eval.config.mts"
+      ],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.68.5",
+      "version": "1.68.26",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": true,
       "consumedIntent": false,
-      "tag": "v1.68.5",
+      "tag": "v1.68.26",
       "notes": [
         {
           "sha": "1ffeeac1beb356905435b31877662c402e478ce3",
@@ -298,29 +370,865 @@
           "subject": "fix(ask-agent): resume streaming when switching back to a chat with a running turn",
           "summary": "Switching back to an Ask Agent chat whose turn is still running now resumes the live streaming activity indicator instead of dropping it.",
           "breaking": false
+        },
+        {
+          "sha": "9defc585a5837d451bea158c9d6cd116a1352c58",
+          "subject": "feat(final-status): show ask duration on the final status card",
+          "summary": "The final status card header now shows how long the ask took (e.g. Task complete · 4m 12s), in VS Code and browser chat, and the field is added to the protocol.",
+          "breaking": false
+        },
+        {
+          "sha": "47acf1e59b4463acc2d0f24499edc2cf6ccfe264",
+          "subject": "fix(approvals): default outside-workspace write rules to parent-folder prefix",
+          "summary": "Outside-workspace write approvals now default to the parent folder with Prefix mode, and each approval card starts with fresh pattern, mode and scope state.",
+          "breaking": false
+        },
+        {
+          "sha": "0713d4a94c7a63b2ae80ab6e78dd955534ab1005",
+          "subject": "fix(session-history): batch past-session index backfill so search works on long histories",
+          "summary": "Past-session index backfill commits sessions in batches and keeps running in the background, so session search works on long histories and the worktree index also backfills in the background.",
+          "breaking": false
+        },
+        {
+          "sha": "eb484ddb1599ddd8dc1043e82c0de9624853b1dd",
+          "subject": "feat(final-status): end the ask clock when the user presses Stop",
+          "summary": "Pressing Stop now ends the ask timer so the next message starts a fresh clock, while steering with a queued message keeps the same ask open.",
+          "breaking": false
+        },
+        {
+          "sha": "b08e6ea3c37ff3e11c86a1fa814cc151f1679069",
+          "subject": "feat(codex): add GPT-6.1 Terra to the model picker",
+          "summary": "Adds GPT-6.1 Terra to the Codex/OpenAI model picker with 1.05M context, 128K output, none-to-max reasoning, the Fast tier, the reasoning prompt profile and a 90% condense default.",
+          "breaking": false
+        },
+        {
+          "sha": "a9856388593c261bd92c1f8ed40d3c92a2a3a242",
+          "subject": "fix(session-history): advertise past-session search inline so agents use it",
+          "summary": "search_workspace_sessions is now always advertised to the agent and the recall guidance covers mentions in question answers, so agents search past sessions instead of guessing.",
+          "breaking": false
+        },
+        {
+          "sha": "22b18a1bcbd3d5cc7d27cc24d8a8d8fc43ef80cd",
+          "subject": "fix(routing): classify Terra models as balanced, not deep reasoning",
+          "summary": "Terra models are now classified as balanced instead of deep reasoning for background routing, so ordinary background work no longer goes to Sol; deep reasoning and review preferences are limited to Astra and GPT-5.4 Pro.",
+          "breaking": false
+        },
+        {
+          "sha": "0254c4947c9510c87a62b78ded46275af20880d1",
+          "subject": "fix(approvals): let review-mode PR publication evidence actually verify",
+          "summary": "Review-mode PR publication evidence now verifies reliably (URL punctuation stripped, gh pr view JSON accepted, /tmp payloads allowed), so Guardian stops denying most review posts.",
+          "breaking": false
+        },
+        {
+          "sha": "50d9c264bec3fe34f49225e9c608453ac85ffde9",
+          "subject": "refactor(codex): derive routing tiers, prompt profiles and condense defaults from CODEX_MODELS",
+          "summary": "Codex routing tiers, prompt profiles and condense defaults are now derived from per-model fields in CODEX_MODELS instead of separate config, with no change to intended behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "10d16263b5c0e52e6b145be85cc621f3190d835d",
+          "subject": "fix(credentials): reclaim the helper queue lock after its owner crashes",
+          "summary": "The credentials helper queue lock is reclaimed after its owner crashes, so model setup no longer hangs on \"Checking model setup\" until the lock file is deleted by hand.",
+          "breaking": false
+        },
+        {
+          "sha": "5a86dd352b459cd96b467c166de8d7ed66400620",
+          "subject": "ci: unblock linux-arm64 releases and add a local preflight gate",
+          "summary": "Release CI now builds linux-arm64 packages on a native arm64 runner, and a local preflight check and opt-in pre-push hook were added for contributors, with no change to shipped product behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "58827d2bc6e6746a40b5b3d50b1e7cd6de27ee0c",
+          "subject": "ci: test on macOS, take Node from .nvmrc, and stop flaky test breaks",
+          "summary": "CI now tests on macOS and takes Node from .nvmrc (latest 22.x), release coordination skips cleanly when main moves, and several flaky tests are stabilised.",
+          "breaking": false
+        },
+        {
+          "sha": "d85e46b7932d82835bbdb3efe5e366304ab5dafb",
+          "subject": "fix(approvals): show status bar attention for inline chat approvals",
+          "summary": "Inline chat approvals (writes, MCP, memory and similar) now show status bar attention so pending approvals are not missed.",
+          "breaking": false
+        },
+        {
+          "sha": "61aeea499f9bb83d356c566adba79b60d064adcb",
+          "subject": "docs(skills): separate local and shared project skills",
+          "summary": "Documentation and project skill layout now separate local .agentlink/skills from shared .agents/skills, with no runtime behaviour change.",
+          "breaking": false
+        },
+        {
+          "sha": "504fc3879daaa28ba5a6f0aef4a54b952d4faf66",
+          "subject": "feat(approvals): let users resume paused automatic command review",
+          "summary": "Command approval cards now offer a Resume automatic review button when Guardian review was paused by repeated denials, which re-reviews the same command without approving it.",
+          "breaking": false
+        },
+        {
+          "sha": "b32f62cf3645b9587910aa417ef356bd732f5f0d",
+          "subject": "feat(workspace-host): match VS Code search_files and apply_diff contracts",
+          "summary": "The CLI and Assistant gain VS Code's full search_files and apply_diff contracts via new shared core modules, while the node-host apply_diff tool now accepts unified hunks and fuzzy matching and drops its strict-only failure codes.",
+          "breaking": false
+        },
+        {
+          "sha": "10d0b3782d9ff4209e072f7c11c415cf6caa3e55",
+          "subject": "feat(workspace-host): add VS Code find_and_replace and align Ask Agent apply_diff",
+          "summary": "The CLI and Assistant gain VS Code's multi-file find_and_replace with one review and stale-proposal protection, and Ask Agent now advertises the shared apply_diff schema with optional expectedContentHash.",
+          "breaking": false
+        },
+        {
+          "sha": "3fa28bdef49feaad99b45eebca6e6b47d797b013",
+          "subject": "feat(workspace-host): match VS Code's read_file content view",
+          "summary": "The CLI and Assistant read_file content view now matches VS Code: 2,000-line default, anchors, image and PDF reading, and richer metadata; SDK adds a read-file-content entry point and media converters.",
+          "breaking": false
+        },
+        {
+          "sha": "a01de529f657f9c543eabd938c19c4e22894a0d4",
+          "subject": "feat(node-host): VS Code search_files fallback and read_file suggestions",
+          "summary": "The fallback search_files now follows VS Code's regex contract with output modes, paging and context options, and read_file in the CLI and Assistant returns path suggestions and supports auto_follow_suggestion.",
+          "breaking": false
+        },
+        {
+          "sha": "a8ce13396f2b2fed9cd12c6eff0ccd1bb00606df",
+          "subject": "feat(core): share VS Code's interaction tool contracts",
+          "summary": "Shared VS Code ask_user and set_task_status contracts move into core, and the CLI and Assistant todo_write now uses VS Code's tool and restores the todo list from the transcript after a restart.",
+          "breaking": false
+        },
+        {
+          "sha": "d5b308a5b4b0aa51d464572495ad4d176c42b942",
+          "subject": "feat(cli): VS Code's multi-question ask_user",
+          "summary": "The CLI's ask_user now accepts VS Code's multi-question schema with all six question types shown one at a time in the control panel, replacing the old single-question format and the askQuestion host option.",
+          "breaking": false
+        },
+        {
+          "sha": "c5f5f5ee42dc78f5188fae29b547a6dc02cbc74e",
+          "subject": "feat(core): let host tools end the turn and share set_task_status",
+          "summary": "Host tools can end a turn, and the CLI and Assistant gain VS Code's set_task_status with a final card, restore on reload, Ctrl+N continue in the CLI, and Auto Continue stopping in the Assistant.",
+          "breaking": false
+        },
+        {
+          "sha": "1d3e2af57ad2d931d0b742920f7348a84dcd2fae",
+          "subject": "feat(cli): pass messages sent mid-turn into the running turn",
+          "summary": "Messages sent while a CLI turn is running are now taken into that turn at its next break instead of running afterwards, and the footer shows a ^n continue hint when a continue action is available.",
+          "breaking": false
+        },
+        {
+          "sha": "cce375bed0c93512570ea187c118e8816423fc1c",
+          "subject": "refactor(core): move system prompt guidance and modes into core",
+          "summary": "System prompt guidance and the built-in agent modes move into @agentlink/core as new system-prompt and agent-modes entry points; VS Code's prompts are unchanged.",
+          "breaking": false
+        },
+        {
+          "sha": "f6732ce7fbe048a52b6b3d78d3caa184844430ba",
+          "subject": "feat(cli): lead the CLI prompt with VS Code's shared guidance",
+          "summary": "The CLI's system prompt now leads with VS Code's shared guidance for the tools each session registers. workspace-host gains an opt-in sharedPromptGuidance option.",
+          "breaking": false
+        },
+        {
+          "sha": "d3947361cdb2adeb3c010298b871d994cec12f07",
+          "subject": "feat(cli): add agent modes with /mode",
+          "summary": "The CLI gets VS Code's agent modes with /mode and /mode SLUG, saved per session, with custom modes from modes.json. workspace-host gains a modes option and core gains session modes.",
+          "breaking": false
+        },
+        {
+          "sha": "908f8a1e3131405d0d64910e655f0d61f48b723b",
+          "subject": "feat(assistant): layer the prompt on VS Code's shared guidance",
+          "summary": "The Assistant's prompts now build on VS Code's shared guidance for the tools each chat has, as a general assistant for owner chats. workspace-host's sharedPromptGuidance also accepts a codingAssistant option.",
+          "breaking": false
+        },
+        {
+          "sha": "997df9834983735a6ed10f99ee98ab51b5f24861",
+          "subject": "feat(workspace-host): give execute_command VS Code's input and result",
+          "summary": "execute_command in the CLI and Assistant now takes VS Code's parameters (timeout in seconds, env, output filters) and returns VS Code's result fields. Older timeoutMs calls still run. The output filter moves to @agentlink/core/command-output.",
+          "breaking": false
+        },
+        {
+          "sha": "79c837fdac14dd4e2987342749b0114e65667792",
+          "subject": "fix(core): build the command-output subpath for CommonJS",
+          "summary": "Fixes the CommonJS build so the @agentlink/core command-output subpath is included.",
+          "breaking": false
+        },
+        {
+          "sha": "c27ebbfb8e79942f1941337a0ab42d57715989be",
+          "subject": "feat(workspace-host): replace command output tools with get_terminal_output and close_terminals",
+          "summary": "workspace-host replaces get_command_output, list_commands and stop_command with VS Code's get_terminal_output and close_terminals. Ask Agent's execute_command moves to VS Code's schema, and the CLI, Assistant and Ask Agent use the new tools.",
+          "breaking": false
+        },
+        {
+          "sha": "73cd67552780aeb81b26b4debced936cfa2b5c08",
+          "subject": "feat(cli,assistant): run read-only commands in Ask mode and for task reviewers",
+          "summary": "CLI Ask mode and Assistant task reviewers can now run commands that VS Code's read-only check clears without asking, with other commands prompting (CLI) or refused (reviewers); the classifier is shared via new core subpaths.",
+          "breaking": false
+        },
+        {
+          "sha": "be8d14028d3ada2faa7f89b2bf55742edf30b894",
+          "subject": "feat(cli): let the model propose mode changes with switch_mode and ask_user modeSwitch",
+          "summary": "The CLI model can now propose mode changes with switch_mode and ask_user modeSwitch, shown as an Allow/Reject card, with the turn continuing in the new mode.",
+          "breaking": false
+        },
+        {
+          "sha": "e34267c7a3f965fa78a70970c7d443619377cba6",
+          "subject": "feat(workspace-host): use VS Code's background agent management tools",
+          "summary": "CLI and Assistant background agent tools now use VS Code's descriptions, inputs and results, name children by sessionId, and can wait for any or all of several children.",
+          "breaking": false
+        },
+        {
+          "sha": "fe9d9f1c9cbcc42b7399c9876e35ff57f88c7536",
+          "subject": "feat(workspace-host): spawn background agents with VS Code's ownedPaths",
+          "summary": "CLI and Assistant spawn_background_agent now takes VS Code's ownedPaths and forbiddenPaths with ownership handoff, optional read_paths, and a configurable per-session child limit (4 in CLI, 2 in Assistant).",
+          "breaking": false
+        },
+        {
+          "sha": "a3b4a544046be6d157c82912f6c608cb4618267c",
+          "subject": "fix(sandbox): follow agent-folder skill symlinks and type namespace rejections",
+          "summary": "Sandboxed commands no longer fail when an agent-folder skill symlink such as .agents/skills -> ../.claude/skills points into another policy folder; other namespace rejections now report the offending path.",
+          "breaking": false
+        },
+        {
+          "sha": "849207f4851c531ed6dd012393837e5838f758b3",
+          "subject": "fix(codex): stream Responses tool argument deltas keyed by item_id",
+          "summary": "Fixes Responses API tool argument streaming so long tool calls no longer trip the no-progress watchdog and retry repeatedly; repeated no-progress timeouts now surface after one retry.",
+          "breaking": false
+        },
+        {
+          "sha": "fcd2231a84eb5ce9cfade2dd568efbd7a613b60b",
+          "subject": "fix(agent): start a todo list for multi-step work on every prompt profile",
+          "summary": "The system prompt and todo_write description now tell the model to start a todo list in its first response for multi-step work on every prompt profile, restoring todo use with the compact profile.",
+          "breaking": false
+        },
+        {
+          "sha": "d093d7eb21aa691b43acb082444602dfdde47270",
+          "subject": "fix(tools): follow stale built-in skill paths to the current catalog entry",
+          "summary": "load_skill now follows a stale built-in skill path left after an extension update to the current built-in catalog entry instead of failing.",
+          "breaking": false
+        },
+        {
+          "sha": "0fccaf3e4b55321acc0b7aae35fb969a84ae9bd2",
+          "subject": "feat(browser-gateway): improve mobile and foldable layout",
+          "summary": "Improves the browser gateway on phones and foldables: chats no longer jump to the bottom, a 600px phone breakpoint, denser touch type, VS Code chat tabs in the shell sidebar, a tab close endpoint, and the VS Code view reopens after reload.",
+          "breaking": false
+        },
+        {
+          "sha": "398956888ea9dabf2d772b9870ec4d065ccc98f8",
+          "subject": "fix(tools): reject ${digits} references in find_and_replace regex templates",
+          "summary": "find_and_replace in regex mode now rejects ${N} references with a clear error before any edit instead of silently inserting the literal text and dropping the captured content.",
+          "breaking": false
+        },
+        {
+          "sha": "a8db2342595555ee50a0d3c90c0f4e565c2604ae",
+          "subject": "feat(background): replace automatic fleet budgets with foreground-led progress supervision",
+          "summary": "Background agents no longer get automatic budgets or wrap-up messages; the foreground coordinator judges progress through status and progress-check steering, and explicit budgets only stop a run at their hard boundary.",
+          "breaking": false
+        },
+        {
+          "sha": "b2e59b000e330cea1e909ffc73cee7b2e86562b9",
+          "subject": "fix(skills): let load_skill activate readable skills missing from the catalog",
+          "summary": "load_skill can now activate a readable SKILL.md missing from or newer than the session catalog, such as a freshly pulled skill or one in a second workspace folder, while keeping disabled skills disabled and applying allowed-tools restrictions.",
+          "breaking": false
+        },
+        {
+          "sha": "edbbcb5d0a6bc26adfe66411d09a4a769e5dd93b",
+          "subject": "feat(worktree): create worktrees for every repo in multi-root workspaces",
+          "summary": "/worktree and /review in multi-root workspaces now create a worktree on the same branch for every Git repository, generate a .code-workspace file, and open it in the new window, rolling back partial launches.",
+          "breaking": false
+        },
+        {
+          "sha": "c59648b0a61817e12982343a076415181f5766e2",
+          "subject": "fix(codex): name the real cause in Responses retry warnings",
+          "summary": "Codex retry warnings now name the real cause (such as overloaded 503), retry number, delay and next transport instead of a generic 'Response interrupted' message; retry behavior is unchanged.",
+          "breaking": false
+        },
+        {
+          "sha": "4c209c22b8db65c08a9d50a3cf8c27e6a7815e6d",
+          "subject": "fix(indexer): optimize retrieval store during long indexing jobs",
+          "summary": "The indexer now optimizes the retrieval store between committed batches during long indexing jobs, preventing runaway storage growth and stalls, and reports optimization failures as non-fatal errors.",
+          "breaking": false
+        },
+        {
+          "sha": "46ba4f5c08b443cee38d0bd9b631211f25437c5d",
+          "subject": "feat(indexer): add Free Up Space to the codebase index sidebar",
+          "summary": "Adds a Free Up Space button and agentlink.maintainIndex command that compact the workspace's codebase index and prune old database history without re-indexing, reporting the space reclaimed.",
+          "breaking": false
+        },
+        {
+          "sha": "ff0b9b30e7872d33ae98d5dcb0914f294d589eff",
+          "subject": "fix(retrieval): give store optimization a one-hour lock limit",
+          "summary": "Retrieval store compaction and pruning now get a one-hour lock limit so optimizing a heavily bloated index no longer times out and leaves the store locked and bloated.",
+          "breaking": false
+        },
+        {
+          "sha": "8c1af1b7d6da03b6bf5ad37cb23721e694269a42",
+          "subject": "fix(indexer): report store space reclaimed as measured on disk",
+          "summary": "Index optimization now reports space reclaimed as measured on disk, rather than Lance's prune statistics that omitted old manifests and showed 0 MiB, and logs the store size afterward.",
+          "breaking": false
+        },
+        {
+          "sha": "1983bb90e97dd17dbd5a6d6521dcfc0029df7c75",
+          "subject": "fix(plugins): stop liveness-only registry bumps from reconnecting MCP in every window",
+          "summary": "Plugin registry changes that only reflect other windows opening or closing no longer make every VS Code window reconnect its MCP servers.",
+          "breaking": false
+        },
+        {
+          "sha": "156fe68c14e6da81ce4ecf23246edc659b63d153",
+          "subject": "fix(agent): show text results in final status cards",
+          "summary": "Final status cards now show a text result as the summary when set_task_status provides no summary.",
+          "breaking": false
+        },
+        {
+          "sha": "4a2121c935f7912c6a41e79b1f8d6f8f5f667f11",
+          "subject": "feat(chat): expose final results and continuation prompts",
+          "summary": "Final status cards in VS Code and browser chat now show structured results (text, review findings, patch, verification) and the full continuation prompt next to the action button, with relay lazy-loading of results.",
+          "breaking": false
+        },
+        {
+          "sha": "828e2ae3489eb3a898f8b61bb659a1998706a785",
+          "subject": "fix(chat): preserve protocol boundaries and clarify stale results",
+          "summary": "The stale-result error for browser final results now says it is waiting for an updated session snapshot instead of suggesting a retry.",
+          "breaking": false
+        },
+        {
+          "sha": "622cc3251015f8a6691bb3bbc82367313b16de63",
+          "subject": "fix(chat): hide default continuation text and restore bottom-left action",
+          "summary": "Final status cards hide the built-in default continuation text and show the Continue action at the bottom-left, displaying a Next step prompt only when the agent supplies one.",
+          "breaking": false
+        },
+        {
+          "sha": "e07a975a8a41163dfff349e902d33b779ae5a088",
+          "subject": "fix(codex): stop the no-progress watchdog restarting silent reasoning",
+          "summary": "Long silent Codex reasoning is no longer mistaken for a dead stream and restarted by the no-progress watchdog; a bounded 30-minute window now applies while reasoning is open.",
+          "breaking": false
+        },
+        {
+          "sha": "16f231565e26396c31880bf3ed973f8efc425925",
+          "subject": "fix: harden tool diagnostics and background recovery",
+          "summary": "Hardens tool diagnostics and recovery: bounded MCP crash reconnects with config revalidation, preserved evidence for failed background agents, safe command and sandbox diagnostics, bounded xxd/dyld_info reads, web fetch provenance, quiet update polling, and accurate failed-save reporting.",
+          "breaking": false
+        },
+        {
+          "sha": "bc4d4187b8cc800e84906bf048997f3b57031fd7",
+          "subject": "fix(tools): make read-only network and web-fetch failures actionable",
+          "summary": "Read-only network rejections now tell background agents to ask the coordinator for the exact remote data, Codex page-access failures report a bounded cause, and dyld_info accepts bare usage and Apple system image inspection on macOS.",
+          "breaking": false
+        },
+        {
+          "sha": "5633aefa3c39f54c53bb7a09d9a9ab35998dccfe",
+          "subject": "fix(edit): keep preserving saves out of non-primary editor groups",
+          "summary": "Saves without formatting now close the temporary tab they open in a non-primary editor group so agent-edited files stay in the left column.",
+          "breaking": false
+        },
+        {
+          "sha": "221b3295c7eaadca57c7125bfe78fcb4cc1806c9",
+          "subject": "fix(browser-gateway): let bridge restarts finish so browser approvals land",
+          "summary": "Browser gateway restarts now finish by closing open connections, so browser approvals no longer fail with 502, and approval failures are shown next to the approval card.",
+          "breaking": false
+        },
+        {
+          "sha": "e03a1bb782cc17914bc80fa7420e9cfe9353e380",
+          "subject": "fix(tools): allow dyld_info on shared-cache system images",
+          "summary": "The read-only classifier now allows dyld_info on macOS system images that exist only in the dyld shared cache, accepting missing paths only inside Apple system image roots.",
+          "breaking": false
+        },
+        {
+          "sha": "6a7b1b631b3e80a425636ccd7ceb043b4668a849",
+          "subject": "docs: add agent activity UX patterns for SDK chat UIs",
+          "summary": "Adds an Agent activity UX guide to the bundled documentation and corrects the embedding guide about thinking events being forwarded by the Web transport.",
+          "breaking": false
+        },
+        {
+          "sha": "d049bc076229da0166c6db076cd84d4ecb2e2b42",
+          "subject": "fix(browser-gateway): keep browser-queued messages and share Auto Continue",
+          "summary": "Browser-queued and interjected messages now survive VS Code tab switches and work on unfocused chat tabs, and Auto Continue is now a per-chat setting run by VS Code and shared between VS Code and the browser.",
+          "breaking": false
+        },
+        {
+          "sha": "f9ca50d6c09f53b22896edae7ef62fd67842773e",
+          "subject": "fix(browser-gateway): drain heartbeats before releasing owner leases",
+          "summary": "Fixes a race where a late heartbeat could reconnect the browser gateway owner after its lease had been released.",
+          "breaking": false
+        },
+        {
+          "sha": "aa97003f70116eacd6b5b8be0ce76b131fa39c6a",
+          "subject": "fix(terminal): close remaining command and background feedback gaps",
+          "breaking": false
+        },
+        {
+          "sha": "2c783bfb6428e8c1e3aa9f4d5477467efa17892a",
+          "subject": "fix(browser-gateway): await lease shutdown before replacing clients",
+          "summary": "Waits for the browser gateway lease client to shut down fully before replacing it, avoiding stale heartbeat or registration responses being applied.",
+          "breaking": false
+        },
+        {
+          "sha": "ccdaf2148268e0cb43cf52bdb3d93ed40e8521dd",
+          "subject": "fix: reduce startup work and improve full-suite test reporting",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.67.2",
-      "baselineRef": "desktop-v0.67.2",
-      "reserved": "0.67.2",
-      "commits": ["40ac068492d4dac552eeb1cf7c1380225594781c"],
-      "unknownPaths": [],
+      "published": "0.67.3",
+      "baselineRef": "desktop-v0.67.3",
+      "reserved": "0.67.3",
+      "commits": [
+        "9defc585a5837d451bea158c9d6cd116a1352c58",
+        "47acf1e59b4463acc2d0f24499edc2cf6ccfe264",
+        "0713d4a94c7a63b2ae80ab6e78dd955534ab1005",
+        "eb484ddb1599ddd8dc1043e82c0de9624853b1dd",
+        "b08e6ea3c37ff3e11c86a1fa814cc151f1679069",
+        "a9856388593c261bd92c1f8ed40d3c92a2a3a242",
+        "22b18a1bcbd3d5cc7d27cc24d8a8d8fc43ef80cd",
+        "0254c4947c9510c87a62b78ded46275af20880d1",
+        "50d9c264bec3fe34f49225e9c608453ac85ffde9",
+        "10d16263b5c0e52e6b145be85cc621f3190d835d",
+        "5a86dd352b459cd96b467c166de8d7ed66400620",
+        "58827d2bc6e6746a40b5b3d50b1e7cd6de27ee0c",
+        "d85e46b7932d82835bbdb3efe5e366304ab5dafb",
+        "61aeea499f9bb83d356c566adba79b60d064adcb",
+        "504fc3879daaa28ba5a6f0aef4a54b952d4faf66",
+        "b32f62cf3645b9587910aa417ef356bd732f5f0d",
+        "10d0b3782d9ff4209e072f7c11c415cf6caa3e55",
+        "3fa28bdef49feaad99b45eebca6e6b47d797b013",
+        "a01de529f657f9c543eabd938c19c4e22894a0d4",
+        "a8ce13396f2b2fed9cd12c6eff0ccd1bb00606df",
+        "d5b308a5b4b0aa51d464572495ad4d176c42b942",
+        "c5f5f5ee42dc78f5188fae29b547a6dc02cbc74e",
+        "1d3e2af57ad2d931d0b742920f7348a84dcd2fae",
+        "cce375bed0c93512570ea187c118e8816423fc1c",
+        "f6732ce7fbe048a52b6b3d78d3caa184844430ba",
+        "d3947361cdb2adeb3c010298b871d994cec12f07",
+        "908f8a1e3131405d0d64910e655f0d61f48b723b",
+        "997df9834983735a6ed10f99ee98ab51b5f24861",
+        "79c837fdac14dd4e2987342749b0114e65667792",
+        "c27ebbfb8e79942f1941337a0ab42d57715989be",
+        "73cd67552780aeb81b26b4debced936cfa2b5c08",
+        "be8d14028d3ada2faa7f89b2bf55742edf30b894",
+        "e34267c7a3f965fa78a70970c7d443619377cba6",
+        "fe9d9f1c9cbcc42b7399c9876e35ff57f88c7536",
+        "a3b4a544046be6d157c82912f6c608cb4618267c",
+        "849207f4851c531ed6dd012393837e5838f758b3",
+        "fcd2231a84eb5ce9cfade2dd568efbd7a613b60b",
+        "d093d7eb21aa691b43acb082444602dfdde47270",
+        "0fccaf3e4b55321acc0b7aae35fb969a84ae9bd2",
+        "398956888ea9dabf2d772b9870ec4d065ccc98f8",
+        "a8db2342595555ee50a0d3c90c0f4e565c2604ae",
+        "b2e59b000e330cea1e909ffc73cee7b2e86562b9",
+        "edbbcb5d0a6bc26adfe66411d09a4a769e5dd93b",
+        "c59648b0a61817e12982343a076415181f5766e2",
+        "4c209c22b8db65c08a9d50a3cf8c27e6a7815e6d",
+        "46ba4f5c08b443cee38d0bd9b631211f25437c5d",
+        "ff0b9b30e7872d33ae98d5dcb0914f294d589eff",
+        "8c1af1b7d6da03b6bf5ad37cb23721e694269a42",
+        "1983bb90e97dd17dbd5a6d6521dcfc0029df7c75",
+        "156fe68c14e6da81ce4ecf23246edc659b63d153",
+        "4a2121c935f7912c6a41e79b1f8d6f8f5f667f11",
+        "828e2ae3489eb3a898f8b61bb659a1998706a785",
+        "622cc3251015f8a6691bb3bbc82367313b16de63",
+        "e07a975a8a41163dfff349e902d33b779ae5a088",
+        "16f231565e26396c31880bf3ed973f8efc425925",
+        "bc4d4187b8cc800e84906bf048997f3b57031fd7",
+        "5633aefa3c39f54c53bb7a09d9a9ab35998dccfe",
+        "221b3295c7eaadca57c7125bfe78fcb4cc1806c9",
+        "e03a1bb782cc17914bc80fa7420e9cfe9353e380",
+        "6a7b1b631b3e80a425636ccd7ceb043b4668a849",
+        "d049bc076229da0166c6db076cd84d4ecb2e2b42",
+        "f9ca50d6c09f53b22896edae7ef62fd67842773e",
+        "aa97003f70116eacd6b5b8be0ce76b131fa39c6a",
+        "2c783bfb6428e8c1e3aa9f4d5477467efa17892a",
+        "ccdaf2148268e0cb43cf52bdb3d93ed40e8521dd"
+      ],
+      "unknownPaths": [".githooks/pre-push", ".nvmrc"],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.67.3",
-      "effectiveBump": "patch",
+      "version": "0.68.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.67.3",
+      "tag": "desktop-v0.68.0",
       "notes": [
         {
-          "sha": "40ac068492d4dac552eeb1cf7c1380225594781c",
-          "subject": "fix(ask-agent): resume streaming when switching back to a chat with a running turn",
-          "summary": "Switching back to an Ask Agent chat whose turn is still running now resumes the live streaming activity indicator instead of dropping it.",
+          "sha": "9defc585a5837d451bea158c9d6cd116a1352c58",
+          "subject": "feat(final-status): show ask duration on the final status card",
+          "summary": "The final status card header now shows how long the ask took (e.g. Task complete · 4m 12s), in VS Code and browser chat, and the field is added to the protocol.",
+          "breaking": false
+        },
+        {
+          "sha": "47acf1e59b4463acc2d0f24499edc2cf6ccfe264",
+          "subject": "fix(approvals): default outside-workspace write rules to parent-folder prefix",
+          "summary": "Outside-workspace write approvals now default to the parent folder with Prefix mode, and each approval card starts with fresh pattern, mode and scope state.",
+          "breaking": false
+        },
+        {
+          "sha": "0713d4a94c7a63b2ae80ab6e78dd955534ab1005",
+          "subject": "fix(session-history): batch past-session index backfill so search works on long histories",
+          "summary": "Past-session index backfill commits sessions in batches and keeps running in the background, so session search works on long histories and the worktree index also backfills in the background.",
+          "breaking": false
+        },
+        {
+          "sha": "eb484ddb1599ddd8dc1043e82c0de9624853b1dd",
+          "subject": "feat(final-status): end the ask clock when the user presses Stop",
+          "summary": "Pressing Stop now ends the ask timer so the next message starts a fresh clock, while steering with a queued message keeps the same ask open.",
+          "breaking": false
+        },
+        {
+          "sha": "b08e6ea3c37ff3e11c86a1fa814cc151f1679069",
+          "subject": "feat(codex): add GPT-6.1 Terra to the model picker",
+          "summary": "Adds GPT-6.1 Terra to the Codex/OpenAI model picker with 1.05M context, 128K output, none-to-max reasoning, the Fast tier, the reasoning prompt profile and a 90% condense default.",
+          "breaking": false
+        },
+        {
+          "sha": "a9856388593c261bd92c1f8ed40d3c92a2a3a242",
+          "subject": "fix(session-history): advertise past-session search inline so agents use it",
+          "summary": "search_workspace_sessions is now always advertised to the agent and the recall guidance covers mentions in question answers, so agents search past sessions instead of guessing.",
+          "breaking": false
+        },
+        {
+          "sha": "22b18a1bcbd3d5cc7d27cc24d8a8d8fc43ef80cd",
+          "subject": "fix(routing): classify Terra models as balanced, not deep reasoning",
+          "summary": "Terra models are now classified as balanced instead of deep reasoning for background routing, so ordinary background work no longer goes to Sol; deep reasoning and review preferences are limited to Astra and GPT-5.4 Pro.",
+          "breaking": false
+        },
+        {
+          "sha": "0254c4947c9510c87a62b78ded46275af20880d1",
+          "subject": "fix(approvals): let review-mode PR publication evidence actually verify",
+          "summary": "Review-mode PR publication evidence now verifies reliably (URL punctuation stripped, gh pr view JSON accepted, /tmp payloads allowed), so Guardian stops denying most review posts.",
+          "breaking": false
+        },
+        {
+          "sha": "50d9c264bec3fe34f49225e9c608453ac85ffde9",
+          "subject": "refactor(codex): derive routing tiers, prompt profiles and condense defaults from CODEX_MODELS",
+          "summary": "Codex routing tiers, prompt profiles and condense defaults are now derived from per-model fields in CODEX_MODELS instead of separate config, with no change to intended behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "10d16263b5c0e52e6b145be85cc621f3190d835d",
+          "subject": "fix(credentials): reclaim the helper queue lock after its owner crashes",
+          "summary": "The credentials helper queue lock is reclaimed after its owner crashes, so model setup no longer hangs on \"Checking model setup\" until the lock file is deleted by hand.",
+          "breaking": false
+        },
+        {
+          "sha": "5a86dd352b459cd96b467c166de8d7ed66400620",
+          "subject": "ci: unblock linux-arm64 releases and add a local preflight gate",
+          "summary": "Release CI now builds linux-arm64 packages on a native arm64 runner, and a local preflight check and opt-in pre-push hook were added for contributors, with no change to shipped product behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "58827d2bc6e6746a40b5b3d50b1e7cd6de27ee0c",
+          "subject": "ci: test on macOS, take Node from .nvmrc, and stop flaky test breaks",
+          "summary": "CI now tests on macOS and takes Node from .nvmrc (latest 22.x), release coordination skips cleanly when main moves, and several flaky tests are stabilised.",
+          "breaking": false
+        },
+        {
+          "sha": "d85e46b7932d82835bbdb3efe5e366304ab5dafb",
+          "subject": "fix(approvals): show status bar attention for inline chat approvals",
+          "summary": "Inline chat approvals (writes, MCP, memory and similar) now show status bar attention so pending approvals are not missed.",
+          "breaking": false
+        },
+        {
+          "sha": "61aeea499f9bb83d356c566adba79b60d064adcb",
+          "subject": "docs(skills): separate local and shared project skills",
+          "summary": "Documentation and project skill layout now separate local .agentlink/skills from shared .agents/skills, with no runtime behaviour change.",
+          "breaking": false
+        },
+        {
+          "sha": "504fc3879daaa28ba5a6f0aef4a54b952d4faf66",
+          "subject": "feat(approvals): let users resume paused automatic command review",
+          "summary": "Command approval cards now offer a Resume automatic review button when Guardian review was paused by repeated denials, which re-reviews the same command without approving it.",
+          "breaking": false
+        },
+        {
+          "sha": "b32f62cf3645b9587910aa417ef356bd732f5f0d",
+          "subject": "feat(workspace-host): match VS Code search_files and apply_diff contracts",
+          "summary": "The CLI and Assistant gain VS Code's full search_files and apply_diff contracts via new shared core modules, while the node-host apply_diff tool now accepts unified hunks and fuzzy matching and drops its strict-only failure codes.",
+          "breaking": false
+        },
+        {
+          "sha": "10d0b3782d9ff4209e072f7c11c415cf6caa3e55",
+          "subject": "feat(workspace-host): add VS Code find_and_replace and align Ask Agent apply_diff",
+          "summary": "The CLI and Assistant gain VS Code's multi-file find_and_replace with one review and stale-proposal protection, and Ask Agent now advertises the shared apply_diff schema with optional expectedContentHash.",
+          "breaking": false
+        },
+        {
+          "sha": "3fa28bdef49feaad99b45eebca6e6b47d797b013",
+          "subject": "feat(workspace-host): match VS Code's read_file content view",
+          "summary": "The CLI and Assistant read_file content view now matches VS Code: 2,000-line default, anchors, image and PDF reading, and richer metadata; SDK adds a read-file-content entry point and media converters.",
+          "breaking": false
+        },
+        {
+          "sha": "a01de529f657f9c543eabd938c19c4e22894a0d4",
+          "subject": "feat(node-host): VS Code search_files fallback and read_file suggestions",
+          "summary": "The fallback search_files now follows VS Code's regex contract with output modes, paging and context options, and read_file in the CLI and Assistant returns path suggestions and supports auto_follow_suggestion.",
+          "breaking": false
+        },
+        {
+          "sha": "a8ce13396f2b2fed9cd12c6eff0ccd1bb00606df",
+          "subject": "feat(core): share VS Code's interaction tool contracts",
+          "summary": "Shared VS Code ask_user and set_task_status contracts move into core, and the CLI and Assistant todo_write now uses VS Code's tool and restores the todo list from the transcript after a restart.",
+          "breaking": false
+        },
+        {
+          "sha": "d5b308a5b4b0aa51d464572495ad4d176c42b942",
+          "subject": "feat(cli): VS Code's multi-question ask_user",
+          "summary": "The CLI's ask_user now accepts VS Code's multi-question schema with all six question types shown one at a time in the control panel, replacing the old single-question format and the askQuestion host option.",
+          "breaking": false
+        },
+        {
+          "sha": "c5f5f5ee42dc78f5188fae29b547a6dc02cbc74e",
+          "subject": "feat(core): let host tools end the turn and share set_task_status",
+          "summary": "Host tools can end a turn, and the CLI and Assistant gain VS Code's set_task_status with a final card, restore on reload, Ctrl+N continue in the CLI, and Auto Continue stopping in the Assistant.",
+          "breaking": false
+        },
+        {
+          "sha": "1d3e2af57ad2d931d0b742920f7348a84dcd2fae",
+          "subject": "feat(cli): pass messages sent mid-turn into the running turn",
+          "summary": "Messages sent while a CLI turn is running are now taken into that turn at its next break instead of running afterwards, and the footer shows a ^n continue hint when a continue action is available.",
+          "breaking": false
+        },
+        {
+          "sha": "cce375bed0c93512570ea187c118e8816423fc1c",
+          "subject": "refactor(core): move system prompt guidance and modes into core",
+          "summary": "System prompt guidance and the built-in agent modes move into @agentlink/core as new system-prompt and agent-modes entry points; VS Code's prompts are unchanged.",
+          "breaking": false
+        },
+        {
+          "sha": "f6732ce7fbe048a52b6b3d78d3caa184844430ba",
+          "subject": "feat(cli): lead the CLI prompt with VS Code's shared guidance",
+          "summary": "The CLI's system prompt now leads with VS Code's shared guidance for the tools each session registers. workspace-host gains an opt-in sharedPromptGuidance option.",
+          "breaking": false
+        },
+        {
+          "sha": "d3947361cdb2adeb3c010298b871d994cec12f07",
+          "subject": "feat(cli): add agent modes with /mode",
+          "summary": "The CLI gets VS Code's agent modes with /mode and /mode SLUG, saved per session, with custom modes from modes.json. workspace-host gains a modes option and core gains session modes.",
+          "breaking": false
+        },
+        {
+          "sha": "908f8a1e3131405d0d64910e655f0d61f48b723b",
+          "subject": "feat(assistant): layer the prompt on VS Code's shared guidance",
+          "summary": "The Assistant's prompts now build on VS Code's shared guidance for the tools each chat has, as a general assistant for owner chats. workspace-host's sharedPromptGuidance also accepts a codingAssistant option.",
+          "breaking": false
+        },
+        {
+          "sha": "997df9834983735a6ed10f99ee98ab51b5f24861",
+          "subject": "feat(workspace-host): give execute_command VS Code's input and result",
+          "summary": "execute_command in the CLI and Assistant now takes VS Code's parameters (timeout in seconds, env, output filters) and returns VS Code's result fields. Older timeoutMs calls still run. The output filter moves to @agentlink/core/command-output.",
+          "breaking": false
+        },
+        {
+          "sha": "79c837fdac14dd4e2987342749b0114e65667792",
+          "subject": "fix(core): build the command-output subpath for CommonJS",
+          "summary": "Fixes the CommonJS build so the @agentlink/core command-output subpath is included.",
+          "breaking": false
+        },
+        {
+          "sha": "c27ebbfb8e79942f1941337a0ab42d57715989be",
+          "subject": "feat(workspace-host): replace command output tools with get_terminal_output and close_terminals",
+          "summary": "workspace-host replaces get_command_output, list_commands and stop_command with VS Code's get_terminal_output and close_terminals. Ask Agent's execute_command moves to VS Code's schema, and the CLI, Assistant and Ask Agent use the new tools.",
+          "breaking": false
+        },
+        {
+          "sha": "73cd67552780aeb81b26b4debced936cfa2b5c08",
+          "subject": "feat(cli,assistant): run read-only commands in Ask mode and for task reviewers",
+          "summary": "CLI Ask mode and Assistant task reviewers can now run commands that VS Code's read-only check clears without asking, with other commands prompting (CLI) or refused (reviewers); the classifier is shared via new core subpaths.",
+          "breaking": false
+        },
+        {
+          "sha": "be8d14028d3ada2faa7f89b2bf55742edf30b894",
+          "subject": "feat(cli): let the model propose mode changes with switch_mode and ask_user modeSwitch",
+          "summary": "The CLI model can now propose mode changes with switch_mode and ask_user modeSwitch, shown as an Allow/Reject card, with the turn continuing in the new mode.",
+          "breaking": false
+        },
+        {
+          "sha": "e34267c7a3f965fa78a70970c7d443619377cba6",
+          "subject": "feat(workspace-host): use VS Code's background agent management tools",
+          "summary": "CLI and Assistant background agent tools now use VS Code's descriptions, inputs and results, name children by sessionId, and can wait for any or all of several children.",
+          "breaking": false
+        },
+        {
+          "sha": "fe9d9f1c9cbcc42b7399c9876e35ff57f88c7536",
+          "subject": "feat(workspace-host): spawn background agents with VS Code's ownedPaths",
+          "summary": "CLI and Assistant spawn_background_agent now takes VS Code's ownedPaths and forbiddenPaths with ownership handoff, optional read_paths, and a configurable per-session child limit (4 in CLI, 2 in Assistant).",
+          "breaking": false
+        },
+        {
+          "sha": "a3b4a544046be6d157c82912f6c608cb4618267c",
+          "subject": "fix(sandbox): follow agent-folder skill symlinks and type namespace rejections",
+          "summary": "Sandboxed commands no longer fail when an agent-folder skill symlink such as .agents/skills -> ../.claude/skills points into another policy folder; other namespace rejections now report the offending path.",
+          "breaking": false
+        },
+        {
+          "sha": "849207f4851c531ed6dd012393837e5838f758b3",
+          "subject": "fix(codex): stream Responses tool argument deltas keyed by item_id",
+          "summary": "Fixes Responses API tool argument streaming so long tool calls no longer trip the no-progress watchdog and retry repeatedly; repeated no-progress timeouts now surface after one retry.",
+          "breaking": false
+        },
+        {
+          "sha": "fcd2231a84eb5ce9cfade2dd568efbd7a613b60b",
+          "subject": "fix(agent): start a todo list for multi-step work on every prompt profile",
+          "summary": "The system prompt and todo_write description now tell the model to start a todo list in its first response for multi-step work on every prompt profile, restoring todo use with the compact profile.",
+          "breaking": false
+        },
+        {
+          "sha": "d093d7eb21aa691b43acb082444602dfdde47270",
+          "subject": "fix(tools): follow stale built-in skill paths to the current catalog entry",
+          "summary": "load_skill now follows a stale built-in skill path left after an extension update to the current built-in catalog entry instead of failing.",
+          "breaking": false
+        },
+        {
+          "sha": "0fccaf3e4b55321acc0b7aae35fb969a84ae9bd2",
+          "subject": "feat(browser-gateway): improve mobile and foldable layout",
+          "summary": "Improves the browser gateway on phones and foldables: chats no longer jump to the bottom, a 600px phone breakpoint, denser touch type, VS Code chat tabs in the shell sidebar, a tab close endpoint, and the VS Code view reopens after reload.",
+          "breaking": false
+        },
+        {
+          "sha": "398956888ea9dabf2d772b9870ec4d065ccc98f8",
+          "subject": "fix(tools): reject ${digits} references in find_and_replace regex templates",
+          "summary": "find_and_replace in regex mode now rejects ${N} references with a clear error before any edit instead of silently inserting the literal text and dropping the captured content.",
+          "breaking": false
+        },
+        {
+          "sha": "a8db2342595555ee50a0d3c90c0f4e565c2604ae",
+          "subject": "feat(background): replace automatic fleet budgets with foreground-led progress supervision",
+          "summary": "Background agents no longer get automatic budgets or wrap-up messages; the foreground coordinator judges progress through status and progress-check steering, and explicit budgets only stop a run at their hard boundary.",
+          "breaking": false
+        },
+        {
+          "sha": "b2e59b000e330cea1e909ffc73cee7b2e86562b9",
+          "subject": "fix(skills): let load_skill activate readable skills missing from the catalog",
+          "summary": "load_skill can now activate a readable SKILL.md missing from or newer than the session catalog, such as a freshly pulled skill or one in a second workspace folder, while keeping disabled skills disabled and applying allowed-tools restrictions.",
+          "breaking": false
+        },
+        {
+          "sha": "edbbcb5d0a6bc26adfe66411d09a4a769e5dd93b",
+          "subject": "feat(worktree): create worktrees for every repo in multi-root workspaces",
+          "summary": "/worktree and /review in multi-root workspaces now create a worktree on the same branch for every Git repository, generate a .code-workspace file, and open it in the new window, rolling back partial launches.",
+          "breaking": false
+        },
+        {
+          "sha": "c59648b0a61817e12982343a076415181f5766e2",
+          "subject": "fix(codex): name the real cause in Responses retry warnings",
+          "summary": "Codex retry warnings now name the real cause (such as overloaded 503), retry number, delay and next transport instead of a generic 'Response interrupted' message; retry behavior is unchanged.",
+          "breaking": false
+        },
+        {
+          "sha": "4c209c22b8db65c08a9d50a3cf8c27e6a7815e6d",
+          "subject": "fix(indexer): optimize retrieval store during long indexing jobs",
+          "summary": "The indexer now optimizes the retrieval store between committed batches during long indexing jobs, preventing runaway storage growth and stalls, and reports optimization failures as non-fatal errors.",
+          "breaking": false
+        },
+        {
+          "sha": "46ba4f5c08b443cee38d0bd9b631211f25437c5d",
+          "subject": "feat(indexer): add Free Up Space to the codebase index sidebar",
+          "summary": "Adds a Free Up Space button and agentlink.maintainIndex command that compact the workspace's codebase index and prune old database history without re-indexing, reporting the space reclaimed.",
+          "breaking": false
+        },
+        {
+          "sha": "ff0b9b30e7872d33ae98d5dcb0914f294d589eff",
+          "subject": "fix(retrieval): give store optimization a one-hour lock limit",
+          "summary": "Retrieval store compaction and pruning now get a one-hour lock limit so optimizing a heavily bloated index no longer times out and leaves the store locked and bloated.",
+          "breaking": false
+        },
+        {
+          "sha": "8c1af1b7d6da03b6bf5ad37cb23721e694269a42",
+          "subject": "fix(indexer): report store space reclaimed as measured on disk",
+          "summary": "Index optimization now reports space reclaimed as measured on disk, rather than Lance's prune statistics that omitted old manifests and showed 0 MiB, and logs the store size afterward.",
+          "breaking": false
+        },
+        {
+          "sha": "1983bb90e97dd17dbd5a6d6521dcfc0029df7c75",
+          "subject": "fix(plugins): stop liveness-only registry bumps from reconnecting MCP in every window",
+          "summary": "Plugin registry changes that only reflect other windows opening or closing no longer make every VS Code window reconnect its MCP servers.",
+          "breaking": false
+        },
+        {
+          "sha": "156fe68c14e6da81ce4ecf23246edc659b63d153",
+          "subject": "fix(agent): show text results in final status cards",
+          "summary": "Final status cards now show a text result as the summary when set_task_status provides no summary.",
+          "breaking": false
+        },
+        {
+          "sha": "4a2121c935f7912c6a41e79b1f8d6f8f5f667f11",
+          "subject": "feat(chat): expose final results and continuation prompts",
+          "summary": "Final status cards in VS Code and browser chat now show structured results (text, review findings, patch, verification) and the full continuation prompt next to the action button, with relay lazy-loading of results.",
+          "breaking": false
+        },
+        {
+          "sha": "828e2ae3489eb3a898f8b61bb659a1998706a785",
+          "subject": "fix(chat): preserve protocol boundaries and clarify stale results",
+          "summary": "The stale-result error for browser final results now says it is waiting for an updated session snapshot instead of suggesting a retry.",
+          "breaking": false
+        },
+        {
+          "sha": "622cc3251015f8a6691bb3bbc82367313b16de63",
+          "subject": "fix(chat): hide default continuation text and restore bottom-left action",
+          "summary": "Final status cards hide the built-in default continuation text and show the Continue action at the bottom-left, displaying a Next step prompt only when the agent supplies one.",
+          "breaking": false
+        },
+        {
+          "sha": "e07a975a8a41163dfff349e902d33b779ae5a088",
+          "subject": "fix(codex): stop the no-progress watchdog restarting silent reasoning",
+          "summary": "Long silent Codex reasoning is no longer mistaken for a dead stream and restarted by the no-progress watchdog; a bounded 30-minute window now applies while reasoning is open.",
+          "breaking": false
+        },
+        {
+          "sha": "16f231565e26396c31880bf3ed973f8efc425925",
+          "subject": "fix: harden tool diagnostics and background recovery",
+          "summary": "Hardens tool diagnostics and recovery: bounded MCP crash reconnects with config revalidation, preserved evidence for failed background agents, safe command and sandbox diagnostics, bounded xxd/dyld_info reads, web fetch provenance, quiet update polling, and accurate failed-save reporting.",
+          "breaking": false
+        },
+        {
+          "sha": "bc4d4187b8cc800e84906bf048997f3b57031fd7",
+          "subject": "fix(tools): make read-only network and web-fetch failures actionable",
+          "summary": "Read-only network rejections now tell background agents to ask the coordinator for the exact remote data, Codex page-access failures report a bounded cause, and dyld_info accepts bare usage and Apple system image inspection on macOS.",
+          "breaking": false
+        },
+        {
+          "sha": "5633aefa3c39f54c53bb7a09d9a9ab35998dccfe",
+          "subject": "fix(edit): keep preserving saves out of non-primary editor groups",
+          "summary": "Saves without formatting now close the temporary tab they open in a non-primary editor group so agent-edited files stay in the left column.",
+          "breaking": false
+        },
+        {
+          "sha": "221b3295c7eaadca57c7125bfe78fcb4cc1806c9",
+          "subject": "fix(browser-gateway): let bridge restarts finish so browser approvals land",
+          "summary": "Browser gateway restarts now finish by closing open connections, so browser approvals no longer fail with 502, and approval failures are shown next to the approval card.",
+          "breaking": false
+        },
+        {
+          "sha": "e03a1bb782cc17914bc80fa7420e9cfe9353e380",
+          "subject": "fix(tools): allow dyld_info on shared-cache system images",
+          "summary": "The read-only classifier now allows dyld_info on macOS system images that exist only in the dyld shared cache, accepting missing paths only inside Apple system image roots.",
+          "breaking": false
+        },
+        {
+          "sha": "6a7b1b631b3e80a425636ccd7ceb043b4668a849",
+          "subject": "docs: add agent activity UX patterns for SDK chat UIs",
+          "summary": "Adds an Agent activity UX guide to the bundled documentation and corrects the embedding guide about thinking events being forwarded by the Web transport.",
+          "breaking": false
+        },
+        {
+          "sha": "d049bc076229da0166c6db076cd84d4ecb2e2b42",
+          "subject": "fix(browser-gateway): keep browser-queued messages and share Auto Continue",
+          "summary": "Browser-queued and interjected messages now survive VS Code tab switches and work on unfocused chat tabs, and Auto Continue is now a per-chat setting run by VS Code and shared between VS Code and the browser.",
+          "breaking": false
+        },
+        {
+          "sha": "f9ca50d6c09f53b22896edae7ef62fd67842773e",
+          "subject": "fix(browser-gateway): drain heartbeats before releasing owner leases",
+          "summary": "Fixes a race where a late heartbeat could reconnect the browser gateway owner after its lease had been released.",
+          "breaking": false
+        },
+        {
+          "sha": "aa97003f70116eacd6b5b8be0ce76b131fa39c6a",
+          "subject": "fix(terminal): close remaining command and background feedback gaps",
+          "breaking": false
+        },
+        {
+          "sha": "2c783bfb6428e8c1e3aa9f4d5477467efa17892a",
+          "subject": "fix(browser-gateway): await lease shutdown before replacing clients",
+          "summary": "Waits for the browser gateway lease client to shut down fully before replacing it, avoiding stale heartbeat or registration responses being applied.",
+          "breaking": false
+        },
+        {
+          "sha": "ccdaf2148268e0cb43cf52bdb3d93ed40e8521dd",
+          "subject": "fix: reduce startup work and improve full-suite test reporting",
           "breaking": false
         }
       ]
@@ -329,46 +1237,1035 @@
       "published": "0.45.0",
       "baselineRef": "cli-v0.45.0",
       "reserved": "0.45.0",
-      "commits": [],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "commits": [
+        "9defc585a5837d451bea158c9d6cd116a1352c58",
+        "0713d4a94c7a63b2ae80ab6e78dd955534ab1005",
+        "b08e6ea3c37ff3e11c86a1fa814cc151f1679069",
+        "50d9c264bec3fe34f49225e9c608453ac85ffde9",
+        "10d16263b5c0e52e6b145be85cc621f3190d835d",
+        "5a86dd352b459cd96b467c166de8d7ed66400620",
+        "58827d2bc6e6746a40b5b3d50b1e7cd6de27ee0c",
+        "504fc3879daaa28ba5a6f0aef4a54b952d4faf66",
+        "b32f62cf3645b9587910aa417ef356bd732f5f0d",
+        "10d0b3782d9ff4209e072f7c11c415cf6caa3e55",
+        "3fa28bdef49feaad99b45eebca6e6b47d797b013",
+        "a01de529f657f9c543eabd938c19c4e22894a0d4",
+        "a8ce13396f2b2fed9cd12c6eff0ccd1bb00606df",
+        "d5b308a5b4b0aa51d464572495ad4d176c42b942",
+        "c5f5f5ee42dc78f5188fae29b547a6dc02cbc74e",
+        "1d3e2af57ad2d931d0b742920f7348a84dcd2fae",
+        "cce375bed0c93512570ea187c118e8816423fc1c",
+        "f6732ce7fbe048a52b6b3d78d3caa184844430ba",
+        "d3947361cdb2adeb3c010298b871d994cec12f07",
+        "908f8a1e3131405d0d64910e655f0d61f48b723b",
+        "997df9834983735a6ed10f99ee98ab51b5f24861",
+        "79c837fdac14dd4e2987342749b0114e65667792",
+        "c27ebbfb8e79942f1941337a0ab42d57715989be",
+        "73cd67552780aeb81b26b4debced936cfa2b5c08",
+        "be8d14028d3ada2faa7f89b2bf55742edf30b894",
+        "e34267c7a3f965fa78a70970c7d443619377cba6",
+        "fe9d9f1c9cbcc42b7399c9876e35ff57f88c7536",
+        "a3b4a544046be6d157c82912f6c608cb4618267c",
+        "849207f4851c531ed6dd012393837e5838f758b3",
+        "fcd2231a84eb5ce9cfade2dd568efbd7a613b60b",
+        "d093d7eb21aa691b43acb082444602dfdde47270",
+        "398956888ea9dabf2d772b9870ec4d065ccc98f8",
+        "a8db2342595555ee50a0d3c90c0f4e565c2604ae",
+        "b2e59b000e330cea1e909ffc73cee7b2e86562b9",
+        "46ba4f5c08b443cee38d0bd9b631211f25437c5d",
+        "156fe68c14e6da81ce4ecf23246edc659b63d153",
+        "4a2121c935f7912c6a41e79b1f8d6f8f5f667f11",
+        "e07a975a8a41163dfff349e902d33b779ae5a088",
+        "16f231565e26396c31880bf3ed973f8efc425925",
+        "bc4d4187b8cc800e84906bf048997f3b57031fd7",
+        "e03a1bb782cc17914bc80fa7420e9cfe9353e380",
+        "aa97003f70116eacd6b5b8be0ce76b131fa39c6a",
+        "ccdaf2148268e0cb43cf52bdb3d93ed40e8521dd"
+      ],
+      "unknownPaths": [".githooks/pre-push", ".nvmrc"],
+      "breakingCommits": ["d5b308a5b4b0aa51d464572495ad4d176c42b942"],
+      "bump": "breaking",
+      "status": "release",
+      "version": "0.46.0",
+      "effectiveBump": "minor",
+      "breaking": true,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.46.0",
+      "notes": [
+        {
+          "sha": "9defc585a5837d451bea158c9d6cd116a1352c58",
+          "subject": "feat(final-status): show ask duration on the final status card",
+          "summary": "The final status card header now shows how long the ask took (e.g. Task complete · 4m 12s), in VS Code and browser chat, and the field is added to the protocol.",
+          "breaking": false
+        },
+        {
+          "sha": "0713d4a94c7a63b2ae80ab6e78dd955534ab1005",
+          "subject": "fix(session-history): batch past-session index backfill so search works on long histories",
+          "summary": "Past-session index backfill commits sessions in batches and keeps running in the background, so session search works on long histories and the worktree index also backfills in the background.",
+          "breaking": false
+        },
+        {
+          "sha": "b08e6ea3c37ff3e11c86a1fa814cc151f1679069",
+          "subject": "feat(codex): add GPT-6.1 Terra to the model picker",
+          "summary": "Adds GPT-6.1 Terra to the Codex/OpenAI model picker with 1.05M context, 128K output, none-to-max reasoning, the Fast tier, the reasoning prompt profile and a 90% condense default.",
+          "breaking": false
+        },
+        {
+          "sha": "50d9c264bec3fe34f49225e9c608453ac85ffde9",
+          "subject": "refactor(codex): derive routing tiers, prompt profiles and condense defaults from CODEX_MODELS",
+          "summary": "Codex routing tiers, prompt profiles and condense defaults are now derived from per-model fields in CODEX_MODELS instead of separate config, with no change to intended behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "10d16263b5c0e52e6b145be85cc621f3190d835d",
+          "subject": "fix(credentials): reclaim the helper queue lock after its owner crashes",
+          "summary": "The credentials helper queue lock is reclaimed after its owner crashes, so model setup no longer hangs on \"Checking model setup\" until the lock file is deleted by hand.",
+          "breaking": false
+        },
+        {
+          "sha": "5a86dd352b459cd96b467c166de8d7ed66400620",
+          "subject": "ci: unblock linux-arm64 releases and add a local preflight gate",
+          "summary": "Release CI now builds linux-arm64 packages on a native arm64 runner, and a local preflight check and opt-in pre-push hook were added for contributors, with no change to shipped product behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "58827d2bc6e6746a40b5b3d50b1e7cd6de27ee0c",
+          "subject": "ci: test on macOS, take Node from .nvmrc, and stop flaky test breaks",
+          "summary": "CI now tests on macOS and takes Node from .nvmrc (latest 22.x), release coordination skips cleanly when main moves, and several flaky tests are stabilised.",
+          "breaking": false
+        },
+        {
+          "sha": "504fc3879daaa28ba5a6f0aef4a54b952d4faf66",
+          "subject": "feat(approvals): let users resume paused automatic command review",
+          "summary": "Command approval cards now offer a Resume automatic review button when Guardian review was paused by repeated denials, which re-reviews the same command without approving it.",
+          "breaking": false
+        },
+        {
+          "sha": "b32f62cf3645b9587910aa417ef356bd732f5f0d",
+          "subject": "feat(workspace-host): match VS Code search_files and apply_diff contracts",
+          "summary": "The CLI and Assistant gain VS Code's full search_files and apply_diff contracts via new shared core modules, while the node-host apply_diff tool now accepts unified hunks and fuzzy matching and drops its strict-only failure codes.",
+          "breaking": false
+        },
+        {
+          "sha": "10d0b3782d9ff4209e072f7c11c415cf6caa3e55",
+          "subject": "feat(workspace-host): add VS Code find_and_replace and align Ask Agent apply_diff",
+          "summary": "The CLI and Assistant gain VS Code's multi-file find_and_replace with one review and stale-proposal protection, and Ask Agent now advertises the shared apply_diff schema with optional expectedContentHash.",
+          "breaking": false
+        },
+        {
+          "sha": "3fa28bdef49feaad99b45eebca6e6b47d797b013",
+          "subject": "feat(workspace-host): match VS Code's read_file content view",
+          "summary": "The CLI and Assistant read_file content view now matches VS Code: 2,000-line default, anchors, image and PDF reading, and richer metadata; SDK adds a read-file-content entry point and media converters.",
+          "breaking": false
+        },
+        {
+          "sha": "a01de529f657f9c543eabd938c19c4e22894a0d4",
+          "subject": "feat(node-host): VS Code search_files fallback and read_file suggestions",
+          "summary": "The fallback search_files now follows VS Code's regex contract with output modes, paging and context options, and read_file in the CLI and Assistant returns path suggestions and supports auto_follow_suggestion.",
+          "breaking": false
+        },
+        {
+          "sha": "a8ce13396f2b2fed9cd12c6eff0ccd1bb00606df",
+          "subject": "feat(core): share VS Code's interaction tool contracts",
+          "summary": "Shared VS Code ask_user and set_task_status contracts move into core, and the CLI and Assistant todo_write now uses VS Code's tool and restores the todo list from the transcript after a restart.",
+          "breaking": false
+        },
+        {
+          "sha": "d5b308a5b4b0aa51d464572495ad4d176c42b942",
+          "subject": "feat(cli): VS Code's multi-question ask_user",
+          "summary": "The CLI's ask_user now accepts VS Code's multi-question schema with all six question types shown one at a time in the control panel, replacing the old single-question format and the askQuestion host option.",
+          "breaking": true
+        },
+        {
+          "sha": "c5f5f5ee42dc78f5188fae29b547a6dc02cbc74e",
+          "subject": "feat(core): let host tools end the turn and share set_task_status",
+          "summary": "Host tools can end a turn, and the CLI and Assistant gain VS Code's set_task_status with a final card, restore on reload, Ctrl+N continue in the CLI, and Auto Continue stopping in the Assistant.",
+          "breaking": false
+        },
+        {
+          "sha": "1d3e2af57ad2d931d0b742920f7348a84dcd2fae",
+          "subject": "feat(cli): pass messages sent mid-turn into the running turn",
+          "summary": "Messages sent while a CLI turn is running are now taken into that turn at its next break instead of running afterwards, and the footer shows a ^n continue hint when a continue action is available.",
+          "breaking": false
+        },
+        {
+          "sha": "cce375bed0c93512570ea187c118e8816423fc1c",
+          "subject": "refactor(core): move system prompt guidance and modes into core",
+          "summary": "System prompt guidance and the built-in agent modes move into @agentlink/core as new system-prompt and agent-modes entry points; VS Code's prompts are unchanged.",
+          "breaking": false
+        },
+        {
+          "sha": "f6732ce7fbe048a52b6b3d78d3caa184844430ba",
+          "subject": "feat(cli): lead the CLI prompt with VS Code's shared guidance",
+          "summary": "The CLI's system prompt now leads with VS Code's shared guidance for the tools each session registers. workspace-host gains an opt-in sharedPromptGuidance option.",
+          "breaking": false
+        },
+        {
+          "sha": "d3947361cdb2adeb3c010298b871d994cec12f07",
+          "subject": "feat(cli): add agent modes with /mode",
+          "summary": "The CLI gets VS Code's agent modes with /mode and /mode SLUG, saved per session, with custom modes from modes.json. workspace-host gains a modes option and core gains session modes.",
+          "breaking": false
+        },
+        {
+          "sha": "908f8a1e3131405d0d64910e655f0d61f48b723b",
+          "subject": "feat(assistant): layer the prompt on VS Code's shared guidance",
+          "summary": "The Assistant's prompts now build on VS Code's shared guidance for the tools each chat has, as a general assistant for owner chats. workspace-host's sharedPromptGuidance also accepts a codingAssistant option.",
+          "breaking": false
+        },
+        {
+          "sha": "997df9834983735a6ed10f99ee98ab51b5f24861",
+          "subject": "feat(workspace-host): give execute_command VS Code's input and result",
+          "summary": "execute_command in the CLI and Assistant now takes VS Code's parameters (timeout in seconds, env, output filters) and returns VS Code's result fields. Older timeoutMs calls still run. The output filter moves to @agentlink/core/command-output.",
+          "breaking": false
+        },
+        {
+          "sha": "79c837fdac14dd4e2987342749b0114e65667792",
+          "subject": "fix(core): build the command-output subpath for CommonJS",
+          "summary": "Fixes the CommonJS build so the @agentlink/core command-output subpath is included.",
+          "breaking": false
+        },
+        {
+          "sha": "c27ebbfb8e79942f1941337a0ab42d57715989be",
+          "subject": "feat(workspace-host): replace command output tools with get_terminal_output and close_terminals",
+          "summary": "workspace-host replaces get_command_output, list_commands and stop_command with VS Code's get_terminal_output and close_terminals. Ask Agent's execute_command moves to VS Code's schema, and the CLI, Assistant and Ask Agent use the new tools.",
+          "breaking": false
+        },
+        {
+          "sha": "73cd67552780aeb81b26b4debced936cfa2b5c08",
+          "subject": "feat(cli,assistant): run read-only commands in Ask mode and for task reviewers",
+          "summary": "CLI Ask mode and Assistant task reviewers can now run commands that VS Code's read-only check clears without asking, with other commands prompting (CLI) or refused (reviewers); the classifier is shared via new core subpaths.",
+          "breaking": false
+        },
+        {
+          "sha": "be8d14028d3ada2faa7f89b2bf55742edf30b894",
+          "subject": "feat(cli): let the model propose mode changes with switch_mode and ask_user modeSwitch",
+          "summary": "The CLI model can now propose mode changes with switch_mode and ask_user modeSwitch, shown as an Allow/Reject card, with the turn continuing in the new mode.",
+          "breaking": false
+        },
+        {
+          "sha": "e34267c7a3f965fa78a70970c7d443619377cba6",
+          "subject": "feat(workspace-host): use VS Code's background agent management tools",
+          "summary": "CLI and Assistant background agent tools now use VS Code's descriptions, inputs and results, name children by sessionId, and can wait for any or all of several children.",
+          "breaking": false
+        },
+        {
+          "sha": "fe9d9f1c9cbcc42b7399c9876e35ff57f88c7536",
+          "subject": "feat(workspace-host): spawn background agents with VS Code's ownedPaths",
+          "summary": "CLI and Assistant spawn_background_agent now takes VS Code's ownedPaths and forbiddenPaths with ownership handoff, optional read_paths, and a configurable per-session child limit (4 in CLI, 2 in Assistant).",
+          "breaking": false
+        },
+        {
+          "sha": "a3b4a544046be6d157c82912f6c608cb4618267c",
+          "subject": "fix(sandbox): follow agent-folder skill symlinks and type namespace rejections",
+          "summary": "Sandboxed commands no longer fail when an agent-folder skill symlink such as .agents/skills -> ../.claude/skills points into another policy folder; other namespace rejections now report the offending path.",
+          "breaking": false
+        },
+        {
+          "sha": "849207f4851c531ed6dd012393837e5838f758b3",
+          "subject": "fix(codex): stream Responses tool argument deltas keyed by item_id",
+          "summary": "Fixes Responses API tool argument streaming so long tool calls no longer trip the no-progress watchdog and retry repeatedly; repeated no-progress timeouts now surface after one retry.",
+          "breaking": false
+        },
+        {
+          "sha": "fcd2231a84eb5ce9cfade2dd568efbd7a613b60b",
+          "subject": "fix(agent): start a todo list for multi-step work on every prompt profile",
+          "summary": "The system prompt and todo_write description now tell the model to start a todo list in its first response for multi-step work on every prompt profile, restoring todo use with the compact profile.",
+          "breaking": false
+        },
+        {
+          "sha": "d093d7eb21aa691b43acb082444602dfdde47270",
+          "subject": "fix(tools): follow stale built-in skill paths to the current catalog entry",
+          "summary": "load_skill now follows a stale built-in skill path left after an extension update to the current built-in catalog entry instead of failing.",
+          "breaking": false
+        },
+        {
+          "sha": "398956888ea9dabf2d772b9870ec4d065ccc98f8",
+          "subject": "fix(tools): reject ${digits} references in find_and_replace regex templates",
+          "summary": "find_and_replace in regex mode now rejects ${N} references with a clear error before any edit instead of silently inserting the literal text and dropping the captured content.",
+          "breaking": false
+        },
+        {
+          "sha": "a8db2342595555ee50a0d3c90c0f4e565c2604ae",
+          "subject": "feat(background): replace automatic fleet budgets with foreground-led progress supervision",
+          "summary": "Background agents no longer get automatic budgets or wrap-up messages; the foreground coordinator judges progress through status and progress-check steering, and explicit budgets only stop a run at their hard boundary.",
+          "breaking": false
+        },
+        {
+          "sha": "b2e59b000e330cea1e909ffc73cee7b2e86562b9",
+          "subject": "fix(skills): let load_skill activate readable skills missing from the catalog",
+          "summary": "load_skill can now activate a readable SKILL.md missing from or newer than the session catalog, such as a freshly pulled skill or one in a second workspace folder, while keeping disabled skills disabled and applying allowed-tools restrictions.",
+          "breaking": false
+        },
+        {
+          "sha": "46ba4f5c08b443cee38d0bd9b631211f25437c5d",
+          "subject": "feat(indexer): add Free Up Space to the codebase index sidebar",
+          "summary": "Adds a Free Up Space button and agentlink.maintainIndex command that compact the workspace's codebase index and prune old database history without re-indexing, reporting the space reclaimed.",
+          "breaking": false
+        },
+        {
+          "sha": "156fe68c14e6da81ce4ecf23246edc659b63d153",
+          "subject": "fix(agent): show text results in final status cards",
+          "summary": "Final status cards now show a text result as the summary when set_task_status provides no summary.",
+          "breaking": false
+        },
+        {
+          "sha": "4a2121c935f7912c6a41e79b1f8d6f8f5f667f11",
+          "subject": "feat(chat): expose final results and continuation prompts",
+          "summary": "Final status cards in VS Code and browser chat now show structured results (text, review findings, patch, verification) and the full continuation prompt next to the action button, with relay lazy-loading of results.",
+          "breaking": false
+        },
+        {
+          "sha": "e07a975a8a41163dfff349e902d33b779ae5a088",
+          "subject": "fix(codex): stop the no-progress watchdog restarting silent reasoning",
+          "summary": "Long silent Codex reasoning is no longer mistaken for a dead stream and restarted by the no-progress watchdog; a bounded 30-minute window now applies while reasoning is open.",
+          "breaking": false
+        },
+        {
+          "sha": "16f231565e26396c31880bf3ed973f8efc425925",
+          "subject": "fix: harden tool diagnostics and background recovery",
+          "summary": "Hardens tool diagnostics and recovery: bounded MCP crash reconnects with config revalidation, preserved evidence for failed background agents, safe command and sandbox diagnostics, bounded xxd/dyld_info reads, web fetch provenance, quiet update polling, and accurate failed-save reporting.",
+          "breaking": false
+        },
+        {
+          "sha": "bc4d4187b8cc800e84906bf048997f3b57031fd7",
+          "subject": "fix(tools): make read-only network and web-fetch failures actionable",
+          "summary": "Read-only network rejections now tell background agents to ask the coordinator for the exact remote data, Codex page-access failures report a bounded cause, and dyld_info accepts bare usage and Apple system image inspection on macOS.",
+          "breaking": false
+        },
+        {
+          "sha": "e03a1bb782cc17914bc80fa7420e9cfe9353e380",
+          "subject": "fix(tools): allow dyld_info on shared-cache system images",
+          "summary": "The read-only classifier now allows dyld_info on macOS system images that exist only in the dyld shared cache, accepting missing paths only inside Apple system image roots.",
+          "breaking": false
+        },
+        {
+          "sha": "aa97003f70116eacd6b5b8be0ce76b131fa39c6a",
+          "subject": "fix(terminal): close remaining command and background feedback gaps",
+          "breaking": false
+        },
+        {
+          "sha": "ccdaf2148268e0cb43cf52bdb3d93ed40e8521dd",
+          "subject": "fix: reduce startup work and improve full-suite test reporting",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.35.0",
       "baselineRef": "sdk-v0.35.0",
       "reserved": "0.35.0",
-      "commits": [],
+      "commits": [
+        "9defc585a5837d451bea158c9d6cd116a1352c58",
+        "0713d4a94c7a63b2ae80ab6e78dd955534ab1005",
+        "b08e6ea3c37ff3e11c86a1fa814cc151f1679069",
+        "50d9c264bec3fe34f49225e9c608453ac85ffde9",
+        "10d16263b5c0e52e6b145be85cc621f3190d835d",
+        "504fc3879daaa28ba5a6f0aef4a54b952d4faf66",
+        "b32f62cf3645b9587910aa417ef356bd732f5f0d",
+        "10d0b3782d9ff4209e072f7c11c415cf6caa3e55",
+        "3fa28bdef49feaad99b45eebca6e6b47d797b013",
+        "a01de529f657f9c543eabd938c19c4e22894a0d4",
+        "a8ce13396f2b2fed9cd12c6eff0ccd1bb00606df",
+        "d5b308a5b4b0aa51d464572495ad4d176c42b942",
+        "c5f5f5ee42dc78f5188fae29b547a6dc02cbc74e",
+        "cce375bed0c93512570ea187c118e8816423fc1c",
+        "f6732ce7fbe048a52b6b3d78d3caa184844430ba",
+        "d3947361cdb2adeb3c010298b871d994cec12f07",
+        "908f8a1e3131405d0d64910e655f0d61f48b723b",
+        "997df9834983735a6ed10f99ee98ab51b5f24861",
+        "79c837fdac14dd4e2987342749b0114e65667792",
+        "c27ebbfb8e79942f1941337a0ab42d57715989be",
+        "73cd67552780aeb81b26b4debced936cfa2b5c08",
+        "be8d14028d3ada2faa7f89b2bf55742edf30b894",
+        "e34267c7a3f965fa78a70970c7d443619377cba6",
+        "fe9d9f1c9cbcc42b7399c9876e35ff57f88c7536",
+        "a3b4a544046be6d157c82912f6c608cb4618267c",
+        "849207f4851c531ed6dd012393837e5838f758b3",
+        "fcd2231a84eb5ce9cfade2dd568efbd7a613b60b",
+        "d093d7eb21aa691b43acb082444602dfdde47270",
+        "398956888ea9dabf2d772b9870ec4d065ccc98f8",
+        "a8db2342595555ee50a0d3c90c0f4e565c2604ae",
+        "b2e59b000e330cea1e909ffc73cee7b2e86562b9",
+        "46ba4f5c08b443cee38d0bd9b631211f25437c5d",
+        "156fe68c14e6da81ce4ecf23246edc659b63d153",
+        "4a2121c935f7912c6a41e79b1f8d6f8f5f667f11",
+        "e07a975a8a41163dfff349e902d33b779ae5a088",
+        "16f231565e26396c31880bf3ed973f8efc425925",
+        "bc4d4187b8cc800e84906bf048997f3b57031fd7",
+        "e03a1bb782cc17914bc80fa7420e9cfe9353e380",
+        "aa97003f70116eacd6b5b8be0ce76b131fa39c6a",
+        "ccdaf2148268e0cb43cf52bdb3d93ed40e8521dd"
+      ],
       "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "breakingCommits": [
+        "b32f62cf3645b9587910aa417ef356bd732f5f0d",
+        "a01de529f657f9c543eabd938c19c4e22894a0d4",
+        "a8ce13396f2b2fed9cd12c6eff0ccd1bb00606df",
+        "d5b308a5b4b0aa51d464572495ad4d176c42b942",
+        "c27ebbfb8e79942f1941337a0ab42d57715989be"
+      ],
+      "bump": "breaking",
+      "status": "release",
+      "version": "0.36.0",
+      "effectiveBump": "minor",
+      "breaking": true,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.36.0",
+      "notes": [
+        {
+          "sha": "9defc585a5837d451bea158c9d6cd116a1352c58",
+          "subject": "feat(final-status): show ask duration on the final status card",
+          "summary": "The final status card header now shows how long the ask took (e.g. Task complete · 4m 12s), in VS Code and browser chat, and the field is added to the protocol.",
+          "breaking": false
+        },
+        {
+          "sha": "0713d4a94c7a63b2ae80ab6e78dd955534ab1005",
+          "subject": "fix(session-history): batch past-session index backfill so search works on long histories",
+          "summary": "Past-session index backfill commits sessions in batches and keeps running in the background, so session search works on long histories and the worktree index also backfills in the background.",
+          "breaking": false
+        },
+        {
+          "sha": "b08e6ea3c37ff3e11c86a1fa814cc151f1679069",
+          "subject": "feat(codex): add GPT-6.1 Terra to the model picker",
+          "summary": "Adds GPT-6.1 Terra to the Codex/OpenAI model picker with 1.05M context, 128K output, none-to-max reasoning, the Fast tier, the reasoning prompt profile and a 90% condense default.",
+          "breaking": false
+        },
+        {
+          "sha": "50d9c264bec3fe34f49225e9c608453ac85ffde9",
+          "subject": "refactor(codex): derive routing tiers, prompt profiles and condense defaults from CODEX_MODELS",
+          "summary": "Codex routing tiers, prompt profiles and condense defaults are now derived from per-model fields in CODEX_MODELS instead of separate config, with no change to intended behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "10d16263b5c0e52e6b145be85cc621f3190d835d",
+          "subject": "fix(credentials): reclaim the helper queue lock after its owner crashes",
+          "summary": "The credentials helper queue lock is reclaimed after its owner crashes, so model setup no longer hangs on \"Checking model setup\" until the lock file is deleted by hand.",
+          "breaking": false
+        },
+        {
+          "sha": "504fc3879daaa28ba5a6f0aef4a54b952d4faf66",
+          "subject": "feat(approvals): let users resume paused automatic command review",
+          "summary": "Command approval cards now offer a Resume automatic review button when Guardian review was paused by repeated denials, which re-reviews the same command without approving it.",
+          "breaking": false
+        },
+        {
+          "sha": "b32f62cf3645b9587910aa417ef356bd732f5f0d",
+          "subject": "feat(workspace-host): match VS Code search_files and apply_diff contracts",
+          "summary": "The CLI and Assistant gain VS Code's full search_files and apply_diff contracts via new shared core modules, while the node-host apply_diff tool now accepts unified hunks and fuzzy matching and drops its strict-only failure codes.",
+          "breaking": true
+        },
+        {
+          "sha": "10d0b3782d9ff4209e072f7c11c415cf6caa3e55",
+          "subject": "feat(workspace-host): add VS Code find_and_replace and align Ask Agent apply_diff",
+          "summary": "The CLI and Assistant gain VS Code's multi-file find_and_replace with one review and stale-proposal protection, and Ask Agent now advertises the shared apply_diff schema with optional expectedContentHash.",
+          "breaking": false
+        },
+        {
+          "sha": "3fa28bdef49feaad99b45eebca6e6b47d797b013",
+          "subject": "feat(workspace-host): match VS Code's read_file content view",
+          "summary": "The CLI and Assistant read_file content view now matches VS Code: 2,000-line default, anchors, image and PDF reading, and richer metadata; SDK adds a read-file-content entry point and media converters.",
+          "breaking": false
+        },
+        {
+          "sha": "a01de529f657f9c543eabd938c19c4e22894a0d4",
+          "subject": "feat(node-host): VS Code search_files fallback and read_file suggestions",
+          "summary": "The fallback search_files now follows VS Code's regex contract with output modes, paging and context options, and read_file in the CLI and Assistant returns path suggestions and supports auto_follow_suggestion.",
+          "breaking": true
+        },
+        {
+          "sha": "a8ce13396f2b2fed9cd12c6eff0ccd1bb00606df",
+          "subject": "feat(core): share VS Code's interaction tool contracts",
+          "summary": "Shared VS Code ask_user and set_task_status contracts move into core, and the CLI and Assistant todo_write now uses VS Code's tool and restores the todo list from the transcript after a restart.",
+          "breaking": true
+        },
+        {
+          "sha": "d5b308a5b4b0aa51d464572495ad4d176c42b942",
+          "subject": "feat(cli): VS Code's multi-question ask_user",
+          "summary": "The CLI's ask_user now accepts VS Code's multi-question schema with all six question types shown one at a time in the control panel, replacing the old single-question format and the askQuestion host option.",
+          "breaking": true
+        },
+        {
+          "sha": "c5f5f5ee42dc78f5188fae29b547a6dc02cbc74e",
+          "subject": "feat(core): let host tools end the turn and share set_task_status",
+          "summary": "Host tools can end a turn, and the CLI and Assistant gain VS Code's set_task_status with a final card, restore on reload, Ctrl+N continue in the CLI, and Auto Continue stopping in the Assistant.",
+          "breaking": false
+        },
+        {
+          "sha": "cce375bed0c93512570ea187c118e8816423fc1c",
+          "subject": "refactor(core): move system prompt guidance and modes into core",
+          "summary": "System prompt guidance and the built-in agent modes move into @agentlink/core as new system-prompt and agent-modes entry points; VS Code's prompts are unchanged.",
+          "breaking": false
+        },
+        {
+          "sha": "f6732ce7fbe048a52b6b3d78d3caa184844430ba",
+          "subject": "feat(cli): lead the CLI prompt with VS Code's shared guidance",
+          "summary": "The CLI's system prompt now leads with VS Code's shared guidance for the tools each session registers. workspace-host gains an opt-in sharedPromptGuidance option.",
+          "breaking": false
+        },
+        {
+          "sha": "d3947361cdb2adeb3c010298b871d994cec12f07",
+          "subject": "feat(cli): add agent modes with /mode",
+          "summary": "The CLI gets VS Code's agent modes with /mode and /mode SLUG, saved per session, with custom modes from modes.json. workspace-host gains a modes option and core gains session modes.",
+          "breaking": false
+        },
+        {
+          "sha": "908f8a1e3131405d0d64910e655f0d61f48b723b",
+          "subject": "feat(assistant): layer the prompt on VS Code's shared guidance",
+          "summary": "The Assistant's prompts now build on VS Code's shared guidance for the tools each chat has, as a general assistant for owner chats. workspace-host's sharedPromptGuidance also accepts a codingAssistant option.",
+          "breaking": false
+        },
+        {
+          "sha": "997df9834983735a6ed10f99ee98ab51b5f24861",
+          "subject": "feat(workspace-host): give execute_command VS Code's input and result",
+          "summary": "execute_command in the CLI and Assistant now takes VS Code's parameters (timeout in seconds, env, output filters) and returns VS Code's result fields. Older timeoutMs calls still run. The output filter moves to @agentlink/core/command-output.",
+          "breaking": false
+        },
+        {
+          "sha": "79c837fdac14dd4e2987342749b0114e65667792",
+          "subject": "fix(core): build the command-output subpath for CommonJS",
+          "summary": "Fixes the CommonJS build so the @agentlink/core command-output subpath is included.",
+          "breaking": false
+        },
+        {
+          "sha": "c27ebbfb8e79942f1941337a0ab42d57715989be",
+          "subject": "feat(workspace-host): replace command output tools with get_terminal_output and close_terminals",
+          "summary": "workspace-host replaces get_command_output, list_commands and stop_command with VS Code's get_terminal_output and close_terminals. Ask Agent's execute_command moves to VS Code's schema, and the CLI, Assistant and Ask Agent use the new tools.",
+          "breaking": true
+        },
+        {
+          "sha": "73cd67552780aeb81b26b4debced936cfa2b5c08",
+          "subject": "feat(cli,assistant): run read-only commands in Ask mode and for task reviewers",
+          "summary": "CLI Ask mode and Assistant task reviewers can now run commands that VS Code's read-only check clears without asking, with other commands prompting (CLI) or refused (reviewers); the classifier is shared via new core subpaths.",
+          "breaking": false
+        },
+        {
+          "sha": "be8d14028d3ada2faa7f89b2bf55742edf30b894",
+          "subject": "feat(cli): let the model propose mode changes with switch_mode and ask_user modeSwitch",
+          "summary": "The CLI model can now propose mode changes with switch_mode and ask_user modeSwitch, shown as an Allow/Reject card, with the turn continuing in the new mode.",
+          "breaking": false
+        },
+        {
+          "sha": "e34267c7a3f965fa78a70970c7d443619377cba6",
+          "subject": "feat(workspace-host): use VS Code's background agent management tools",
+          "summary": "CLI and Assistant background agent tools now use VS Code's descriptions, inputs and results, name children by sessionId, and can wait for any or all of several children.",
+          "breaking": false
+        },
+        {
+          "sha": "fe9d9f1c9cbcc42b7399c9876e35ff57f88c7536",
+          "subject": "feat(workspace-host): spawn background agents with VS Code's ownedPaths",
+          "summary": "CLI and Assistant spawn_background_agent now takes VS Code's ownedPaths and forbiddenPaths with ownership handoff, optional read_paths, and a configurable per-session child limit (4 in CLI, 2 in Assistant).",
+          "breaking": false
+        },
+        {
+          "sha": "a3b4a544046be6d157c82912f6c608cb4618267c",
+          "subject": "fix(sandbox): follow agent-folder skill symlinks and type namespace rejections",
+          "summary": "Sandboxed commands no longer fail when an agent-folder skill symlink such as .agents/skills -> ../.claude/skills points into another policy folder; other namespace rejections now report the offending path.",
+          "breaking": false
+        },
+        {
+          "sha": "849207f4851c531ed6dd012393837e5838f758b3",
+          "subject": "fix(codex): stream Responses tool argument deltas keyed by item_id",
+          "summary": "Fixes Responses API tool argument streaming so long tool calls no longer trip the no-progress watchdog and retry repeatedly; repeated no-progress timeouts now surface after one retry.",
+          "breaking": false
+        },
+        {
+          "sha": "fcd2231a84eb5ce9cfade2dd568efbd7a613b60b",
+          "subject": "fix(agent): start a todo list for multi-step work on every prompt profile",
+          "summary": "The system prompt and todo_write description now tell the model to start a todo list in its first response for multi-step work on every prompt profile, restoring todo use with the compact profile.",
+          "breaking": false
+        },
+        {
+          "sha": "d093d7eb21aa691b43acb082444602dfdde47270",
+          "subject": "fix(tools): follow stale built-in skill paths to the current catalog entry",
+          "summary": "load_skill now follows a stale built-in skill path left after an extension update to the current built-in catalog entry instead of failing.",
+          "breaking": false
+        },
+        {
+          "sha": "398956888ea9dabf2d772b9870ec4d065ccc98f8",
+          "subject": "fix(tools): reject ${digits} references in find_and_replace regex templates",
+          "summary": "find_and_replace in regex mode now rejects ${N} references with a clear error before any edit instead of silently inserting the literal text and dropping the captured content.",
+          "breaking": false
+        },
+        {
+          "sha": "a8db2342595555ee50a0d3c90c0f4e565c2604ae",
+          "subject": "feat(background): replace automatic fleet budgets with foreground-led progress supervision",
+          "summary": "Background agents no longer get automatic budgets or wrap-up messages; the foreground coordinator judges progress through status and progress-check steering, and explicit budgets only stop a run at their hard boundary.",
+          "breaking": false
+        },
+        {
+          "sha": "b2e59b000e330cea1e909ffc73cee7b2e86562b9",
+          "subject": "fix(skills): let load_skill activate readable skills missing from the catalog",
+          "summary": "load_skill can now activate a readable SKILL.md missing from or newer than the session catalog, such as a freshly pulled skill or one in a second workspace folder, while keeping disabled skills disabled and applying allowed-tools restrictions.",
+          "breaking": false
+        },
+        {
+          "sha": "46ba4f5c08b443cee38d0bd9b631211f25437c5d",
+          "subject": "feat(indexer): add Free Up Space to the codebase index sidebar",
+          "summary": "Adds a Free Up Space button and agentlink.maintainIndex command that compact the workspace's codebase index and prune old database history without re-indexing, reporting the space reclaimed.",
+          "breaking": false
+        },
+        {
+          "sha": "156fe68c14e6da81ce4ecf23246edc659b63d153",
+          "subject": "fix(agent): show text results in final status cards",
+          "summary": "Final status cards now show a text result as the summary when set_task_status provides no summary.",
+          "breaking": false
+        },
+        {
+          "sha": "4a2121c935f7912c6a41e79b1f8d6f8f5f667f11",
+          "subject": "feat(chat): expose final results and continuation prompts",
+          "summary": "Final status cards in VS Code and browser chat now show structured results (text, review findings, patch, verification) and the full continuation prompt next to the action button, with relay lazy-loading of results.",
+          "breaking": false
+        },
+        {
+          "sha": "e07a975a8a41163dfff349e902d33b779ae5a088",
+          "subject": "fix(codex): stop the no-progress watchdog restarting silent reasoning",
+          "summary": "Long silent Codex reasoning is no longer mistaken for a dead stream and restarted by the no-progress watchdog; a bounded 30-minute window now applies while reasoning is open.",
+          "breaking": false
+        },
+        {
+          "sha": "16f231565e26396c31880bf3ed973f8efc425925",
+          "subject": "fix: harden tool diagnostics and background recovery",
+          "summary": "Hardens tool diagnostics and recovery: bounded MCP crash reconnects with config revalidation, preserved evidence for failed background agents, safe command and sandbox diagnostics, bounded xxd/dyld_info reads, web fetch provenance, quiet update polling, and accurate failed-save reporting.",
+          "breaking": false
+        },
+        {
+          "sha": "bc4d4187b8cc800e84906bf048997f3b57031fd7",
+          "subject": "fix(tools): make read-only network and web-fetch failures actionable",
+          "summary": "Read-only network rejections now tell background agents to ask the coordinator for the exact remote data, Codex page-access failures report a bounded cause, and dyld_info accepts bare usage and Apple system image inspection on macOS.",
+          "breaking": false
+        },
+        {
+          "sha": "e03a1bb782cc17914bc80fa7420e9cfe9353e380",
+          "subject": "fix(tools): allow dyld_info on shared-cache system images",
+          "summary": "The read-only classifier now allows dyld_info on macOS system images that exist only in the dyld shared cache, accepting missing paths only inside Apple system image roots.",
+          "breaking": false
+        },
+        {
+          "sha": "aa97003f70116eacd6b5b8be0ce76b131fa39c6a",
+          "subject": "fix(terminal): close remaining command and background feedback gaps",
+          "breaking": false
+        },
+        {
+          "sha": "ccdaf2148268e0cb43cf52bdb3d93ed40e8521dd",
+          "subject": "fix: reduce startup work and improve full-suite test reporting",
+          "breaking": false
+        }
+      ]
     },
     "assistant": {
-      "published": "0.39.1",
-      "baselineRef": "assistant-v0.39.1",
-      "reserved": "0.39.1",
-      "commits": ["40ac068492d4dac552eeb1cf7c1380225594781c"],
-      "unknownPaths": [],
+      "published": "0.39.2",
+      "baselineRef": "assistant-v0.39.2",
+      "reserved": "0.39.2",
+      "commits": [
+        "9defc585a5837d451bea158c9d6cd116a1352c58",
+        "47acf1e59b4463acc2d0f24499edc2cf6ccfe264",
+        "0713d4a94c7a63b2ae80ab6e78dd955534ab1005",
+        "eb484ddb1599ddd8dc1043e82c0de9624853b1dd",
+        "b08e6ea3c37ff3e11c86a1fa814cc151f1679069",
+        "a9856388593c261bd92c1f8ed40d3c92a2a3a242",
+        "50d9c264bec3fe34f49225e9c608453ac85ffde9",
+        "10d16263b5c0e52e6b145be85cc621f3190d835d",
+        "5a86dd352b459cd96b467c166de8d7ed66400620",
+        "58827d2bc6e6746a40b5b3d50b1e7cd6de27ee0c",
+        "61aeea499f9bb83d356c566adba79b60d064adcb",
+        "504fc3879daaa28ba5a6f0aef4a54b952d4faf66",
+        "b32f62cf3645b9587910aa417ef356bd732f5f0d",
+        "10d0b3782d9ff4209e072f7c11c415cf6caa3e55",
+        "3fa28bdef49feaad99b45eebca6e6b47d797b013",
+        "a01de529f657f9c543eabd938c19c4e22894a0d4",
+        "a8ce13396f2b2fed9cd12c6eff0ccd1bb00606df",
+        "d5b308a5b4b0aa51d464572495ad4d176c42b942",
+        "c5f5f5ee42dc78f5188fae29b547a6dc02cbc74e",
+        "1d3e2af57ad2d931d0b742920f7348a84dcd2fae",
+        "cce375bed0c93512570ea187c118e8816423fc1c",
+        "f6732ce7fbe048a52b6b3d78d3caa184844430ba",
+        "d3947361cdb2adeb3c010298b871d994cec12f07",
+        "908f8a1e3131405d0d64910e655f0d61f48b723b",
+        "997df9834983735a6ed10f99ee98ab51b5f24861",
+        "79c837fdac14dd4e2987342749b0114e65667792",
+        "c27ebbfb8e79942f1941337a0ab42d57715989be",
+        "73cd67552780aeb81b26b4debced936cfa2b5c08",
+        "be8d14028d3ada2faa7f89b2bf55742edf30b894",
+        "e34267c7a3f965fa78a70970c7d443619377cba6",
+        "fe9d9f1c9cbcc42b7399c9876e35ff57f88c7536",
+        "a3b4a544046be6d157c82912f6c608cb4618267c",
+        "849207f4851c531ed6dd012393837e5838f758b3",
+        "fcd2231a84eb5ce9cfade2dd568efbd7a613b60b",
+        "d093d7eb21aa691b43acb082444602dfdde47270",
+        "0fccaf3e4b55321acc0b7aae35fb969a84ae9bd2",
+        "398956888ea9dabf2d772b9870ec4d065ccc98f8",
+        "a8db2342595555ee50a0d3c90c0f4e565c2604ae",
+        "b2e59b000e330cea1e909ffc73cee7b2e86562b9",
+        "edbbcb5d0a6bc26adfe66411d09a4a769e5dd93b",
+        "c59648b0a61817e12982343a076415181f5766e2",
+        "46ba4f5c08b443cee38d0bd9b631211f25437c5d",
+        "156fe68c14e6da81ce4ecf23246edc659b63d153",
+        "4a2121c935f7912c6a41e79b1f8d6f8f5f667f11",
+        "828e2ae3489eb3a898f8b61bb659a1998706a785",
+        "622cc3251015f8a6691bb3bbc82367313b16de63",
+        "e07a975a8a41163dfff349e902d33b779ae5a088",
+        "16f231565e26396c31880bf3ed973f8efc425925",
+        "bc4d4187b8cc800e84906bf048997f3b57031fd7",
+        "221b3295c7eaadca57c7125bfe78fcb4cc1806c9",
+        "e03a1bb782cc17914bc80fa7420e9cfe9353e380",
+        "6a7b1b631b3e80a425636ccd7ceb043b4668a849",
+        "d049bc076229da0166c6db076cd84d4ecb2e2b42",
+        "f9ca50d6c09f53b22896edae7ef62fd67842773e",
+        "aa97003f70116eacd6b5b8be0ce76b131fa39c6a",
+        "2c783bfb6428e8c1e3aa9f4d5477467efa17892a",
+        "ccdaf2148268e0cb43cf52bdb3d93ed40e8521dd"
+      ],
+      "unknownPaths": [".githooks/pre-push", ".nvmrc"],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.39.2",
-      "effectiveBump": "patch",
+      "version": "0.40.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.39.2",
+      "tag": "assistant-v0.40.0",
       "notes": [
         {
-          "sha": "40ac068492d4dac552eeb1cf7c1380225594781c",
-          "subject": "fix(ask-agent): resume streaming when switching back to a chat with a running turn",
-          "summary": "Switching back to an Ask Agent chat whose turn is still running now resumes the live streaming activity indicator instead of dropping it.",
+          "sha": "9defc585a5837d451bea158c9d6cd116a1352c58",
+          "subject": "feat(final-status): show ask duration on the final status card",
+          "summary": "The final status card header now shows how long the ask took (e.g. Task complete · 4m 12s), in VS Code and browser chat, and the field is added to the protocol.",
+          "breaking": false
+        },
+        {
+          "sha": "47acf1e59b4463acc2d0f24499edc2cf6ccfe264",
+          "subject": "fix(approvals): default outside-workspace write rules to parent-folder prefix",
+          "summary": "Outside-workspace write approvals now default to the parent folder with Prefix mode, and each approval card starts with fresh pattern, mode and scope state.",
+          "breaking": false
+        },
+        {
+          "sha": "0713d4a94c7a63b2ae80ab6e78dd955534ab1005",
+          "subject": "fix(session-history): batch past-session index backfill so search works on long histories",
+          "summary": "Past-session index backfill commits sessions in batches and keeps running in the background, so session search works on long histories and the worktree index also backfills in the background.",
+          "breaking": false
+        },
+        {
+          "sha": "eb484ddb1599ddd8dc1043e82c0de9624853b1dd",
+          "subject": "feat(final-status): end the ask clock when the user presses Stop",
+          "summary": "Pressing Stop now ends the ask timer so the next message starts a fresh clock, while steering with a queued message keeps the same ask open.",
+          "breaking": false
+        },
+        {
+          "sha": "b08e6ea3c37ff3e11c86a1fa814cc151f1679069",
+          "subject": "feat(codex): add GPT-6.1 Terra to the model picker",
+          "summary": "Adds GPT-6.1 Terra to the Codex/OpenAI model picker with 1.05M context, 128K output, none-to-max reasoning, the Fast tier, the reasoning prompt profile and a 90% condense default.",
+          "breaking": false
+        },
+        {
+          "sha": "a9856388593c261bd92c1f8ed40d3c92a2a3a242",
+          "subject": "fix(session-history): advertise past-session search inline so agents use it",
+          "summary": "search_workspace_sessions is now always advertised to the agent and the recall guidance covers mentions in question answers, so agents search past sessions instead of guessing.",
+          "breaking": false
+        },
+        {
+          "sha": "50d9c264bec3fe34f49225e9c608453ac85ffde9",
+          "subject": "refactor(codex): derive routing tiers, prompt profiles and condense defaults from CODEX_MODELS",
+          "summary": "Codex routing tiers, prompt profiles and condense defaults are now derived from per-model fields in CODEX_MODELS instead of separate config, with no change to intended behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "10d16263b5c0e52e6b145be85cc621f3190d835d",
+          "subject": "fix(credentials): reclaim the helper queue lock after its owner crashes",
+          "summary": "The credentials helper queue lock is reclaimed after its owner crashes, so model setup no longer hangs on \"Checking model setup\" until the lock file is deleted by hand.",
+          "breaking": false
+        },
+        {
+          "sha": "5a86dd352b459cd96b467c166de8d7ed66400620",
+          "subject": "ci: unblock linux-arm64 releases and add a local preflight gate",
+          "summary": "Release CI now builds linux-arm64 packages on a native arm64 runner, and a local preflight check and opt-in pre-push hook were added for contributors, with no change to shipped product behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "58827d2bc6e6746a40b5b3d50b1e7cd6de27ee0c",
+          "subject": "ci: test on macOS, take Node from .nvmrc, and stop flaky test breaks",
+          "summary": "CI now tests on macOS and takes Node from .nvmrc (latest 22.x), release coordination skips cleanly when main moves, and several flaky tests are stabilised.",
+          "breaking": false
+        },
+        {
+          "sha": "61aeea499f9bb83d356c566adba79b60d064adcb",
+          "subject": "docs(skills): separate local and shared project skills",
+          "summary": "Documentation and project skill layout now separate local .agentlink/skills from shared .agents/skills, with no runtime behaviour change.",
+          "breaking": false
+        },
+        {
+          "sha": "504fc3879daaa28ba5a6f0aef4a54b952d4faf66",
+          "subject": "feat(approvals): let users resume paused automatic command review",
+          "summary": "Command approval cards now offer a Resume automatic review button when Guardian review was paused by repeated denials, which re-reviews the same command without approving it.",
+          "breaking": false
+        },
+        {
+          "sha": "b32f62cf3645b9587910aa417ef356bd732f5f0d",
+          "subject": "feat(workspace-host): match VS Code search_files and apply_diff contracts",
+          "summary": "The CLI and Assistant gain VS Code's full search_files and apply_diff contracts via new shared core modules, while the node-host apply_diff tool now accepts unified hunks and fuzzy matching and drops its strict-only failure codes.",
+          "breaking": false
+        },
+        {
+          "sha": "10d0b3782d9ff4209e072f7c11c415cf6caa3e55",
+          "subject": "feat(workspace-host): add VS Code find_and_replace and align Ask Agent apply_diff",
+          "summary": "The CLI and Assistant gain VS Code's multi-file find_and_replace with one review and stale-proposal protection, and Ask Agent now advertises the shared apply_diff schema with optional expectedContentHash.",
+          "breaking": false
+        },
+        {
+          "sha": "3fa28bdef49feaad99b45eebca6e6b47d797b013",
+          "subject": "feat(workspace-host): match VS Code's read_file content view",
+          "summary": "The CLI and Assistant read_file content view now matches VS Code: 2,000-line default, anchors, image and PDF reading, and richer metadata; SDK adds a read-file-content entry point and media converters.",
+          "breaking": false
+        },
+        {
+          "sha": "a01de529f657f9c543eabd938c19c4e22894a0d4",
+          "subject": "feat(node-host): VS Code search_files fallback and read_file suggestions",
+          "summary": "The fallback search_files now follows VS Code's regex contract with output modes, paging and context options, and read_file in the CLI and Assistant returns path suggestions and supports auto_follow_suggestion.",
+          "breaking": false
+        },
+        {
+          "sha": "a8ce13396f2b2fed9cd12c6eff0ccd1bb00606df",
+          "subject": "feat(core): share VS Code's interaction tool contracts",
+          "summary": "Shared VS Code ask_user and set_task_status contracts move into core, and the CLI and Assistant todo_write now uses VS Code's tool and restores the todo list from the transcript after a restart.",
+          "breaking": false
+        },
+        {
+          "sha": "d5b308a5b4b0aa51d464572495ad4d176c42b942",
+          "subject": "feat(cli): VS Code's multi-question ask_user",
+          "summary": "The CLI's ask_user now accepts VS Code's multi-question schema with all six question types shown one at a time in the control panel, replacing the old single-question format and the askQuestion host option.",
+          "breaking": false
+        },
+        {
+          "sha": "c5f5f5ee42dc78f5188fae29b547a6dc02cbc74e",
+          "subject": "feat(core): let host tools end the turn and share set_task_status",
+          "summary": "Host tools can end a turn, and the CLI and Assistant gain VS Code's set_task_status with a final card, restore on reload, Ctrl+N continue in the CLI, and Auto Continue stopping in the Assistant.",
+          "breaking": false
+        },
+        {
+          "sha": "1d3e2af57ad2d931d0b742920f7348a84dcd2fae",
+          "subject": "feat(cli): pass messages sent mid-turn into the running turn",
+          "summary": "Messages sent while a CLI turn is running are now taken into that turn at its next break instead of running afterwards, and the footer shows a ^n continue hint when a continue action is available.",
+          "breaking": false
+        },
+        {
+          "sha": "cce375bed0c93512570ea187c118e8816423fc1c",
+          "subject": "refactor(core): move system prompt guidance and modes into core",
+          "summary": "System prompt guidance and the built-in agent modes move into @agentlink/core as new system-prompt and agent-modes entry points; VS Code's prompts are unchanged.",
+          "breaking": false
+        },
+        {
+          "sha": "f6732ce7fbe048a52b6b3d78d3caa184844430ba",
+          "subject": "feat(cli): lead the CLI prompt with VS Code's shared guidance",
+          "summary": "The CLI's system prompt now leads with VS Code's shared guidance for the tools each session registers. workspace-host gains an opt-in sharedPromptGuidance option.",
+          "breaking": false
+        },
+        {
+          "sha": "d3947361cdb2adeb3c010298b871d994cec12f07",
+          "subject": "feat(cli): add agent modes with /mode",
+          "summary": "The CLI gets VS Code's agent modes with /mode and /mode SLUG, saved per session, with custom modes from modes.json. workspace-host gains a modes option and core gains session modes.",
+          "breaking": false
+        },
+        {
+          "sha": "908f8a1e3131405d0d64910e655f0d61f48b723b",
+          "subject": "feat(assistant): layer the prompt on VS Code's shared guidance",
+          "summary": "The Assistant's prompts now build on VS Code's shared guidance for the tools each chat has, as a general assistant for owner chats. workspace-host's sharedPromptGuidance also accepts a codingAssistant option.",
+          "breaking": false
+        },
+        {
+          "sha": "997df9834983735a6ed10f99ee98ab51b5f24861",
+          "subject": "feat(workspace-host): give execute_command VS Code's input and result",
+          "summary": "execute_command in the CLI and Assistant now takes VS Code's parameters (timeout in seconds, env, output filters) and returns VS Code's result fields. Older timeoutMs calls still run. The output filter moves to @agentlink/core/command-output.",
+          "breaking": false
+        },
+        {
+          "sha": "79c837fdac14dd4e2987342749b0114e65667792",
+          "subject": "fix(core): build the command-output subpath for CommonJS",
+          "summary": "Fixes the CommonJS build so the @agentlink/core command-output subpath is included.",
+          "breaking": false
+        },
+        {
+          "sha": "c27ebbfb8e79942f1941337a0ab42d57715989be",
+          "subject": "feat(workspace-host): replace command output tools with get_terminal_output and close_terminals",
+          "summary": "workspace-host replaces get_command_output, list_commands and stop_command with VS Code's get_terminal_output and close_terminals. Ask Agent's execute_command moves to VS Code's schema, and the CLI, Assistant and Ask Agent use the new tools.",
+          "breaking": false
+        },
+        {
+          "sha": "73cd67552780aeb81b26b4debced936cfa2b5c08",
+          "subject": "feat(cli,assistant): run read-only commands in Ask mode and for task reviewers",
+          "summary": "CLI Ask mode and Assistant task reviewers can now run commands that VS Code's read-only check clears without asking, with other commands prompting (CLI) or refused (reviewers); the classifier is shared via new core subpaths.",
+          "breaking": false
+        },
+        {
+          "sha": "be8d14028d3ada2faa7f89b2bf55742edf30b894",
+          "subject": "feat(cli): let the model propose mode changes with switch_mode and ask_user modeSwitch",
+          "summary": "The CLI model can now propose mode changes with switch_mode and ask_user modeSwitch, shown as an Allow/Reject card, with the turn continuing in the new mode.",
+          "breaking": false
+        },
+        {
+          "sha": "e34267c7a3f965fa78a70970c7d443619377cba6",
+          "subject": "feat(workspace-host): use VS Code's background agent management tools",
+          "summary": "CLI and Assistant background agent tools now use VS Code's descriptions, inputs and results, name children by sessionId, and can wait for any or all of several children.",
+          "breaking": false
+        },
+        {
+          "sha": "fe9d9f1c9cbcc42b7399c9876e35ff57f88c7536",
+          "subject": "feat(workspace-host): spawn background agents with VS Code's ownedPaths",
+          "summary": "CLI and Assistant spawn_background_agent now takes VS Code's ownedPaths and forbiddenPaths with ownership handoff, optional read_paths, and a configurable per-session child limit (4 in CLI, 2 in Assistant).",
+          "breaking": false
+        },
+        {
+          "sha": "a3b4a544046be6d157c82912f6c608cb4618267c",
+          "subject": "fix(sandbox): follow agent-folder skill symlinks and type namespace rejections",
+          "summary": "Sandboxed commands no longer fail when an agent-folder skill symlink such as .agents/skills -> ../.claude/skills points into another policy folder; other namespace rejections now report the offending path.",
+          "breaking": false
+        },
+        {
+          "sha": "849207f4851c531ed6dd012393837e5838f758b3",
+          "subject": "fix(codex): stream Responses tool argument deltas keyed by item_id",
+          "summary": "Fixes Responses API tool argument streaming so long tool calls no longer trip the no-progress watchdog and retry repeatedly; repeated no-progress timeouts now surface after one retry.",
+          "breaking": false
+        },
+        {
+          "sha": "fcd2231a84eb5ce9cfade2dd568efbd7a613b60b",
+          "subject": "fix(agent): start a todo list for multi-step work on every prompt profile",
+          "summary": "The system prompt and todo_write description now tell the model to start a todo list in its first response for multi-step work on every prompt profile, restoring todo use with the compact profile.",
+          "breaking": false
+        },
+        {
+          "sha": "d093d7eb21aa691b43acb082444602dfdde47270",
+          "subject": "fix(tools): follow stale built-in skill paths to the current catalog entry",
+          "summary": "load_skill now follows a stale built-in skill path left after an extension update to the current built-in catalog entry instead of failing.",
+          "breaking": false
+        },
+        {
+          "sha": "0fccaf3e4b55321acc0b7aae35fb969a84ae9bd2",
+          "subject": "feat(browser-gateway): improve mobile and foldable layout",
+          "summary": "Improves the browser gateway on phones and foldables: chats no longer jump to the bottom, a 600px phone breakpoint, denser touch type, VS Code chat tabs in the shell sidebar, a tab close endpoint, and the VS Code view reopens after reload.",
+          "breaking": false
+        },
+        {
+          "sha": "398956888ea9dabf2d772b9870ec4d065ccc98f8",
+          "subject": "fix(tools): reject ${digits} references in find_and_replace regex templates",
+          "summary": "find_and_replace in regex mode now rejects ${N} references with a clear error before any edit instead of silently inserting the literal text and dropping the captured content.",
+          "breaking": false
+        },
+        {
+          "sha": "a8db2342595555ee50a0d3c90c0f4e565c2604ae",
+          "subject": "feat(background): replace automatic fleet budgets with foreground-led progress supervision",
+          "summary": "Background agents no longer get automatic budgets or wrap-up messages; the foreground coordinator judges progress through status and progress-check steering, and explicit budgets only stop a run at their hard boundary.",
+          "breaking": false
+        },
+        {
+          "sha": "b2e59b000e330cea1e909ffc73cee7b2e86562b9",
+          "subject": "fix(skills): let load_skill activate readable skills missing from the catalog",
+          "summary": "load_skill can now activate a readable SKILL.md missing from or newer than the session catalog, such as a freshly pulled skill or one in a second workspace folder, while keeping disabled skills disabled and applying allowed-tools restrictions.",
+          "breaking": false
+        },
+        {
+          "sha": "edbbcb5d0a6bc26adfe66411d09a4a769e5dd93b",
+          "subject": "feat(worktree): create worktrees for every repo in multi-root workspaces",
+          "summary": "/worktree and /review in multi-root workspaces now create a worktree on the same branch for every Git repository, generate a .code-workspace file, and open it in the new window, rolling back partial launches.",
+          "breaking": false
+        },
+        {
+          "sha": "c59648b0a61817e12982343a076415181f5766e2",
+          "subject": "fix(codex): name the real cause in Responses retry warnings",
+          "summary": "Codex retry warnings now name the real cause (such as overloaded 503), retry number, delay and next transport instead of a generic 'Response interrupted' message; retry behavior is unchanged.",
+          "breaking": false
+        },
+        {
+          "sha": "46ba4f5c08b443cee38d0bd9b631211f25437c5d",
+          "subject": "feat(indexer): add Free Up Space to the codebase index sidebar",
+          "summary": "Adds a Free Up Space button and agentlink.maintainIndex command that compact the workspace's codebase index and prune old database history without re-indexing, reporting the space reclaimed.",
+          "breaking": false
+        },
+        {
+          "sha": "156fe68c14e6da81ce4ecf23246edc659b63d153",
+          "subject": "fix(agent): show text results in final status cards",
+          "summary": "Final status cards now show a text result as the summary when set_task_status provides no summary.",
+          "breaking": false
+        },
+        {
+          "sha": "4a2121c935f7912c6a41e79b1f8d6f8f5f667f11",
+          "subject": "feat(chat): expose final results and continuation prompts",
+          "summary": "Final status cards in VS Code and browser chat now show structured results (text, review findings, patch, verification) and the full continuation prompt next to the action button, with relay lazy-loading of results.",
+          "breaking": false
+        },
+        {
+          "sha": "828e2ae3489eb3a898f8b61bb659a1998706a785",
+          "subject": "fix(chat): preserve protocol boundaries and clarify stale results",
+          "summary": "The stale-result error for browser final results now says it is waiting for an updated session snapshot instead of suggesting a retry.",
+          "breaking": false
+        },
+        {
+          "sha": "622cc3251015f8a6691bb3bbc82367313b16de63",
+          "subject": "fix(chat): hide default continuation text and restore bottom-left action",
+          "summary": "Final status cards hide the built-in default continuation text and show the Continue action at the bottom-left, displaying a Next step prompt only when the agent supplies one.",
+          "breaking": false
+        },
+        {
+          "sha": "e07a975a8a41163dfff349e902d33b779ae5a088",
+          "subject": "fix(codex): stop the no-progress watchdog restarting silent reasoning",
+          "summary": "Long silent Codex reasoning is no longer mistaken for a dead stream and restarted by the no-progress watchdog; a bounded 30-minute window now applies while reasoning is open.",
+          "breaking": false
+        },
+        {
+          "sha": "16f231565e26396c31880bf3ed973f8efc425925",
+          "subject": "fix: harden tool diagnostics and background recovery",
+          "summary": "Hardens tool diagnostics and recovery: bounded MCP crash reconnects with config revalidation, preserved evidence for failed background agents, safe command and sandbox diagnostics, bounded xxd/dyld_info reads, web fetch provenance, quiet update polling, and accurate failed-save reporting.",
+          "breaking": false
+        },
+        {
+          "sha": "bc4d4187b8cc800e84906bf048997f3b57031fd7",
+          "subject": "fix(tools): make read-only network and web-fetch failures actionable",
+          "summary": "Read-only network rejections now tell background agents to ask the coordinator for the exact remote data, Codex page-access failures report a bounded cause, and dyld_info accepts bare usage and Apple system image inspection on macOS.",
+          "breaking": false
+        },
+        {
+          "sha": "221b3295c7eaadca57c7125bfe78fcb4cc1806c9",
+          "subject": "fix(browser-gateway): let bridge restarts finish so browser approvals land",
+          "summary": "Browser gateway restarts now finish by closing open connections, so browser approvals no longer fail with 502, and approval failures are shown next to the approval card.",
+          "breaking": false
+        },
+        {
+          "sha": "e03a1bb782cc17914bc80fa7420e9cfe9353e380",
+          "subject": "fix(tools): allow dyld_info on shared-cache system images",
+          "summary": "The read-only classifier now allows dyld_info on macOS system images that exist only in the dyld shared cache, accepting missing paths only inside Apple system image roots.",
+          "breaking": false
+        },
+        {
+          "sha": "6a7b1b631b3e80a425636ccd7ceb043b4668a849",
+          "subject": "docs: add agent activity UX patterns for SDK chat UIs",
+          "summary": "Adds an Agent activity UX guide to the bundled documentation and corrects the embedding guide about thinking events being forwarded by the Web transport.",
+          "breaking": false
+        },
+        {
+          "sha": "d049bc076229da0166c6db076cd84d4ecb2e2b42",
+          "subject": "fix(browser-gateway): keep browser-queued messages and share Auto Continue",
+          "summary": "Browser-queued and interjected messages now survive VS Code tab switches and work on unfocused chat tabs, and Auto Continue is now a per-chat setting run by VS Code and shared between VS Code and the browser.",
+          "breaking": false
+        },
+        {
+          "sha": "f9ca50d6c09f53b22896edae7ef62fd67842773e",
+          "subject": "fix(browser-gateway): drain heartbeats before releasing owner leases",
+          "summary": "Fixes a race where a late heartbeat could reconnect the browser gateway owner after its lease had been released.",
+          "breaking": false
+        },
+        {
+          "sha": "aa97003f70116eacd6b5b8be0ce76b131fa39c6a",
+          "subject": "fix(terminal): close remaining command and background feedback gaps",
+          "breaking": false
+        },
+        {
+          "sha": "2c783bfb6428e8c1e3aa9f4d5477467efa17892a",
+          "subject": "fix(browser-gateway): await lease shutdown before replacing clients",
+          "summary": "Waits for the browser gateway lease client to shut down fully before replacing it, avoiding stale heartbeat or registration responses being applied.",
+          "breaking": false
+        },
+        {
+          "sha": "ccdaf2148268e0cb43cf52bdb3d93ed40e8521dd",
+          "subject": "fix: reduce startup work and improve full-suite test reporting",
           "breaking": false
         }
       ]
@@ -691,6 +2588,510 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Switching back to an Ask Agent chat whose turn is still running now resumes the live streaming activity indicator instead of dropping it.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "9defc585a5837d451bea158c9d6cd116a1352c58": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The final status card header now shows how long the ask took (e.g. Task complete · 4m 12s), in VS Code and browser chat, and the field is added to the protocol.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "47acf1e59b4463acc2d0f24499edc2cf6ccfe264": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Outside-workspace write approvals now default to the parent folder with Prefix mode, and each approval card starts with fresh pattern, mode and scope state.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "0713d4a94c7a63b2ae80ab6e78dd955534ab1005": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Past-session index backfill commits sessions in batches and keeps running in the background, so session search works on long histories and the worktree index also backfills in the background.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "eb484ddb1599ddd8dc1043e82c0de9624853b1dd": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Pressing Stop now ends the ask timer so the next message starts a fresh clock, while steering with a queued message keeps the same ask open.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b08e6ea3c37ff3e11c86a1fa814cc151f1679069": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Adds GPT-6.1 Terra to the Codex/OpenAI model picker with 1.05M context, 128K output, none-to-max reasoning, the Fast tier, the reasoning prompt profile and a 90% condense default.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a9856388593c261bd92c1f8ed40d3c92a2a3a242": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "search_workspace_sessions is now always advertised to the agent and the recall guidance covers mentions in question answers, so agents search past sessions instead of guessing.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "0254c4947c9510c87a62b78ded46275af20880d1": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Review-mode PR publication evidence now verifies reliably (URL punctuation stripped, gh pr view JSON accepted, /tmp payloads allowed), so Guardian stops denying most review posts.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "50d9c264bec3fe34f49225e9c608453ac85ffde9": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Codex routing tiers, prompt profiles and condense defaults are now derived from per-model fields in CODEX_MODELS instead of separate config, with no change to intended behaviour.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "10d16263b5c0e52e6b145be85cc621f3190d835d": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The credentials helper queue lock is reclaimed after its owner crashes, so model setup no longer hangs on \"Checking model setup\" until the lock file is deleted by hand.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "58827d2bc6e6746a40b5b3d50b1e7cd6de27ee0c": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "CI now tests on macOS and takes Node from .nvmrc (latest 22.x), release coordination skips cleanly when main moves, and several flaky tests are stabilised.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "d85e46b7932d82835bbdb3efe5e366304ab5dafb": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Inline chat approvals (writes, MCP, memory and similar) now show status bar attention so pending approvals are not missed.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "61aeea499f9bb83d356c566adba79b60d064adcb": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Documentation and project skill layout now separate local .agentlink/skills from shared .agents/skills, with no runtime behaviour change.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "504fc3879daaa28ba5a6f0aef4a54b952d4faf66": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Command approval cards now offer a Resume automatic review button when Guardian review was paused by repeated denials, which re-reviews the same command without approving it.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b32f62cf3645b9587910aa417ef356bd732f5f0d": {
+      "bump": "minor",
+      "breakingUnits": ["sdk"],
+      "summary": "The CLI and Assistant gain VS Code's full search_files and apply_diff contracts via new shared core modules, while the node-host apply_diff tool now accepts unified hunks and fuzzy matching and drops its strict-only failure codes.",
+      "coverage": "partial",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "10d0b3782d9ff4209e072f7c11c415cf6caa3e55": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The CLI and Assistant gain VS Code's multi-file find_and_replace with one review and stale-proposal protection, and Ask Agent now advertises the shared apply_diff schema with optional expectedContentHash.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "22b18a1bcbd3d5cc7d27cc24d8a8d8fc43ef80cd": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Terra models are now classified as balanced instead of deep reasoning for background routing, so ordinary background work no longer goes to Sol; deep reasoning and review preferences are limited to Astra and GPT-5.4 Pro.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "5a86dd352b459cd96b467c166de8d7ed66400620": {
+      "bump": "none",
+      "breakingUnits": [],
+      "summary": "Release CI now builds linux-arm64 packages on a native arm64 runner, and a local preflight check and opt-in pre-push hook were added for contributors, with no change to shipped product behaviour.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "3fa28bdef49feaad99b45eebca6e6b47d797b013": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The CLI and Assistant read_file content view now matches VS Code: 2,000-line default, anchors, image and PDF reading, and richer metadata; SDK adds a read-file-content entry point and media converters.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a01de529f657f9c543eabd938c19c4e22894a0d4": {
+      "bump": "minor",
+      "breakingUnits": ["sdk"],
+      "summary": "The fallback search_files now follows VS Code's regex contract with output modes, paging and context options, and read_file in the CLI and Assistant returns path suggestions and supports auto_follow_suggestion.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a8ce13396f2b2fed9cd12c6eff0ccd1bb00606df": {
+      "bump": "minor",
+      "breakingUnits": ["sdk"],
+      "summary": "Shared VS Code ask_user and set_task_status contracts move into core, and the CLI and Assistant todo_write now uses VS Code's tool and restores the todo list from the transcript after a restart.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "d5b308a5b4b0aa51d464572495ad4d176c42b942": {
+      "bump": "minor",
+      "breakingUnits": ["cli", "sdk"],
+      "summary": "The CLI's ask_user now accepts VS Code's multi-question schema with all six question types shown one at a time in the control panel, replacing the old single-question format and the askQuestion host option.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "c5f5f5ee42dc78f5188fae29b547a6dc02cbc74e": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Host tools can end a turn, and the CLI and Assistant gain VS Code's set_task_status with a final card, restore on reload, Ctrl+N continue in the CLI, and Auto Continue stopping in the Assistant.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "1d3e2af57ad2d931d0b742920f7348a84dcd2fae": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Messages sent while a CLI turn is running are now taken into that turn at its next break instead of running afterwards, and the footer shows a ^n continue hint when a continue action is available.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "cce375bed0c93512570ea187c118e8816423fc1c": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "System prompt guidance and the built-in agent modes move into @agentlink/core as new system-prompt and agent-modes entry points; VS Code's prompts are unchanged.",
+      "coverage": "partial",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "f6732ce7fbe048a52b6b3d78d3caa184844430ba": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The CLI's system prompt now leads with VS Code's shared guidance for the tools each session registers. workspace-host gains an opt-in sharedPromptGuidance option.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "d3947361cdb2adeb3c010298b871d994cec12f07": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The CLI gets VS Code's agent modes with /mode and /mode SLUG, saved per session, with custom modes from modes.json. workspace-host gains a modes option and core gains session modes.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "908f8a1e3131405d0d64910e655f0d61f48b723b": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The Assistant's prompts now build on VS Code's shared guidance for the tools each chat has, as a general assistant for owner chats. workspace-host's sharedPromptGuidance also accepts a codingAssistant option.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "997df9834983735a6ed10f99ee98ab51b5f24861": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "execute_command in the CLI and Assistant now takes VS Code's parameters (timeout in seconds, env, output filters) and returns VS Code's result fields. Older timeoutMs calls still run. The output filter moves to @agentlink/core/command-output.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "79c837fdac14dd4e2987342749b0114e65667792": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes the CommonJS build so the @agentlink/core command-output subpath is included.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "c27ebbfb8e79942f1941337a0ab42d57715989be": {
+      "bump": "minor",
+      "breakingUnits": ["sdk"],
+      "summary": "workspace-host replaces get_command_output, list_commands and stop_command with VS Code's get_terminal_output and close_terminals. Ask Agent's execute_command moves to VS Code's schema, and the CLI, Assistant and Ask Agent use the new tools.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "73cd67552780aeb81b26b4debced936cfa2b5c08": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "CLI Ask mode and Assistant task reviewers can now run commands that VS Code's read-only check clears without asking, with other commands prompting (CLI) or refused (reviewers); the classifier is shared via new core subpaths.",
+      "coverage": "partial",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "be8d14028d3ada2faa7f89b2bf55742edf30b894": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The CLI model can now propose mode changes with switch_mode and ask_user modeSwitch, shown as an Allow/Reject card, with the turn continuing in the new mode.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "e34267c7a3f965fa78a70970c7d443619377cba6": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "CLI and Assistant background agent tools now use VS Code's descriptions, inputs and results, name children by sessionId, and can wait for any or all of several children.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "fe9d9f1c9cbcc42b7399c9876e35ff57f88c7536": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "CLI and Assistant spawn_background_agent now takes VS Code's ownedPaths and forbiddenPaths with ownership handoff, optional read_paths, and a configurable per-session child limit (4 in CLI, 2 in Assistant).",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a3b4a544046be6d157c82912f6c608cb4618267c": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Sandboxed commands no longer fail when an agent-folder skill symlink such as .agents/skills -> ../.claude/skills points into another policy folder; other namespace rejections now report the offending path.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "849207f4851c531ed6dd012393837e5838f758b3": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes Responses API tool argument streaming so long tool calls no longer trip the no-progress watchdog and retry repeatedly; repeated no-progress timeouts now surface after one retry.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "fcd2231a84eb5ce9cfade2dd568efbd7a613b60b": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The system prompt and todo_write description now tell the model to start a todo list in its first response for multi-step work on every prompt profile, restoring todo use with the compact profile.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "d093d7eb21aa691b43acb082444602dfdde47270": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "load_skill now follows a stale built-in skill path left after an extension update to the current built-in catalog entry instead of failing.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "0fccaf3e4b55321acc0b7aae35fb969a84ae9bd2": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Improves the browser gateway on phones and foldables: chats no longer jump to the bottom, a 600px phone breakpoint, denser touch type, VS Code chat tabs in the shell sidebar, a tab close endpoint, and the VS Code view reopens after reload.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "398956888ea9dabf2d772b9870ec4d065ccc98f8": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "find_and_replace in regex mode now rejects ${N} references with a clear error before any edit instead of silently inserting the literal text and dropping the captured content.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a8db2342595555ee50a0d3c90c0f4e565c2604ae": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Background agents no longer get automatic budgets or wrap-up messages; the foreground coordinator judges progress through status and progress-check steering, and explicit budgets only stop a run at their hard boundary.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b2e59b000e330cea1e909ffc73cee7b2e86562b9": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "load_skill can now activate a readable SKILL.md missing from or newer than the session catalog, such as a freshly pulled skill or one in a second workspace folder, while keeping disabled skills disabled and applying allowed-tools restrictions.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "edbbcb5d0a6bc26adfe66411d09a4a769e5dd93b": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "/worktree and /review in multi-root workspaces now create a worktree on the same branch for every Git repository, generate a .code-workspace file, and open it in the new window, rolling back partial launches.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "c59648b0a61817e12982343a076415181f5766e2": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Codex retry warnings now name the real cause (such as overloaded 503), retry number, delay and next transport instead of a generic 'Response interrupted' message; retry behavior is unchanged.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "4c209c22b8db65c08a9d50a3cf8c27e6a7815e6d": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The indexer now optimizes the retrieval store between committed batches during long indexing jobs, preventing runaway storage growth and stalls, and reports optimization failures as non-fatal errors.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "46ba4f5c08b443cee38d0bd9b631211f25437c5d": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Adds a Free Up Space button and agentlink.maintainIndex command that compact the workspace's codebase index and prune old database history without re-indexing, reporting the space reclaimed.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ff0b9b30e7872d33ae98d5dcb0914f294d589eff": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Retrieval store compaction and pruning now get a one-hour lock limit so optimizing a heavily bloated index no longer times out and leaves the store locked and bloated.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "8c1af1b7d6da03b6bf5ad37cb23721e694269a42": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Index optimization now reports space reclaimed as measured on disk, rather than Lance's prune statistics that omitted old manifests and showed 0 MiB, and logs the store size afterward.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "1983bb90e97dd17dbd5a6d6521dcfc0029df7c75": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Plugin registry changes that only reflect other windows opening or closing no longer make every VS Code window reconnect its MCP servers.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "156fe68c14e6da81ce4ecf23246edc659b63d153": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Final status cards now show a text result as the summary when set_task_status provides no summary.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "4a2121c935f7912c6a41e79b1f8d6f8f5f667f11": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Final status cards in VS Code and browser chat now show structured results (text, review findings, patch, verification) and the full continuation prompt next to the action button, with relay lazy-loading of results.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "828e2ae3489eb3a898f8b61bb659a1998706a785": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The stale-result error for browser final results now says it is waiting for an updated session snapshot instead of suggesting a retry.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "622cc3251015f8a6691bb3bbc82367313b16de63": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Final status cards hide the built-in default continuation text and show the Continue action at the bottom-left, displaying a Next step prompt only when the agent supplies one.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "e07a975a8a41163dfff349e902d33b779ae5a088": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Long silent Codex reasoning is no longer mistaken for a dead stream and restarted by the no-progress watchdog; a bounded 30-minute window now applies while reasoning is open.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "16f231565e26396c31880bf3ed973f8efc425925": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Hardens tool diagnostics and recovery: bounded MCP crash reconnects with config revalidation, preserved evidence for failed background agents, safe command and sandbox diagnostics, bounded xxd/dyld_info reads, web fetch provenance, quiet update polling, and accurate failed-save reporting.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "bc4d4187b8cc800e84906bf048997f3b57031fd7": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Read-only network rejections now tell background agents to ask the coordinator for the exact remote data, Codex page-access failures report a bounded cause, and dyld_info accepts bare usage and Apple system image inspection on macOS.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "5633aefa3c39f54c53bb7a09d9a9ab35998dccfe": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Saves without formatting now close the temporary tab they open in a non-primary editor group so agent-edited files stay in the left column.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "221b3295c7eaadca57c7125bfe78fcb4cc1806c9": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Browser gateway restarts now finish by closing open connections, so browser approvals no longer fail with 502, and approval failures are shown next to the approval card.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "e03a1bb782cc17914bc80fa7420e9cfe9353e380": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The read-only classifier now allows dyld_info on macOS system images that exist only in the dyld shared cache, accepting missing paths only inside Apple system image roots.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "6a7b1b631b3e80a425636ccd7ceb043b4668a849": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Adds an Agent activity UX guide to the bundled documentation and corrects the embedding guide about thinking events being forwarded by the Web transport.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "d049bc076229da0166c6db076cd84d4ecb2e2b42": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Browser-queued and interjected messages now survive VS Code tab switches and work on unfocused chat tabs, and Auto Continue is now a per-chat setting run by VS Code and shared between VS Code and the browser.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "f9ca50d6c09f53b22896edae7ef62fd67842773e": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes a race where a late heartbeat could reconnect the browser gateway owner after its lease had been released.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "2c783bfb6428e8c1e3aa9f4d5477467efa17892a": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Waits for the browser gateway lease client to shut down fully before replacing it, avoiding stale heartbeat or registration responses being applied.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
