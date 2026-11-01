@@ -15,6 +15,7 @@ import {
   isTaskStatus,
   parseAskUserInput,
   switchModeToolDefinition,
+  validateTaskStatusContinuation,
 } from "./interactionTools.js";
 import { describe, expect, it } from "vitest";
 
@@ -245,6 +246,38 @@ describe("set_task_status contract", () => {
     expect(SET_TASK_STATUS_TOOL.input_schema.required).toEqual(["status"]);
     expect(isTaskStatus("waiting_for_user")).toBe(true);
     expect(isTaskStatus("done")).toBe(false);
+  });
+
+  it.each([
+    { continueLabel: "Next" },
+    { continuePrompt: "Do more work" },
+    { continueLabel: "Next", continuePrompt: "Do more work" },
+  ])("rejects waiting with continuation fields: %j", (params) => {
+    expect(
+      validateTaskStatusContinuation("waiting_for_user", params),
+    ).toContain("waiting_for_user cannot include");
+    expect(validateTaskStatusContinuation("completed", params)).toBeUndefined();
+  });
+
+  it("accepts a genuine input wait and removes legacy waiting continuations", () => {
+    expect(
+      validateTaskStatusContinuation("waiting_for_user", {}),
+    ).toBeUndefined();
+    expect(
+      validateTaskStatusContinuation("waiting_for_user", {
+        continueLabel: " ",
+        continuePrompt: "\n",
+      }),
+    ).toBeUndefined();
+    expect(
+      buildTaskStatusMarker({
+        status: "waiting_for_user",
+        params: { continueLabel: "Next", continuePrompt: "Do more work" },
+      }).continueAction,
+    ).toBeUndefined();
+    expect(SET_TASK_STATUS_TOOL.description).toContain(
+      "no further approved work",
+    );
   });
 
   it("builds the final marker", () => {

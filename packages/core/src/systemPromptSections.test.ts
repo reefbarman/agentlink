@@ -139,6 +139,26 @@ describe("system prompt sections", () => {
     ).toBe(false);
   });
 
+  it.each(["compatibility", "reasoning"] as const)(
+    "%s reserves waiting for genuine input blockers",
+    (profile) => {
+      const prompt = buildBasePrompt(profile, {
+        identity: "You are AgentLink, a test agent.",
+        cwd: "/repo",
+        capabilities: {
+          ...NO_CAPABILITIES,
+          finalStatus: true,
+          autoContinue: true,
+        },
+      });
+      expect(prompt).toContain("no further approved work can proceed");
+      expect(prompt).toContain("continueLabel");
+      expect(prompt).toContain("continuePrompt");
+      expect(prompt).toContain("before waiting");
+      expect(prompt).toMatch(/bypass (?:an )?approval/);
+    },
+  );
+
   it("drops Auto Continue and ask_user sentences from the final status guidance", () => {
     const prompt = buildBasePrompt("compatibility", {
       identity: "You are AgentLink, a test agent.",

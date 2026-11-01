@@ -230,6 +230,66 @@ describe("workspace session interaction tools", () => {
     expect(onTodosChanged).toHaveBeenLastCalledWith("session-1", done);
   });
 
+  it("rejects waiting continuations without final side effects, then completes", async () => {
+    const onTodosChanged = vi.fn();
+    const tools = createWorkspaceSessionInteractionTools({
+      finalStatus: true,
+      onTodosChanged,
+    });
+    const resolved = await tools.resolveTools(discovery);
+    const find = (name: string) =>
+      resolved.find((tool) => tool.definition.name === name)!;
+    const todoWrite = find("todo_write");
+    const setStatus = find("set_task_status");
+    const todos = [
+      {
+        id: "a",
+        content: "Build",
+        activeForm: "Building",
+        status: "in_progress",
+      },
+    ];
+    await todoWrite.execute({ todos }, execution);
+
+    for (const continuation of [
+      { continueLabel: "Next" },
+      { continuePrompt: "Continue the work" },
+    ]) {
+      const result = await setStatus.execute(
+        {
+          status: "waiting_for_user",
+          summary: "Waiting.",
+          completeTodos: true,
+          ...continuation,
+        },
+        execution,
+      );
+      expect(result).toMatchObject({ isError: true });
+      expect(result.modelContent).toContain("waiting_for_user cannot include");
+      expect(result).not.toHaveProperty("endTurn");
+      expect(result.displayContent).not.toHaveProperty("finalStatus");
+      expect(tools.snapshot("session-1").todos).toEqual(todos);
+      expect(onTodosChanged).toHaveBeenCalledTimes(1);
+    }
+
+    await expect(
+      setStatus.execute(
+        { status: "completed", summary: "Built it.", completeTodos: true },
+        execution,
+      ),
+    ).resolves.toMatchObject({
+      endTurn: { finalText: "Built it." },
+      displayContent: {
+        finalStatus: { status: "completed" },
+        todos: [{ id: "a", status: "completed" }],
+      },
+    });
+    expect(tools.snapshot("session-1").todos).toEqual([
+      { ...todos[0], status: "completed" },
+    ]);
+    expect(onTodosChanged).toHaveBeenCalledTimes(2);
+  });
+
   it("ignores completeTodos unless the status is completed, as VS Code does", async () => {
     const tools = createWorkspaceSessionInteractionTools({ finalStatus: true });
     const setStatus = (await tools.resolveTools(discovery)).find(

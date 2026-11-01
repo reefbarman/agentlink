@@ -165,7 +165,7 @@ export function askUserToolDefinition(options: {
 export const SET_TASK_STATUS_TOOL: ToolDefinition = {
   name: "set_task_status",
   description:
-    "Mark the current turn's final status and end the current response unless another user interjection is already pending. Unfinished todos do not resume automatically after this tool. Use only when your response is final: completed, waiting_for_user, blocked, or cancelled. Do not call before ask_user, for intermediate progress updates, or to answer an interjected question when you intend to resume earlier work afterward; use ordinary visible text in those cases. The summary is the turn's final message: the complete response itself (answer, findings, artifact, or change report), not a meta-description. Do not also write it as text before this call. Never use summary as a teaser such as 'Here is the prompt' or 'See below'; content after this tool call is not a reliable place to deliver the answer. For code-modifying work, structure the summary around what changed, why it matters, validation run or skipped, and concrete follow-up. Include a short continuation button label and prompt when the user can safely continue with one click, especially when the summary mentions a concrete next phase, MVP slice, remaining plan item, follow-up task, or validation step.",
+    "End the turn with completed, waiting_for_user, blocked, or cancelled, unless a user interjection is pending. Unfinished todos do not auto-resume. Use waiting_for_user only when no further approved work can proceed without input or permission, never with continuation fields. With Auto Continue on, do available in-scope work first; do not expand scope or bypass approval. Do not call before ask_user, for intermediate progress, or when answering an interjection before resuming earlier work; use ordinary text instead. Put the complete final answer, findings, artifact or change report in summary, not a meta-description, duplicate of preceding text, or teaser promising later content. For code changes include changes, rationale, validation run/skipped, and follow-up. Supply a short continueLabel and continuePrompt for a safe next phase, unfinished plan item, subtask or validation step, never when waiting for input.",
   input_schema: {
     type: "object",
     properties: {
@@ -181,7 +181,7 @@ export const SET_TASK_STATUS_TOOL: ToolDefinition = {
       continueLabel: {
         type: "string",
         description:
-          "Button label for a clear next-step continuation. Provide this with continuePrompt when the final summary names a concrete follow-up, next phase, MVP slice, remaining plan item, subtask, or validation step.",
+          "Button label for a clear next-step continuation. Not allowed with waiting_for_user. Provide this with continuePrompt when the final summary names a concrete follow-up, next phase, MVP slice, remaining plan item, subtask, or validation step.",
       },
       completeTodos: {
         type: "boolean",
@@ -457,6 +457,22 @@ export function buildModeSwitchResumePrompt(pending: {
 
 // ── set_task_status ──
 
+/** Reject contradictory waiting cards before any final-status side effects. */
+export function validateTaskStatusContinuation(
+  status: FinalMessageStatus,
+  params: Record<string, unknown>,
+): string | undefined {
+  if (
+    status === "waiting_for_user" &&
+    [params.continueLabel, params.continuePrompt].some(
+      (value) => typeof value === "string" && value.trim().length > 0,
+    )
+  ) {
+    return "waiting_for_user cannot include continueLabel or continuePrompt. If approved work can proceed without input, do it before waiting (especially with Auto Continue enabled). Otherwise omit the continuation fields and identify the input or permission that prevents further work. Do not expand scope or bypass approval.";
+  }
+  return undefined;
+}
+
 export function isTaskStatus(value: unknown): value is FinalMessageStatus {
   return (
     value === "completed" ||
@@ -498,7 +514,7 @@ export function buildTaskStatusMarker(args: {
     source: "tool",
     ...(summary ? { summary } : {}),
     ...(args.result ? { result: args.result } : {}),
-    ...(continueLabel && continuePrompt
+    ...(args.status !== "waiting_for_user" && continueLabel && continuePrompt
       ? { continueAction: { label: continueLabel, prompt: continuePrompt } }
       : {}),
   };

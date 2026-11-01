@@ -1330,6 +1330,36 @@ describe("MessageBubble slash-command rendering", () => {
     );
   });
 
+  it("hides legacy next steps on waiting-for-input cards", () => {
+    const message: ChatMessage = {
+      id: "waiting-with-next-step",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [],
+      finalMarker: {
+        status: "waiting_for_user",
+        source: "tool",
+        summary: "Please provide the missing file.",
+        continueAction: {
+          label: "Do more work",
+          prompt: "Continue the next phase",
+        },
+      },
+    };
+    const { container } = render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onFinalMarkerContinue={vi.fn()}
+      />,
+    );
+    expect(container.textContent).toContain("Waiting for input");
+    expect(container.textContent).toContain("Please provide the missing file.");
+    expect(container.querySelector(".final-marker-next-step")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Do more work" })).toBeNull();
+  });
+
   it("renders a default Continue CTA for completed final markers without explicit continuation", () => {
     const onContinue = vi.fn();
     const message: ChatMessage = {

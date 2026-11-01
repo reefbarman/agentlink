@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   DEFAULT_COMPLETED_CONTINUE_ACTION,
+  getFinalMessageContinueAction,
   getLatestAutoContinueAction,
   getLatestFinalMessageMarker,
   type FinalMessageMarker,
@@ -16,6 +17,20 @@ describe("final status protocol", () => {
 });
 
 describe("getLatestAutoContinueAction", () => {
+  it("never offers a next step on legacy waiting markers", () => {
+    const marker: FinalMessageMarker = {
+      status: "waiting_for_user",
+      source: "tool",
+      continueAction: { label: "Next", prompt: "Do available work" },
+    };
+    expect(getFinalMessageContinueAction(marker)).toBeUndefined();
+    expect(
+      getLatestAutoContinueAction([
+        { id: "waiting", role: "assistant", finalMarker: marker },
+      ]),
+    ).toBeUndefined();
+  });
+
   it("guides the default continuation from a completed phase back to the full approved plan", () => {
     const { prompt } = DEFAULT_COMPLETED_CONTINUE_ACTION;
 

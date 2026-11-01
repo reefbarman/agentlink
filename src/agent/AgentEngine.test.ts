@@ -3886,11 +3886,7 @@ describe("AgentEngine", () => {
               type: "tool_use",
               id: "call_final",
               name: "set_task_status",
-              input: {
-                status: "waiting_for_user",
-                continueLabel: "Implement this",
-                continuePrompt: "Please implement this plan.",
-              },
+              input: { status: "completed" },
             },
             {
               type: "tool_use",
@@ -3922,12 +3918,8 @@ describe("AgentEngine", () => {
         async (request: AgentToolExecutionRequest) => {
           if (request.name === "set_task_status") {
             request.context.onFinalStatus?.({
-              status: "waiting_for_user",
+              status: "completed",
               source: "tool",
-              continueAction: {
-                label: "Implement this",
-                prompt: "Please implement this plan.",
-              },
             });
             return {
               content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
@@ -3949,12 +3941,8 @@ describe("AgentEngine", () => {
       expect(markerEvent).toMatchObject({
         type: "final_marker",
         marker: {
-          status: "waiting_for_user",
+          status: "completed",
           source: "tool",
-          continueAction: {
-            label: "Implement this",
-            prompt: "Please implement this plan.",
-          },
         },
       });
       const toolResults = events.filter(
@@ -3972,9 +3960,95 @@ describe("AgentEngine", () => {
       expect(
         session.getAllMessages().at(-2)?.uiHint?.finalMarker,
       ).toMatchObject({
-        status: "waiting_for_user",
-        source: "tool",
+        status: "completed",
       });
+    });
+
+    it("continues after a rejected final status and lets the model recover", async () => {
+      const requests: StreamRequest[] = [];
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        if (requests.length === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "call_final",
+                name: "set_task_status",
+                input: {
+                  status: "waiting_for_user",
+                  continueLabel: "Continue",
+                  continuePrompt: "Continue the work.",
+                },
+              },
+              {
+                type: "tool_use",
+                id: "call_read",
+                name: "read_file",
+                input: { path: "src/example.ts" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "Recovered and finished." });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("complete the task");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const readSpy = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "approved file contents" }],
+      }));
+      setEngineToolContext(
+        engine,
+        {
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: "seed-session",
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+        },
+        async (request: AgentToolExecutionRequest) => {
+          if (request.name === "set_task_status") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({ ok: false, error: "Invalid status" }),
+                },
+              ],
+              isError: true,
+            };
+          }
+          if (request.name === "read_file") {
+            return await readSpy();
+          }
+          return {
+            content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+          };
+        },
+      );
+
+      const events = await collectEvents(engine.run(session));
+      const toolResults = events.filter(
+        (event): event is Extract<AgentEvent, { type: "tool_result" }> =>
+          event.type === "tool_result",
+      );
+
+      expect(readSpy).toHaveBeenCalledOnce();
+      expect(toolResults.map((result) => result.toolName)).toEqual([
+        "set_task_status",
+        "read_file",
+      ]);
+      expect(requests.length).toBeGreaterThanOrEqual(2);
+      expect(events.some((event) => event.type === "final_marker")).toBe(false);
+      expect(session.getLastAssistantText()).toContain(
+        "Recovered and finished.",
+      );
     });
 
     it("injects a pending interjection instead of ending the turn at set_task_status", async () => {

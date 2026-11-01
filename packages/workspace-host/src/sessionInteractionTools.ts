@@ -23,6 +23,7 @@ import {
   buildTaskStatusResultPayload,
   getAskUserModeSwitch,
   isTaskStatus,
+  validateTaskStatusContinuation,
   parseAskUserInput,
   switchModeToolDefinition,
   type ModeSwitchOutcome,
@@ -325,6 +326,8 @@ function createSetTaskStatusTool<TPrincipal extends AgentPrincipal>(
       if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
       const status = input.status;
       if (!isTaskStatus(status)) return toolError("Invalid status");
+      const continuationError = validateTaskStatusContinuation(status, input);
+      if (continuationError) return toolError(continuationError);
       const marker = buildTaskStatusMarker({ status, params: input });
       const completeTodosRequested = input.completeTodos === true;
       let completed: TodoItem[] | undefined;

@@ -124,6 +124,69 @@ describe("session progress", () => {
     ).toBe(false);
   });
 
+  it("skips rejected waiting cards but restores legacy waiting cards without actions", () => {
+    const rejected = {
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "rejected",
+          name: "set_task_status",
+          input: {
+            status: "waiting_for_user",
+            summary: "Need a decision.",
+            continueLabel: "Resume",
+            continuePrompt: "Keep going",
+          },
+        },
+      ],
+    };
+    const rejectedResult = {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "rejected",
+          is_error: true,
+          content: "Rejected",
+        },
+      ],
+    };
+    expect(withFinalStatusHints([rejected, rejectedResult])).toEqual([
+      rejected,
+      rejectedResult,
+    ]);
+
+    const legacy = {
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "legacy",
+          name: "set_task_status",
+          input: {
+            status: "waiting_for_user",
+            summary: "Need a decision.",
+            continueLabel: "Resume",
+            continuePrompt: "Keep going",
+          },
+        },
+      ],
+    };
+    expect(withFinalStatusHints([legacy])).toEqual([
+      {
+        ...legacy,
+        uiHint: {
+          finalMarker: {
+            status: "waiting_for_user",
+            source: "tool",
+            summary: "Need a decision.",
+          },
+        },
+      },
+    ]);
+  });
+
   it("restores each set_task_status card as VS Code's uiHint", () => {
     const call = {
       role: "assistant",

@@ -129,6 +129,25 @@ export function shouldAutoContinue(input: {
  * `uiHint` VS Code records, so a reloaded chat shows the card.
  */
 export function withFinalStatusHints(messages: readonly unknown[]): unknown[] {
+  const failedToolCallIds = new Set<string>();
+  for (const raw of messages) {
+    const message = raw as { readonly content?: unknown } | null;
+    if (!Array.isArray(message?.content)) continue;
+    for (const block of message.content as unknown[]) {
+      const result = block as {
+        type?: unknown;
+        tool_use_id?: unknown;
+        is_error?: unknown;
+      };
+      if (
+        result.type === "tool_result" &&
+        result.is_error === true &&
+        typeof result.tool_use_id === "string"
+      ) {
+        failedToolCallIds.add(result.tool_use_id);
+      }
+    }
+  }
   return messages.map((raw) => {
     const message = raw as {
       readonly role?: unknown;
@@ -141,10 +160,17 @@ export function withFinalStatusHints(messages: readonly unknown[]): unknown[] {
     for (const block of message.content as unknown[]) {
       const call = block as {
         type?: unknown;
+        id?: unknown;
         name?: unknown;
         input?: unknown;
       };
-      if (call.type !== "tool_use" || call.name !== "set_task_status") continue;
+      if (
+        call.type !== "tool_use" ||
+        call.name !== "set_task_status" ||
+        (typeof call.id === "string" && failedToolCallIds.has(call.id))
+      ) {
+        continue;
+      }
       const input = (call.input ?? {}) as Record<string, unknown>;
       if (isTaskStatus(input.status)) {
         finalMarker = buildTaskStatusMarker({

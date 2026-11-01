@@ -744,6 +744,19 @@ function projectHydratedTranscript(
   messages: readonly CoreModelMessage[],
   activeTurnId?: string,
 ): readonly StandaloneTranscriptMessage[] {
+  const failedToolCallIds = new Set<string>();
+  for (const message of messages) {
+    if (typeof message.content === "string") continue;
+    for (const block of message.content) {
+      if (
+        block.type === "tool_result" &&
+        "is_error" in block &&
+        block.is_error === true
+      ) {
+        failedToolCallIds.add(block.tool_use_id);
+      }
+    }
+  }
   const projected: StandaloneTranscriptMessage[] = [];
   for (const [index, message] of messages.entries()) {
     // A condense summary is model context, not something the user wrote.
@@ -778,7 +791,11 @@ function projectHydratedTranscript(
     }
     // Rebuild each final-status card from its call, as VS Code restores it.
     for (const block of message.content) {
-      if (block.type !== "tool_use" || block.name !== "set_task_status") {
+      if (
+        block.type !== "tool_use" ||
+        block.name !== "set_task_status" ||
+        failedToolCallIds.has(block.id)
+      ) {
         continue;
       }
       const input = (block.input ?? {}) as Record<string, unknown>;

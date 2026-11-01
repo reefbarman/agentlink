@@ -303,7 +303,7 @@ function buildFinalResponseStatusSection(
 ): string {
   const continuation: GuidancePart[] = [
     {
-      text: `If you are waiting on an obvious next step, include a short \`continueLabel\` and visible \`continuePrompt\` so the user can resume with one click.`,
+      text: `For an optional next step after completion, include a short \`continueLabel\` and visible \`continuePrompt\` so the user can resume with one click.`,
     },
     {
       text: `If your final summary names a concrete follow-up, next MVP slice, next phase, unfinished plan item, remaining subtask, or validation step that you would reasonably do next, wire that exact continuation into \`continueLabel\` and \`continuePrompt\` instead of relying on the generic Continue action.`,
@@ -316,7 +316,7 @@ function buildFinalResponseStatusSection(
       requires: "todos",
     },
     {
-      text: `Completed markers always get a Continue action (default or custom); blocked, waiting, and cancelled markers do not. If Auto Continue asks you to continue and there is genuinely no remaining work, briefly confirm that no further work is needed and do not perform busywork — the UI detects no-op continuation turns and stops automatically.`,
+      text: `Completed markers allow Auto Continue. With it enabled, do remaining safe in-scope work before waiting; a handoff is not a blocker. Never expand scope or bypass approval. If nothing remains, briefly confirm that without busywork; no-progress turns stop automatically.`,
       requires: "autoContinue",
     },
     {
@@ -332,7 +332,7 @@ function buildFinalResponseStatusSection(
 
 const FINAL_RESPONSE_STATUS_INTRO = `## Final Response Status
 
-You must call \`set_task_status\` immediately before any final response that completes, pauses, blocks, or cancels the current user ask. This ends the current response unless another user interjection is already pending, and it is the only way the UI can render final-status styling. If you forget it after otherwise finishing a turn, the engine may give you one private reminder; respond only by setting the truthful final status, without repeating completed work. Unfinished todos must not make you resume automatically after calling it. Use \`completed\` when the ask is satisfied, \`waiting_for_user\` when you need input or permission, \`blocked\` when you cannot proceed, and \`cancelled\` if work was stopped. If the user asks an interjected question while you are still carrying out an earlier task and you intend to resume that task after answering, answer with ordinary visible text and do not call \`set_task_status\`.
+You must call \`set_task_status\` immediately before any final response that completes, pauses, blocks, or cancels the current user ask. This ends the current response unless another user interjection is already pending, and it is the only way the UI can render final-status styling. If you forget it after otherwise finishing a turn, the engine may give you one private reminder; respond only by setting the truthful final status, without repeating completed work. Unfinished todos must not make you resume automatically after calling it. Use \`completed\` when the ask is satisfied, \`waiting_for_user\` only when no further approved work can proceed without specific user input or permission, \`blocked\` when you cannot proceed, and \`cancelled\` if work was stopped. Never combine \`waiting_for_user\` with \`continueLabel\` or \`continuePrompt\`. Do available approved work before waiting; otherwise name the missing input or permission. If the user asks an interjected question while you are still carrying out an earlier task and you intend to resume that task after answering, answer with ordinary visible text and do not call \`set_task_status\`.
 
 The \`summary\` is the turn's final message, rendered as Markdown in the final-status card and often the only part the user reads. Put the complete final response there (the full answer, explanation, findings, review, artifact, or change report) and do **not** also write it as text before calling \`set_task_status\`: that duplicates it, and a short recap under a long text answer hides the substance. Earlier text is for brief progress narration only. Never write meta-descriptions like "Explained X", "Answered the question about Y", or "Walked through how Z works"; they describe the response instead of being it. Include any requested artifact (prompt, command, code snippet, plan, review, answer) verbatim in \`summary\`, and never write teaser text like "Here is the prompt", "See below", or "The answer is:" without the content. This tool should be the final visible action for the turn; never rely on later text.
 
@@ -460,7 +460,7 @@ const coreContractBullets = (
     requires: "todos",
   },
   {
-    text: `- Finish or pause the current ask with \`set_task_status\` (completed, waiting for user input, blocked, or cancelled), never for intermediate progress${capabilities.askUser ? " or before `ask_user`" : ""}. Its summary is the turn's final message: put the complete answer or deliverable there instead of in preceding text, never a meta-description. Include concrete validation and relevant skipped checks for implementation work.`,
+    text: `- Finish or pause the current ask with \`set_task_status\` (completed, waiting for user input, blocked, or cancelled), never for intermediate progress${capabilities.askUser ? " or before `ask_user`" : ""}. Its summary is the turn's final message: put the complete answer or deliverable there instead of in preceding text, never a meta-description. Include concrete validation and relevant skipped checks for implementation work. Use waiting_for_user only when no further approved work can proceed without input or permission, never with continueLabel or continuePrompt.${capabilities.autoContinue ? " With Auto Continue on, do safe in-scope work before waiting; never expand scope or bypass approval." : ""}`,
     requires: "finalStatus",
   },
   {

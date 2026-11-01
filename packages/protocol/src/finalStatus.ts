@@ -133,7 +133,10 @@ export const DEFAULT_COMPLETED_CONTINUE_ACTION: FinalMessageContinueAction = {
 export function getFinalMessageContinueAction(
   marker: FinalMessageMarker,
 ): FinalMessageContinueAction | undefined {
-  if (marker.continueActionConsumed) return undefined;
+  // Older transcripts may contain contradictory waiting + next-step cards.
+  if (marker.status === "waiting_for_user" || marker.continueActionConsumed) {
+    return undefined;
+  }
   return (
     marker.continueAction ??
     (marker.status === "completed"

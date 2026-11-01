@@ -2379,7 +2379,7 @@ describe("getAgentTools", () => {
   it("guides set_task_status continuations for concrete follow-up work", () => {
     const tool = getAgentTools().find((t) => t.name === "set_task_status");
     expect(tool?.description).toContain(
-      "when the summary mentions a concrete next phase, MVP slice, remaining plan item, follow-up task, or validation step",
+      "for a safe next phase, unfinished plan item, subtask or validation step, never when waiting for input",
     );
     const properties = tool?.input_schema.properties as Record<
       string,
@@ -5739,7 +5739,7 @@ describe("dispatchToolCall", () => {
     const result = await dispatchToolCall(
       "set_task_status",
       {
-        status: "waiting_for_user",
+        status: "completed",
         summary: "Ready to implement",
         continueLabel: "Implement this",
         continuePrompt: "Please implement this plan.",
@@ -5748,7 +5748,7 @@ describe("dispatchToolCall", () => {
     );
 
     expect(onFinalStatus).toHaveBeenCalledWith({
-      status: "waiting_for_user",
+      status: "completed",
       source: "tool",
       summary: "Ready to implement",
       continueAction: {
@@ -6172,6 +6172,43 @@ describe("dispatchToolCall", () => {
       },
     });
   });
+
+  it.each([
+    { continueLabel: "Next" },
+    { continuePrompt: "Continue available work" },
+    { continueLabel: "Next", continuePrompt: "Continue available work" },
+  ])(
+    "rejects waiting with a next step before finalising: %j",
+    async (continuation) => {
+      const onFinalStatus = vi.fn();
+      const result = await dispatchToolCall(
+        "set_task_status",
+        { status: "waiting_for_user", completeTodos: true, ...continuation },
+        { ...mockCtx, onFinalStatus },
+      );
+      expect(onFinalStatus).not.toHaveBeenCalled();
+      expect(result.isError).toBe(true);
+      expect(
+        JSON.parse((result.content[0] as { text: string }).text),
+      ).toMatchObject({
+        error: expect.stringContaining("waiting_for_user cannot include"),
+      });
+
+      await dispatchToolCall(
+        "set_task_status",
+        {
+          status: "waiting_for_user",
+          summary: "Please provide the missing file.",
+        },
+        { ...mockCtx, onFinalStatus },
+      );
+      expect(onFinalStatus).toHaveBeenCalledWith({
+        status: "waiting_for_user",
+        source: "tool",
+        summary: "Please provide the missing file.",
+      });
+    },
+  );
 
   it("rejects invalid final task status values", async () => {
     const onFinalStatus = vi.fn();

@@ -445,7 +445,7 @@ export const ASK_AGENT_SAFE_PROJECTLESS_TOOLS: CoreModelToolDefinition[] = [
   {
     name: "set_task_status",
     description:
-      "Mark the current Ask Agent turn's final status: completed, waiting_for_user, blocked, or cancelled. Use only as the final action for the turn. The summary is the turn's final message: put the complete response there and do not also write it as message text first. The user sees only your message text plus the summary, never tool calls or their results. This attaches a browser final-status marker and performs no workspace, shell, editor, or write side effects.",
+      "Mark the current Ask Agent turn's final status: completed, waiting_for_user, blocked, or cancelled. Use only as the final action for the turn. waiting_for_user means no further approved work can proceed without specific user input or permission; never combine it with continueLabel or continuePrompt. Finish available safe, in-scope work before waiting, without expanding scope or bypassing approvals. The summary is the turn's final message: put the complete response there and do not also write it as message text first. The user sees only your message text plus the summary, never tool calls or their results. This attaches a browser final-status marker and performs no workspace, shell, editor, or write side effects.",
     input_schema: {
       type: "object",
       properties: {

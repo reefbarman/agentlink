@@ -441,6 +441,79 @@ describe("standalone session projection", () => {
     expect(JSON.stringify(state.transcript)).not.toContain("secret");
   });
 
+  it("does not restore failed waiting cards and hides actions on legacy waiting cards", () => {
+    const rejected = reduceStandaloneSessionProjection(
+      initialStandaloneSessionProjection("/project"),
+      {
+        type: "session.selected",
+        sessionId: "session-1",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "rejected",
+                name: "set_task_status",
+                input: {
+                  status: "waiting_for_user",
+                  summary: "Need a decision.",
+                  continueLabel: "Resume",
+                  continuePrompt: "Keep going",
+                },
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "rejected",
+                is_error: true,
+                content: "Rejected",
+              },
+            ],
+          },
+        ] as never,
+      },
+    );
+    expect(rejected.transcript).toEqual([]);
+
+    const legacy = reduceStandaloneSessionProjection(
+      initialStandaloneSessionProjection("/project"),
+      {
+        type: "session.selected",
+        sessionId: "session-1",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "legacy",
+                name: "set_task_status",
+                input: {
+                  status: "waiting_for_user",
+                  summary: "Need a decision.",
+                  continueLabel: "Resume",
+                  continuePrompt: "Keep going",
+                },
+              },
+            ],
+          },
+        ] as never,
+      },
+    );
+    expect(legacy.transcript.at(-1)?.finalStatus).toMatchObject({
+      status: "waiting_for_user",
+      summary: "Need a decision.",
+    });
+    expect(legacy.transcript.at(-1)?.finalStatus).not.toHaveProperty(
+      "continueAction",
+    );
+  });
+
   it("shows set_task_status as a final card with its continue action, live and restored", () => {
     const finalStatus = {
       status: "completed",

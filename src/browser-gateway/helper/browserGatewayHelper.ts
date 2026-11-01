@@ -152,6 +152,7 @@ import {
   type BrowserGatewayAskAgentProjectHandoff,
 } from "../browserGatewayAskAgentSessionStore.js";
 import { isBrowserGatewayAskAgentSessionId } from "../browserGatewayAskAgentIdentity.js";
+import { validateTaskStatusContinuation } from "@agentlink/core/interaction-tools";
 import {
   isRecapOnlyFinalSummary,
   isTeaserOnlyFinalSummary,
@@ -10443,6 +10444,22 @@ export class BrowserGatewayHelper {
       };
     }
 
+    const continuationError = validateTaskStatusContinuation(
+      status,
+      toolCall.input,
+    );
+    if (continuationError) {
+      const content = JSON.stringify({ error: continuationError });
+      return {
+        content,
+        stop: false,
+        toolMessage: this.buildAskAgentToolResultMessage(
+          toolCall,
+          content,
+          true,
+        ),
+      };
+    }
     const summary =
       typeof toolCall.input.summary === "string"
         ? toolCall.input.summary.trim()

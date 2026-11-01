@@ -4375,7 +4375,11 @@ export class AgentEngine {
       const completed = resultSlots[completedIndex];
       if (!completed) continue;
       const modeSwitch = getSuccessfulModeSwitch(completed);
-      const finalStatusSet = completed.toolName === "set_task_status";
+      const finalStatusPayload =
+        completed.toolName === "set_task_status" && !completed.result.isError
+          ? parseToolResultPayload(completed.result)
+          : null;
+      const finalStatusSet = finalStatusPayload?.ok === true;
       if (!modeSwitch && !finalStatusSet) continue;
 
       // A successful mode switch or final status marker is a turn boundary.

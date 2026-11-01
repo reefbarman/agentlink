@@ -6497,6 +6497,131 @@ describe("BrowserGatewayHelper proxy routing", () => {
     ).toMatchObject({ status: "completed", source: "tool" });
   });
 
+  it("rejects Ask Agent waiting continuations and recovers to completed", async () => {
+    let callCount = 0;
+    let rejectedResult = "";
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          text: "Tracking the task.",
+          toolCalls: [
+            {
+              id: "call_todos",
+              name: "todo_write",
+              input: {
+                todos: [
+                  {
+                    id: "audit",
+                    content: "Audit the change",
+                    activeForm: "Auditing the change",
+                    status: "in_progress",
+                  },
+                ],
+              },
+            },
+          ],
+        };
+      }
+      if (callCount === 2) {
+        return {
+          text: "Waiting for your input.",
+          toolCalls: [
+            {
+              id: "call_waiting",
+              name: "set_task_status",
+              input: {
+                status: "waiting_for_user",
+                summary: "Waiting for your input.",
+                continuePrompt: "Continue the audit",
+                completeTodos: true,
+              },
+            },
+          ],
+        };
+      }
+      for (const message of params.iterationMessages ?? []) {
+        if (message.role !== "user" || !Array.isArray(message.content)) {
+          continue;
+        }
+        for (const block of message.content) {
+          if (
+            block.type === "tool_result" &&
+            block.tool_use_id === "call_waiting" &&
+            typeof block.content === "string"
+          ) {
+            rejectedResult = block.content;
+          }
+        }
+      }
+      return {
+        text: "Still working.",
+        toolCalls: [
+          {
+            id: "call_final",
+            name: "set_task_status",
+            input: {
+              status: "completed",
+              summary: "The audit is complete.",
+              completeTodos: true,
+            },
+          },
+        ],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Audit this change" }),
+    });
+    const body = (await send.json()) as {
+      snapshot: {
+        session: {
+          foreground: {
+            todos: Array<{ id: string; status: string }>;
+            projectedMessages: ChatMessage[];
+          };
+        };
+      };
+    };
+    const assistant = body.snapshot.session.foreground.projectedMessages.find(
+      (message) => message.role === "assistant",
+    );
+
+    expect(send.ok).toBe(true);
+    expect(callCount).toBe(3);
+    expect(rejectedResult).toContain("waiting_for_user cannot include");
+    expect(body.snapshot.session.foreground.todos).toEqual([
+      expect.objectContaining({ id: "audit", status: "completed" }),
+    ]);
+    expect(assistant?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          id: "call_waiting",
+          name: "set_task_status",
+          complete: true,
+        }),
+        expect.objectContaining({
+          type: "tool_call",
+          id: "call_final",
+          name: "set_task_status",
+          complete: true,
+        }),
+      ]),
+    );
+    expect(assistant?.finalMarker).toMatchObject({
+      status: "completed",
+      source: "tool",
+      summary: "The audit is complete.",
+      toolCall: expect.objectContaining({ id: "call_final" }),
+    });
+  });
+
   it("bounces set_task_status back when the turn delivered no response content", async () => {
     let callCount = 0;
     const nudges: string[] = [];

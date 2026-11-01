@@ -82,6 +82,7 @@ import {
   buildTaskStatusResultPayload,
   getAskUserModeSwitch,
   isTaskStatus,
+  validateTaskStatusContinuation,
   parseAskUserInput,
 } from "@agentlink/core/interaction-tools";
 import {
@@ -3920,6 +3921,18 @@ async function dispatchToolCallWithTrackedApprovals(
               text: JSON.stringify({ error: "Invalid status" }),
             },
           ],
+        };
+      }
+      const continuationError = validateTaskStatusContinuation(status, params);
+      if (continuationError) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ error: continuationError }),
+            },
+          ],
+          isError: true,
         };
       }
       const expectedResult = ctx.backgroundExpectedResult;
