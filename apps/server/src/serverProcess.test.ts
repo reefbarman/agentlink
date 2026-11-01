@@ -10,6 +10,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { TEST_TURN_LEASE_ENV } from "./assistantService.js";
 import {
   createTestCertificate,
   freePort,
@@ -69,11 +70,11 @@ async function startStalledModelServer() {
   };
 }
 
-function startProcess(configPath: string) {
+function startProcess(configPath: string, env: NodeJS.ProcessEnv = {}) {
   const child: ChildProcessWithoutNullStreams = spawn(
     process.execPath,
     [bundle, "--config", configPath],
-    { stdio: ["pipe", "pipe", "pipe"] },
+    { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...env } },
   );
   let output = "";
   child.stderr.setEncoding("utf8");
@@ -106,6 +107,10 @@ function startProcess(configPath: string) {
 
 describe("agentlink-server process", () => {
   it("checks its configuration, recovers after a crash, and stops cleanly on SIGTERM", async () => {
+    // Recovery waits for the crashed process's turn lease to expire. 10s
+    // instead of the default 30s keeps the test quick while leaving the
+    // restarted server time to start and report the session busy first.
+    const leaseEnv = { [TEST_TURN_LEASE_ENV]: "10000" };
     const certificate = createTestCertificate();
     const root = path.join(workDir, "deployment");
     await fs.mkdir(path.join(root, "tls"), { recursive: true });
@@ -158,7 +163,7 @@ describe("agentlink-server process", () => {
       expect(stdout).toContain("Configuration OK: 1 project(s)");
 
       // First run: the server says how to pair; `pair` prints a code.
-      const first = startProcess(configPath);
+      const first = startProcess(configPath, leaseEnv);
       await first.waitFor(/listening on 127\.0\.0\.1/u);
       await first.waitFor(/agentlink-server pair/u);
       const pair = async () => {
@@ -273,7 +278,7 @@ describe("agentlink-server process", () => {
       // is still live. The owner and session survive, no new setup
       // credential is issued, and the session is busy until its lease
       // expires and recovery completes.
-      const second = startProcess(configPath);
+      const second = startProcess(configPath, leaseEnv);
       await second.waitFor(/listening on 127\.0\.0\.1/u);
       expect(second.output()).toContain(
         `Session ${sessionId} in project "home" is still leased`,
@@ -355,7 +360,7 @@ describe("agentlink-server process", () => {
 
       // After a clean stop the epoch survives, so a client reconnecting with
       // its cursor replays what it missed (the stopped turn) without a reset.
-      const third = startProcess(configPath);
+      const third = startProcess(configPath, leaseEnv);
       await third.waitFor(/listening on 127\.0\.0\.1/u);
       try {
         expect((await cursor()).epoch).toBe(beforeStop.epoch);

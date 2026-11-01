@@ -8,6 +8,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   startAssistantService,
+  TEST_TURN_LEASE_ENV,
+  testTurnLease,
   type AssistantService,
 } from "./assistantService.js";
 import type { PushRequest } from "./pushService.js";
@@ -1366,4 +1368,20 @@ describe("assistant service notifications", () => {
       expect(stored.subscriptions).toEqual([]);
     });
   }, 40_000);
+});
+
+describe("assistant service test-only turn lease", () => {
+  it("keeps the engine default unless a test sets a valid lease", () => {
+    expect(testTurnLease({})).toBeUndefined();
+    expect(testTurnLease({ [TEST_TURN_LEASE_ENV]: "" })).toBeUndefined();
+    expect(testTurnLease({ [TEST_TURN_LEASE_ENV]: "9000" })).toEqual({
+      ttlMs: 9000,
+      renewIntervalMs: 3000,
+    });
+    for (const invalid of ["0", "299", "1.5", "soon"]) {
+      expect(() => testTurnLease({ [TEST_TURN_LEASE_ENV]: invalid })).toThrow(
+        TEST_TURN_LEASE_ENV,
+      );
+    }
+  });
 });

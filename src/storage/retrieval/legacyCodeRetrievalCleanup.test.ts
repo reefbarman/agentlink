@@ -75,6 +75,25 @@ describe("legacy code retrieval cleanup", () => {
       status: "already_clean",
       rowsRemoved: 0,
     });
+
+    // Activation runs this every time, so the marker must skip the store
+    // entirely rather than reopening it to recount rows.
+    const later = new LanceDbRetrievalRepository({
+      root,
+      embeddingDimensions: 3,
+    });
+    try {
+      await publish(
+        later,
+        publication("code:workspace:test:src/later.ts", "code"),
+      );
+    } finally {
+      await later.close();
+    }
+    await expect(cleanupLegacyCodeRetrievalStore(root)).resolves.toEqual({
+      status: "already_clean",
+      rowsRemoved: 0,
+    });
   });
 
   it("does not create a missing legacy store", async () => {

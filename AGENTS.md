@@ -107,7 +107,7 @@ Recurring causes of slow or flaky tests in this repo:
 - **Never run real git or recursive file work on the shared `/tmp`.** Its size depends on the machine, so tests that do will time out unpredictably. Use `fs.mkdtempSync(path.join(os.tmpdir(), "..."))` and clean up. `AgentSessionManager.test.ts` stubs checkpoints by default; call `useRealCheckpoints()` with a temp workspace only when a test verifies real checkpoints.
 - **Wait for the work, not the clock.** Await the promise or event that signals completion instead of polling with wall-clock deadlines or short sleeps.
 - **Heavy tests (LanceDB, real subprocesses, git) need a timeout that holds under full-suite load**, not one tuned on an idle run.
-- **Root `npm test` stops at the first failing stage.** It runs root vitest, then `packages/*` and `apps/*` tests (`test:workspaces`), then the `scripts/*.test.mjs` suites, chained with `&&`, so a root failure hides workspace and script failures. After fixing one, rerun until the whole chain passes. For a quick check of one app, run `npx vitest run` in its `apps/<name>` folder.
+- **Root `npm test` runs every stage and lists all failures.** `scripts/run-tests.mjs` builds the workspaces, then runs root vitest, each `packages/*` and `apps/*` test script, and the `scripts/*.test.mjs` suites (`npm run test:scripts`) one after another, continuing past failures and printing per-stage timings at the end. Stages run sequentially on purpose: running them in parallel was slower and tripped timeouts. For a quick check of one app, run `npx vitest run` in its `apps/<name>` folder.
 - **Before blaming your change for a failure, check it on clean `main`** (rebuild `packages/core` first, since tests import its build output).
 
 ## Adding or Changing Tools

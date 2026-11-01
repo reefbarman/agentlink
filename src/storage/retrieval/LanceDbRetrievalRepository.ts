@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 
-import { connect, Index, makeArrowTable } from "@lancedb/lancedb";
+import { connect, Index, makeArrowTable } from "./lanceDbRuntime.js";
 import type { Connection, Table } from "@lancedb/lancedb";
 import type { Schema } from "apache-arrow";
 

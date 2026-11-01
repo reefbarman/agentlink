@@ -201,6 +201,16 @@ export interface CreateWorkspaceHostOptions {
    */
   readonly turnLimits?: TurnExecutionLimits;
   /**
+   * How long a running turn's lease lasts and how often it is renewed. After
+   * a crash, another process can recover the session only once the lease
+   * expires. Without it, the core's defaults apply (30 seconds, renewed every
+   * 10).
+   */
+  readonly turnLease?: {
+    readonly ttlMs: number;
+    readonly renewIntervalMs: number;
+  };
+  /**
    * Host instructions appended to every prompt. A function is read for
    * each turn, so a host's settings apply without reopening the project,
    * and can add context for that turn (its input and earlier messages).
@@ -1377,6 +1387,12 @@ export async function createWorkspaceHost(
     defaultReasoningEffort: options.defaultReasoningEffort,
     maxOutputTokens: 4_096,
     ...(options.turnLimits ? { limits: options.turnLimits } : {}),
+    ...(options.turnLease
+      ? {
+          leaseTtlMs: options.turnLease.ttlMs,
+          leaseRenewIntervalMs: options.turnLease.renewIntervalMs,
+        }
+      : {}),
     ...(options.condense
       ? {
           contextCondenser: createSummarizingContextCondenser({

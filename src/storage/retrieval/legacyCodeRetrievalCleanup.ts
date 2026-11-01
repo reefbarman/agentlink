@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { Connection, Table } from "@lancedb/lancedb";
 
 import { RETRIEVAL_TABLES } from "./lanceDbSchemas.js";
-import { connect } from "@lancedb/lancedb";
+import { connect } from "./lanceDbRuntime.js";
 import { withRetrievalStoreLock } from "./retrievalStoreLock.js";
 
 export const LEGACY_CODE_RETRIEVAL_CLEANUP_MARKER =
@@ -29,6 +29,10 @@ export async function cleanupLegacyCodeRetrievalStore(
 ): Promise<LegacyCodeRetrievalCleanupResult> {
   const markerPath = path.join(root, LEGACY_CODE_RETRIEVAL_CLEANUP_MARKER);
   if (!(await exists(root))) return { status: "missing", rowsRemoved: 0 };
+  // Runs on every activation: once cleaned, skip opening the store at all.
+  if (await exists(markerPath)) {
+    return { status: "already_clean", rowsRemoved: 0 };
+  }
 
   return withRetrievalStoreLock(
     root,

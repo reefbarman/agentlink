@@ -58,7 +58,12 @@ describe("workspace gate coverage", () => {
     );
     expect(rootManifest.scripts?.watch).toContain("npm run build:workspaces");
     expect(rootManifest.scripts?.lint).toContain("npm run lint:workspaces");
-    expect(rootManifest.scripts?.test).toContain("npm run test:workspaces");
+    // scripts/run-tests.mjs runs every workspace's test script, discovered from
+    // the same workspace globs (covered by scripts/run-tests.test.mjs).
+    expect(rootManifest.scripts?.test).toBe("node scripts/run-tests.mjs");
+    expect(rootManifest.scripts?.["test:scripts"]).toContain(
+      "scripts/run-tests.test.mjs",
+    );
 
     for (const directory of workspaceDirectories) {
       const relativeDirectory = path.relative(ROOT, directory);

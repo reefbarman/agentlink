@@ -1,356 +1,49 @@
-import { fork, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { build } from "esbuild";
-import {
-  afterAll,
-  beforeAll,
-  describe,
-  expect,
-  it,
-  onTestFinished,
-} from "vitest";
-
-import type {
-  ExtensionToWorkerMessage,
-  IndexStats,
-  WorkerToExtensionMessage,
-} from "./types.js";
-import type { RetrievalPublicationRequest } from "@agentlink/protocol/retrieval-publication";
-import {
-  getCodeSourceId,
-  getCodeWorkspaceScopeId,
-} from "./codeRetrievalIdentity.js";
 import {
   CODE_INDEX_REBUILD_REQUIRED_ERROR,
   createCodeIndexFingerprint,
 } from "./retrievalFingerprint.js";
+import type { RetrievalPublicationRequest } from "@agentlink/protocol/retrieval-publication";
+import {
+  type FixtureFetchObservation,
+  TEST_TIMEOUT_MS,
+  createFixture,
+  createWorkspace,
+  expectEmptyJournal,
+  incrementalMessage,
+  requireCache,
+  setUpWorkerFixtureBuild,
+  sourceContent,
+  startMessage,
+  withRepository,
+  writeSource,
+} from "./workerFixtureHarness.js";
 import {
   beginIndexReset,
   getIndexResetStatePath,
   loadIndexResetState,
 } from "./collectionResetState.js";
+import { describe, expect, it, onTestFinished } from "vitest";
+
 import {
-  emptyFileIndexJournal,
-  getFileIndexJournalPath,
-  loadFileIndexJournal,
-  writeFileIndexJournal,
-} from "./fileIndexJournal.js";
-import { STRUCTURAL_EXTRACTOR_VERSION } from "./structuralExtractor.js";
+  getCodeSourceId,
+  getCodeWorkspaceScopeId,
+} from "./codeRetrievalIdentity.js";
 import {
   getStructuralCachePath,
   hashContent,
-  loadIndexCache,
   loadStructuralCache,
 } from "./workerLib.js";
+
 import { LanceDbRetrievalRepository } from "../storage/retrieval/LanceDbRetrievalRepository.js";
+import { STRUCTURAL_EXTRACTOR_VERSION } from "./structuralExtractor.js";
 
-interface FixtureFetchObservation {
-  type: "fixtureFetch";
-  operation: "embedding";
-  attempt: number;
-  phase: "start" | "complete";
-  activeRequests: number;
-  firstInput?: string;
-}
-
-type FixtureMessage = WorkerToExtensionMessage | FixtureFetchObservation;
-
-interface WorkerFixture {
-  child: ChildProcess;
-  messages: FixtureMessage[];
-  send(message: ExtensionToWorkerMessage): void;
-  waitFor<T extends FixtureMessage["type"]>(
-    type: T,
-    predicate?: (message: Extract<FixtureMessage, { type: T }>) => boolean,
-  ): Promise<Extract<FixtureMessage, { type: T }>>;
-  complete(message: ExtensionToWorkerMessage): Promise<IndexStats>;
-}
-
-interface WorkspaceFixture {
-  root: string;
-  cachePath: string;
-  retrievalStoreRoot: string;
-}
-
-const TEST_TIMEOUT_MS = 60_000;
-let buildRoot: string;
-let workerPath: string;
-let shimPath: string;
-
-beforeAll(async () => {
-  buildRoot = fs.mkdtempSync(path.join(os.tmpdir(), "indexer-worker-fixture-"));
-  workerPath = path.join(buildRoot, "indexer-worker.cjs");
-  shimPath = path.join(buildRoot, "fixture-fetch-shim.cjs");
-  await Promise.all([
-    build({
-      entryPoints: [path.resolve("src/indexer/worker.ts")],
-      bundle: true,
-      outfile: workerPath,
-      format: "cjs",
-      platform: "node",
-      target: "node22",
-      external: ["@lancedb/lancedb", "apache-arrow"],
-      alias: {
-        "web-tree-sitter": path.resolve(
-          "node_modules/web-tree-sitter/web-tree-sitter.cjs",
-        ),
-      },
-    }),
-    build({
-      entryPoints: [path.resolve("src/indexer/workerFixtureFetchShim.ts")],
-      bundle: true,
-      outfile: shimPath,
-      format: "cjs",
-      platform: "node",
-      target: "node22",
-    }),
-  ]);
-  const wasmRoot = path.join(buildRoot, "wasm");
-  fs.mkdirSync(wasmRoot);
-  fs.copyFileSync(
-    "node_modules/web-tree-sitter/web-tree-sitter.wasm",
-    path.join(wasmRoot, "web-tree-sitter.wasm"),
-  );
-  for (const file of fs.readdirSync(
-    "node_modules/@vscode/tree-sitter-wasm/wasm",
-  )) {
-    if (file.startsWith("tree-sitter-") && file.endsWith(".wasm")) {
-      fs.copyFileSync(
-        path.join("node_modules/@vscode/tree-sitter-wasm/wasm", file),
-        path.join(wasmRoot, file),
-      );
-    }
-  }
-}, TEST_TIMEOUT_MS);
-
-afterAll(() => {
-  fs.rmSync(buildRoot, { recursive: true, force: true });
-});
-
-function createWorkspace(sharedStoreRoot?: string): WorkspaceFixture {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "indexer-scenario-"));
-  onTestFinished(() =>
-    fs.rmSync(root, {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-      retryDelay: 25,
-    }),
-  );
-  return {
-    root,
-    cachePath: path.join(root, ".cache", "index.json"),
-    retrievalStoreRoot: sharedStoreRoot ?? path.join(root, ".retrieval"),
-  };
-}
-
-function writeSource(
-  root: string,
-  relativePath: string,
-  content: string,
-): string {
-  const file = path.join(root, relativePath);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, content, "utf8");
-  return file;
-}
-
-function sourceContent(value: number): string {
-  return `select ${value} as value, '${"fixture-content-".repeat(4)}' as label;`;
-}
-
-function workerTarget(workspace: WorkspaceFixture) {
-  return {
-    indexName: "fixture",
-    workspaceScopeId: getCodeWorkspaceScopeId(workspace.root),
-    retrievalStoreRoot: workspace.retrievalStoreRoot,
-  };
-}
-
-function startMessage(
-  workspace: WorkspaceFixture,
-  options: {
-    files: string[];
-    bearerToken?: string | null;
-    force?: boolean;
-  },
-): ExtensionToWorkerMessage {
-  return {
-    type: "start",
-    files: options.files,
-    workspaceRoot: workspace.root,
-    ...workerTarget(workspace),
-    embeddingBearerToken:
-      options.bearerToken === null
-        ? undefined
-        : (options.bearerToken ?? "success"),
-    cachePath: workspace.cachePath,
-    force: options.force ?? true,
-    granularity: "standard",
-  };
-}
-
-function incrementalMessage(
-  workspace: WorkspaceFixture,
-  options: {
-    added?: string[];
-    removed?: string[];
-    bearerToken?: string;
-  },
-): ExtensionToWorkerMessage {
-  return {
-    type: "incrementalUpdate",
-    added: options.added ?? [],
-    removed: options.removed ?? [],
-    workspaceRoot: workspace.root,
-    ...workerTarget(workspace),
-    embeddingBearerToken: options.bearerToken ?? "success",
-    cachePath: workspace.cachePath,
-    granularity: "standard",
-  };
-}
-
-async function createFixture(maxOldSpaceSizeMb = 512): Promise<WorkerFixture> {
-  const child = fork(workerPath, [], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      NODE_PATH: path.resolve("node_modules"),
-    },
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
-    execArgv: [
-      `--max-old-space-size=${maxOldSpaceSizeMb}`,
-      "--require",
-      shimPath,
-    ],
-  });
-  onTestFinished(() => stopChild(child));
-  const messages: FixtureMessage[] = [];
-  const errors: string[] = [];
-  child.stderr?.on("data", (chunk: Buffer) => errors.push(chunk.toString()));
-  child.on("message", (message: FixtureMessage) => messages.push(message));
-
-  const waitFor = <T extends FixtureMessage["type"]>(
-    type: T,
-    predicate: (
-      message: Extract<FixtureMessage, { type: T }>,
-    ) => boolean = () => true,
-  ): Promise<Extract<FixtureMessage, { type: T }>> => {
-    const existingIndex = messages.findIndex(
-      (message) =>
-        message.type === type &&
-        predicate(message as Extract<FixtureMessage, { type: T }>),
-    );
-    if (existingIndex >= 0) {
-      return Promise.resolve(
-        messages.splice(existingIndex, 1)[0] as Extract<
-          FixtureMessage,
-          { type: T }
-        >,
-      );
-    }
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(
-          new Error(
-            `Timed out waiting for ${type}; stderr=${errors.join("")}; messages=${JSON.stringify(messages)}`,
-          ),
-        );
-      }, TEST_TIMEOUT_MS);
-      const onMessage = (message: FixtureMessage) => {
-        if (message.type !== type) return;
-        const typed = message as Extract<FixtureMessage, { type: T }>;
-        if (!predicate(typed)) return;
-        cleanup();
-        const queuedIndex = messages.indexOf(message);
-        if (queuedIndex >= 0) messages.splice(queuedIndex, 1);
-        resolve(typed);
-      };
-      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-        cleanup();
-        reject(
-          new Error(
-            `Worker exited before ${type}: code=${code} signal=${signal}; stderr=${errors.join("")}`,
-          ),
-        );
-      };
-      const cleanup = () => {
-        clearTimeout(timeout);
-        child.off("message", onMessage);
-        child.off("exit", onExit);
-      };
-      child.on("message", onMessage);
-      child.on("exit", onExit);
-    });
-  };
-
-  await waitFor("ready");
-  return {
-    child,
-    messages,
-    send(message) {
-      child.send(message);
-    },
-    waitFor,
-    async complete(message) {
-      const completion = waitFor("complete");
-      child.send(message);
-      return (await completion).stats;
-    },
-  };
-}
-
-async function stopChild(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise<void>((resolve) => {
-    const forceKill = setTimeout(() => child.kill("SIGKILL"), 1_000);
-    forceKill.unref();
-    child.once("exit", () => {
-      clearTimeout(forceKill);
-      resolve();
-    });
-    child.kill();
-  });
-}
-
-async function withRepository<T>(
-  root: string,
-  run: (repository: LanceDbRetrievalRepository) => Promise<T>,
-): Promise<T> {
-  const repository = new LanceDbRetrievalRepository({
-    root,
-    embeddingDimensions: 1536,
-  });
-  try {
-    const migration = await repository.migrate(
-      createCodeIndexFingerprint("standard"),
-    );
-    expect(migration.status).not.toBe("rebuild_required");
-    return await run(repository);
-  } finally {
-    await repository.close();
-  }
-}
-
-function requireCache(workspace: WorkspaceFixture) {
-  const loaded = loadIndexCache(workspace.cachePath);
-  expect(loaded.status).toBe("valid");
-  if (loaded.status !== "valid") throw new Error("Expected valid cache");
-  return loaded.cache;
-}
-
-function expectEmptyJournal(workspace: WorkspaceFixture): void {
-  expect(
-    loadFileIndexJournal(getFileIndexJournalPath(workspace.cachePath)),
-  ).toMatchObject({
-    status: "valid",
-    journal: { operations: [] },
-  });
-}
+// Slow scenarios live in workerFixtureRecovery.test.ts and
+// workerFixtureResume.test.ts so Vitest can run them in parallel.
+setUpWorkerFixtureBuild();
 
 describe("indexer worker fixture", () => {
   it(
@@ -459,149 +152,6 @@ describe("indexer worker fixture", () => {
         });
       });
       expectEmptyJournal(workspace);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "recovers an interrupted publication with a large store under a constrained heap",
-    async () => {
-      const setupFixture = await createFixture();
-      const workspace = createWorkspace();
-      const file = writeSource(workspace.root, "recover.sql", sourceContent(7));
-      await setupFixture.complete(
-        startMessage(workspace, { files: [file], force: true }),
-      );
-      await stopChild(setupFixture.child);
-
-      const cache = requireCache(workspace);
-      const structural = loadStructuralCache(
-        getStructuralCachePath(workspace.cachePath),
-      );
-      const cached = cache.files["recover.sql"];
-      const structuralEntry = structural.files["recover.sql"];
-      if (!cached?.generation || !structuralEntry?.sourceId) {
-        throw new Error("Expected current recovery ownership");
-      }
-      const recoverySourceId = structuralEntry.sourceId;
-
-      const unrelatedSourceId = "code:workspace:unrelated:large.ts";
-      const unrelatedGeneration = "generation:unrelated-large";
-      // chunkRow includes the full source content in every chunk's search_text.
-      // A few large rows reproduce the old unbounded hydration pressure without
-      // spending most of this process-fixture test creating thousands of rows.
-      // Sized so full six-table hydration exceeds the 192MiB recovery heap:
-      // 512 chunks x ~527KB search_text is ~270MB logical, several times that
-      // in transient copies, while a filtered source lookup stays tiny.
-      const largeSourceContent = "unrelated large source payload ".repeat(
-        17_000,
-      );
-      const unrelatedChunks = Array.from({ length: 512 }, (_, index) => ({
-        id: `chunk:unrelated-large:${index}`,
-        sourceId: unrelatedSourceId,
-        revisionId: "revision:unrelated-large",
-        generation: unrelatedGeneration,
-        content: `unrelated chunk ${index}`,
-        embedding: null,
-        location: {
-          path: "large.ts",
-          startLine: index + 1,
-          endLine: index + 1,
-        },
-        metadata: {},
-      }));
-      const unrelatedPublication: RetrievalPublicationRequest = {
-        publicationId: "publication:unrelated-large",
-        generation: unrelatedGeneration,
-        source: {
-          id: unrelatedSourceId,
-          namespace: "code",
-          kind: "file",
-          revision: {
-            id: "revision:unrelated-large",
-            contentHash: "hash:unrelated-large",
-            observedAt: "2026-07-27T00:00:00.000Z",
-          },
-          path: "large.ts",
-          content: largeSourceContent,
-          metadata: { scopeType: "workspace", scopeId: "workspace:unrelated" },
-        },
-        chunks: unrelatedChunks,
-        relations: [],
-        expectedChunkIds: unrelatedChunks.map((chunk) => chunk.id),
-        expectedRelationIds: [],
-      };
-      const repository = new LanceDbRetrievalRepository({
-        root: workspace.retrievalStoreRoot,
-        embeddingDimensions: 1536,
-        deferNativeIndexRefresh: true,
-      });
-      try {
-        await repository.migrate(createCodeIndexFingerprint("standard"));
-        await repository.preparePublication(unrelatedPublication);
-        await repository.commitPublication(unrelatedPublication.publicationId);
-      } finally {
-        await repository.close();
-      }
-
-      writeFileIndexJournal(getFileIndexJournalPath(workspace.cachePath), {
-        ...emptyFileIndexJournal(),
-        operations: [
-          {
-            operationId: "publication:already-committed-recovery",
-            file: "recover.sql",
-            kind: "replace",
-            generation: cached.generation,
-            targetHash: cached.hash,
-            oldRecordIds: [],
-            intendedBatches: [{ batch: 0, recordIds: cached.recordIds }],
-          },
-        ],
-      });
-
-      const recoveryFixture = await createFixture(192);
-      const recoveryAdvanced = recoveryFixture.waitFor(
-        "progress",
-        (message) =>
-          message.detail?.startsWith("recovering interrupted deletions") ??
-          false,
-      );
-      const completion = recoveryFixture.waitFor("complete");
-      recoveryFixture.send(
-        startMessage(workspace, { files: [file], force: false }),
-      );
-
-      await expect(recoveryAdvanced).resolves.toMatchObject({
-        phase: "reading",
-        detail: expect.stringContaining("recovering interrupted deletions"),
-      });
-      await expect(completion).resolves.toMatchObject({
-        stats: { errors: [] },
-      });
-      await stopChild(recoveryFixture.child);
-      expectEmptyJournal(workspace);
-
-      const removalFixture = await createFixture(192);
-      const removal = await removalFixture.complete(
-        incrementalMessage(workspace, { removed: [file] }),
-      );
-      expect(removal).toMatchObject({
-        totalFilesInIndex: 0,
-        errors: [],
-      });
-      expect(removal.recordsDeleted).toBeGreaterThanOrEqual(
-        cached.recordIds.length + 1,
-      );
-      await stopChild(removalFixture.child);
-
-      await withRepository(workspace.retrievalStoreRoot, async (reopened) => {
-        expect(await reopened.inspectSource(recoverySourceId)).toBeNull();
-        expect(await reopened.inspectSource(unrelatedSourceId)).toMatchObject({
-          source: { id: unrelatedSourceId },
-          generation: unrelatedGeneration,
-        });
-        expect(await reopened.lexicalReadiness()).toEqual({ status: "ready" });
-      });
     },
     TEST_TIMEOUT_MS,
   );
@@ -965,107 +515,6 @@ describe("indexer worker fixture", () => {
         ).toBeNull();
       });
       expectEmptyJournal(workspace);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "resumes an interrupted initial build from durably committed files",
-    async () => {
-      const firstFixture = await createFixture();
-      const workspace = createWorkspace();
-      // Two publication batches (25 + 5 at FILE_BATCH_SIZE = 25) so the build
-      // can be interrupted after the first batch commits durably.
-      const files = Array.from({ length: 30 }, (_, index) =>
-        writeSource(
-          workspace.root,
-          `src/resume-${index}.sql`,
-          sourceContent(index),
-        ),
-      );
-
-      firstFixture.send(startMessage(workspace, { files }));
-      await firstFixture.waitFor(
-        "progress",
-        (message) =>
-          message.phase === "upserting" &&
-          message.current === 25 &&
-          message.total === files.length,
-      );
-      await stopChild(firstFixture.child);
-
-      const durableFilesBeforeResume = Object.keys(
-        requireCache(workspace).files,
-      ).length;
-      expect(durableFilesBeforeResume).toBeGreaterThanOrEqual(25);
-      expect(durableFilesBeforeResume).toBeLessThan(files.length);
-      const remainingFiles = files.length - durableFilesBeforeResume;
-      const resumedFixture = await createFixture();
-      const completion = resumedFixture.waitFor("complete");
-      resumedFixture.send(startMessage(workspace, { files, force: false }));
-      const resumedProgress = await resumedFixture.waitFor(
-        "progress",
-        (message) =>
-          message.phase === "upserting" &&
-          message.detail?.includes("already current") === true,
-      );
-      const stats = (await completion).stats;
-
-      expect(resumedProgress).toMatchObject({
-        current: durableFilesBeforeResume,
-        total: files.length,
-        detail: `${durableFilesBeforeResume} already current; ${remainingFiles} remaining in ${Math.ceil(remainingFiles / 25)} batches`,
-      });
-      expect(stats).toMatchObject({
-        filesIndexed: remainingFiles,
-        totalFilesInIndex: files.length,
-        errors: [],
-      });
-      expect(stats.metrics?.operations["retrieval.deleteIndex"]).toBe(0);
-      expect(Object.keys(requireCache(workspace).files)).toHaveLength(
-        files.length,
-      );
-      expectEmptyJournal(workspace);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "bounds read-ahead and coalesces cache checkpoints across file batches",
-    async () => {
-      const fixture = await createFixture();
-      const workspace = createWorkspace();
-      const files = Array.from({ length: 51 }, (_, index) =>
-        writeSource(
-          workspace.root,
-          `src/file-${index}.sql`,
-          sourceContent(index),
-        ),
-      );
-
-      const stats = await fixture.complete(startMessage(workspace, { files }));
-
-      expect(stats).toMatchObject({
-        filesIndexed: 51,
-        totalFilesInIndex: 51,
-        errors: [],
-      });
-      // 51 files at FILE_BATCH_SIZE = 25 → 3 publication batches; caches are
-      // checkpointed per batch (pending + current vector writes, one
-      // structural write) plus one metadata checkpoint.
-      const batchCount = Math.ceil(files.length / 25);
-      expect(stats.metrics?.operations["retrieval.deleteIndex"]).toBe(1);
-      expect(stats.metrics?.operations["retrieval.upsertRecords"]).toBe(
-        batchCount,
-      );
-      expect(stats.metrics?.operations["cache.writeRetrieval"]).toBe(
-        2 * batchCount + 1,
-      );
-      expect(stats.metrics?.operations["cache.writeStructural"]).toBe(
-        batchCount + 1,
-      );
-      expect(stats.metrics?.maxActiveReads).toBeLessThanOrEqual(10);
-      expect(stats.metrics?.maxRetainedContentBytes).toBeGreaterThan(0);
     },
     TEST_TIMEOUT_MS,
   );

@@ -7,7 +7,7 @@ import {
 } from "./codeRetrievalIdentity.js";
 
 import { canonicalizePath } from "../util/canonicalPath.js";
-import { connect } from "@lancedb/lancedb";
+import { connect } from "../storage/retrieval/lanceDbRuntime.js";
 import { getCodeIndexWriterLeasePath } from "./codeIndexWriterLease.js";
 import { withRetrievalStoreLock } from "../storage/retrieval/retrievalStoreLock.js";
 

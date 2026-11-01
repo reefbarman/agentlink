@@ -465,6 +465,12 @@ export class AgentSession {
     agentPluginCatalogProvider?: AgentPluginCatalogProvider;
     /** Restored sessions pass the persisted value; new sessions derive it. */
     initialArchitectReviewPending?: boolean;
+    /**
+     * Initial prompt-facing Approve for Me flag. Passing the known value lets
+     * the first prompt build match it, so the manager's later sync is a no-op
+     * instead of a second full prompt rebuild.
+     */
+    approveForMe?: boolean;
   }): Promise<AgentSession> {
     if (isProjectlessSessionScope(opts.projectScope)) {
       if (opts.mode !== "ask" || opts.background || opts.isBackground) {
@@ -510,6 +516,7 @@ export class AgentSession {
       disabledSkillIds: opts.config.disabledSkillIds,
       projectScope: opts.projectScope,
       agentPluginCatalogProvider: opts.agentPluginCatalogProvider,
+      approveForMe: opts.approveForMe === true,
       initialArchitectReviewPending,
       composeEnabled: opts.config.composeEnabled === true,
       modeInstructionPlacement,
@@ -539,6 +546,7 @@ export class AgentSession {
       initialArchitectReviewPending,
     });
     session.lightweightPrompt = opts.lightweight === true;
+    session.approveForMe = opts.approveForMe === true;
     session.setAdvertisedSkills(
       artifacts.skills,
       artifacts.skillDiagnostics,

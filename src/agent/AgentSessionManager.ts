@@ -1511,6 +1511,11 @@ export class AgentSessionManager {
         projectScope: resolution.scope,
         devMode: this.devMode,
         isBackground: background,
+        // Build the first prompt with the restored policy so restoring an
+        // Approve for Me chat does not rebuild its prompt a second time.
+        approveForMe:
+          restoredApprovalMode(args.metadata).commandApprovalPolicy ===
+          "approve-for-me",
       });
     }
     return AgentSession.createTranscriptOnly({

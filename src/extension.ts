@@ -83,6 +83,7 @@ import {
 import { beginSharedMemoryMigration } from "./storage/retrieval/sharedMemoryMigrationState.js";
 import { migrateSharedMemoryStore } from "./storage/retrieval/sharedMemoryStoreMigration.js";
 import { cleanupLegacyCodeRetrievalStore } from "./storage/retrieval/legacyCodeRetrievalCleanup.js";
+import { prewarmLanceDbNativeModule } from "./storage/retrieval/lanceDbRuntime.js";
 import { cleanupSupersededCodeIndexGenerations } from "./storage/retrieval/supersededCodeIndexGenerationCleanup.js";
 import { CODE_INDEX_STORAGE_GENERATION } from "./indexer/codeRetrievalIdentity.js";
 import { SkillCatalogRetrievalService } from "./core/catalog/SkillCatalogRetrievalService.js";
@@ -546,6 +547,16 @@ export async function activate(
 
   outputChannel = vscode.window.createOutputChannel("AgentLink");
   context.subscriptions.push(outputChannel);
+
+  // macOS checks a freshly installed native addon on first load, which holds
+  // the extension host for seconds with LanceDB's ~250 MB binary. Take that
+  // hit in a child process so the in-process load later is fast.
+  if (process.platform === "darwin") {
+    void prewarmLanceDbNativeModule({
+      moduleDirectory: path.join(context.extensionPath, "dist"),
+      log,
+    });
+  }
 
   const configureProviderRequestConcurrency = () => {
     const configured = normalizeMaxConcurrentModelRequests(

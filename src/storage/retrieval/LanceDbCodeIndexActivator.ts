@@ -1,4 +1,4 @@
-import { connect, makeArrowTable } from "@lancedb/lancedb";
+import { connect, makeArrowTable } from "./lanceDbRuntime.js";
 import type { Connection, Table } from "@lancedb/lancedb";
 import type { Schema } from "apache-arrow";
 

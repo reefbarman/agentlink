@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 
 import type { Connection, Table } from "@lancedb/lancedb";
-import { Index, connect, makeArrowTable } from "@lancedb/lancedb";
+import { Index, connect, makeArrowTable } from "./lanceDbRuntime.js";
 import type {
   MemoryAuditEvent,
   MemoryHealthSnapshot,

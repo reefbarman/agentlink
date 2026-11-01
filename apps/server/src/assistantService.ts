@@ -260,6 +260,28 @@ export const SESSION_TURN_LIMITS = {
   maxToolResultBytes: 0,
 } as const;
 
+/**
+ * Test-only: shortens the turn lease of the service's own chats, so process
+ * tests can crash the server mid-turn and see recovery without waiting out
+ * the default 30-second lease. Not a supported setting: deployments never set
+ * it, and a lease this short would let a slow but live process lose its turn.
+ */
+export const TEST_TURN_LEASE_ENV = "AGENTLINK_SERVER_TEST_TURN_LEASE_MS";
+
+export function testTurnLease(
+  env: NodeJS.ProcessEnv,
+): { ttlMs: number; renewIntervalMs: number } | undefined {
+  const raw = env[TEST_TURN_LEASE_ENV];
+  if (raw === undefined || raw === "") return undefined;
+  const ttlMs = Number(raw);
+  if (!Number.isSafeInteger(ttlMs) || ttlMs < 300) {
+    throw new Error(
+      `${TEST_TURN_LEASE_ENV} must be a whole number of milliseconds, at least 300`,
+    );
+  }
+  return { ttlMs, renewIntervalMs: Math.floor(ttlMs / 3) };
+}
+
 /** Where the access store (owner, devices, sessions) lives under the data root. */
 export function serverAccessDataRoot(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "server");
@@ -875,6 +897,7 @@ export async function startAssistantService(
 ): Promise<AssistantService> {
   const { config, log } = options;
   const env = options.env ?? process.env;
+  const turnLease = testTurnLease(env);
   const preflight = await preflightAssistantService(config, env);
   await fs.mkdir(config.dataRoot, { recursive: true, mode: 0o700 });
   // Before anything opens a store: migrate older data, refuse newer.
@@ -1453,6 +1476,7 @@ export async function startAssistantService(
         sharedPromptGuidance:
           kind === "project" ? { codingAssistant: false } : true,
         turnLimits: SESSION_TURN_LIMITS,
+        ...(turnLease ? { turnLease } : {}),
         // The todo list, for Auto Continue, and VS Code's set_task_status
         // (a final card that ends Auto Continue); no ask_user (approval
         // cards and messages are how a chat reaches the owner).

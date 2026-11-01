@@ -68,6 +68,7 @@ const mocks = vi.hoisted(() => {
       thinkingBudget: opts.config.thinkingBudget,
       title: "New Chat",
       background: Boolean(opts.background),
+      approveForMe: opts.approveForMe === true,
       initialArchitectReviewPending:
         opts.initialArchitectReviewPending ??
         (opts.mode === "architect" &&
@@ -105,6 +106,7 @@ const mocks = vi.hoisted(() => {
       getSkillDiagnostics: vi.fn(() => skillDiagnostics),
       getSkillCatalogProjection: vi.fn(() => skillCatalogProjection),
       restoreFromStore: vi.fn(function (this: any, data: any) {
+        this.id = data.id ?? this.id;
         this.reasoningEffort = data.reasoningEffort ?? this.reasoningEffort;
         this.desiredReasoningEffort =
           data.desiredReasoningEffort ??
@@ -2247,6 +2249,11 @@ describe("AgentSessionManager host injection", () => {
     expect(legacySession?.contextBreakdown).toEqual({
       prompt: { sections: [], totalChars: 7, estimatedTokens: 2 },
     });
+    // The first prompt build already uses the restored Approve for Me policy,
+    // so restoring does not rebuild the whole prompt a second time.
+    await flushPromises();
+    expect(legacySession?.approveForMe).toBe(true);
+    expect(legacySession?.rebuildSystemPrompt).not.toHaveBeenCalled();
     expect(mgr.getSessionApprovalMode("legacy-session")).toEqual({
       commandApprovalPolicy: "approve-for-me",
       approvalPolicy: "on-request",
