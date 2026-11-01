@@ -12,6 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { fileURLToPath } from "node:url";
+import { readJsonLines } from "./report-tool-usage-telemetry.mjs";
 
 const DEFAULT_INPUT = path.join(
   os.homedir(),
@@ -80,7 +81,8 @@ export function readEvents(inputPath, filters = {}) {
     throw new Error(`No telemetry file at ${inputPath}`);
   }
   const events = [];
-  for (const line of fs.readFileSync(inputPath, "utf-8").split("\n")) {
+  // Stream lines: the log can exceed V8's maximum string length.
+  for (const line of readJsonLines(inputPath)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {

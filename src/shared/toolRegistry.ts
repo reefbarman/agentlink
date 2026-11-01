@@ -123,7 +123,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   write_file: {
     label: "Create/overwrite with diff review",
     description:
-      "Create a new file or overwrite an existing file, creating missing parent directories if the write is approved. Opens a diff view in VS Code for the user to review, optionally edit, and accept or reject the changes. After saving, AgentLink reads and verifies the disk content: accepted results include exact or transformed durability evidence and a final SHA-256 hash, while reverted, divergent, missing, unreadable, invalid transformed structured content, or exact-preservation failures are canonical errors. Set save_without_formatting=true to require exact preservation without ordinary save participants; known Unity serialization files use this path automatically.",
+      "Create or overwrite a file (creating missing parent directories) through a VS Code diff the user can review, edit, accept or reject. After saving, AgentLink verifies the disk content: accepted results include exact or transformed durability evidence and a final SHA-256 hash; reverted, divergent, missing, unreadable, invalid structured, or exact-preservation failures are canonical errors. Set save_without_formatting=true to require exact preservation without save participants; known Unity serialization files use this automatically.",
   },
   generate_image: {
     label: "Generate or edit image",

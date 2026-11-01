@@ -781,6 +781,12 @@ export const writeFileSchema = {
     .describe(
       "Save the approved content without format-on-save or other ordinary save participants, then verify exact disk preservation.",
     ),
+  expected_content_hash: z
+    .string()
+    .optional()
+    .describe(
+      "SHA-256 of the content this rewrite replaces (read_file working_set.content_hash); refused if the file changed.",
+    ),
 };
 
 export const generateImageSchema = {

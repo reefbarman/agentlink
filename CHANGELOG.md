@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `write_file` accepts an optional `expected_content_hash`, which is the SHA-256 of the content the rewrite was based on (read_file's context-view `working_set.content_hash` or a previous edit's `post_edit_content_hash`). It is checked inside the write lock before review. If another agent or the user changed the file in the meantime, nothing is written and the result returns `content_hash_mismatch` with both hashes, so the change can be merged instead of silently overwritten.
+- A background review that stops early (blocked, interrupted or cancelled) no longer opens with "Review found no issues." when it returned no findings. Its partial result now says the review did not complete and is not a clean result, or how many issues were found before it stopped.
+- When a `compose` result is too large, `recovery.children` now lists child calls in the order the script made them, with a zero-based `call_index` and a short input summary. Previously a fast failure in a `toolAllSettled` batch was listed first and looked like the first call had failed.
+- `npm run telemetry:context` now streams the context-usage log instead of reading it as one string, so it no longer fails with "Cannot create a string longer than 0x1fffffe8 characters" once the log passes about 512 MB.
+
 ## 1.68.27
 
 - set_task_status now rejects continuation fields with waiting_for_user, failed calls no longer end the turn or show as final-status cards, legacy waiting cards hide next-step actions, and prompts steer the agent to finish safe work before waiting.

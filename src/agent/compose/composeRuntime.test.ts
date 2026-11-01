@@ -867,6 +867,49 @@ describe("compose runtime", () => {
     );
   });
 
+  it("reports recovery children in call order when a fast failure finishes first", async () => {
+    const result = await run(
+      `const r = toolAllSettled([
+         { name: "read", input: { path: "a" } },
+         { name: "read", input: { path: "b" } },
+         { name: "read", input: { path: "missing" } },
+         { name: "read", input: { path: "d" } },
+       ]);
+       return { r, pad: "x".repeat(${COMPOSE_MAX_FINAL_BYTES}) };`,
+      fakeScope(async (_name, input) => {
+        if (input.path === "missing") {
+          return {
+            data: { error: "File not found" },
+            content: [{ type: "text", text: "File not found" }],
+            isError: true,
+            error: { kind: "not_found", message: "File not found" },
+          };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return success({ path: input.path });
+      }),
+    );
+
+    const children = (
+      result.data as {
+        recovery: {
+          children: Array<{
+            call_index: number;
+            status: string;
+            input?: string;
+          }>;
+        };
+      }
+    ).recovery.children;
+    expect(children.map((c) => [c.call_index, c.status])).toEqual([
+      [0, "completed"],
+      [1, "completed"],
+      [2, "error"],
+      [3, "completed"],
+    ]);
+    expect(children[2].input).toContain("missing");
+  });
+
   it("keeps oversized recovery previews on Unicode code-point boundaries", async () => {
     const result = await run(
       `return "x".repeat(8188) + "😀" + "y".repeat(${COMPOSE_MAX_FINAL_BYTES});`,

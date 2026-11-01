@@ -338,6 +338,107 @@ describe("handleWriteFile", () => {
     );
   });
 
+  describe("expected_content_hash", () => {
+    const sha = (text: string) =>
+      createHash("sha256").update(text).digest("hex");
+
+    // Mimics a provider: run prepareContent with the locked disk content and
+    // write only when it continues.
+    function lockingProvider(lockedContent: string) {
+      const written: string[] = [];
+      const editReviewProvider: EditReviewProvider = {
+        reviewAndApply: vi.fn(async (params) => {
+          const prepared = params.prepareContent
+            ? await params.prepareContent(lockedContent)
+            : { status: "continue" as const, content: params.content };
+          if (prepared.status === "abort") return prepared.result;
+          written.push(prepared.content);
+          return {
+            status: "accepted" as const,
+            path: params.relativePath,
+            operation: "auto-approved" as const,
+            ...durable(prepared.content),
+          };
+        }),
+      };
+      return { editReviewProvider, written };
+    }
+
+    it("writes when the locked content still matches the expected hash", async () => {
+      const { editReviewProvider, written } = lockingProvider("base\n");
+      const { handleWriteFile } = await import("./writeFile.js");
+      const result = await handleWriteFile(
+        {
+          path: "notes.md",
+          content: "rewritten\n",
+          expected_content_hash: sha("base\n").toUpperCase(),
+        },
+        {} as never,
+        {} as never,
+        "session-1",
+        undefined,
+        "code",
+        {
+          editReviewProvider,
+          writeApprovalPolicyProvider: createApprovalPolicy(true),
+        },
+      );
+      expect(result.isError).toBeFalsy();
+      expect(written).toEqual(["rewritten\n"]);
+    });
+
+    it("refuses a stale rewrite and reports both hashes without writing", async () => {
+      const { editReviewProvider, written } = lockingProvider(
+        "base\nconcurrent edit\n",
+      );
+      const { handleWriteFile } = await import("./writeFile.js");
+      const result = await handleWriteFile(
+        {
+          path: "notes.md",
+          content: "rewritten\n",
+          expected_content_hash: sha("base\n"),
+        },
+        {} as never,
+        {} as never,
+        "session-1",
+        undefined,
+        "code",
+        {
+          editReviewProvider,
+          writeApprovalPolicyProvider: createApprovalPolicy(true),
+        },
+      );
+      expect(result.isError).toBe(true);
+      expect(written).toEqual([]);
+      expect(toolJson(result)).toMatchObject({
+        reason: "content_hash_mismatch",
+        expected_content_hash: sha("base\n"),
+        current_content_hash: sha("base\nconcurrent edit\n"),
+      });
+    });
+
+    it("leaves prepareContent unset when no hash is supplied", async () => {
+      const { editReviewProvider } = lockingProvider("base\n");
+      const { handleWriteFile } = await import("./writeFile.js");
+      await handleWriteFile(
+        { path: "notes.md", content: "rewritten\n" },
+        {} as never,
+        {} as never,
+        "session-1",
+        undefined,
+        "code",
+        {
+          editReviewProvider,
+          writeApprovalPolicyProvider: createApprovalPolicy(true),
+        },
+      );
+      expect(
+        vi.mocked(editReviewProvider.reviewAndApply).mock.calls[0][0]
+          .prepareContent,
+      ).toBeUndefined();
+    });
+  });
+
   it("forwards save_without_formatting to the edit-review boundary", async () => {
     const editReviewProvider: EditReviewProvider = {
       reviewAndApply: vi.fn(async () => ({

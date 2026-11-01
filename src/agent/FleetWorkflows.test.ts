@@ -278,6 +278,30 @@ describe("fleet workflows", () => {
     );
   });
 
+  it("never renders an incomplete review as a clean result", () => {
+    const empty = {
+      type: "review_findings" as const,
+      findings: [],
+      reviewedScope: "Not reviewed: stopped before reading files.",
+    };
+    expect(formatFleetResultEnvelope(empty)).toContain(
+      "**Review found no issues.**",
+    );
+    const incomplete = formatFleetResultEnvelope(empty, { incomplete: true });
+    expect(incomplete).not.toContain("no issues");
+    expect(incomplete).toContain(
+      "**Review did not complete; this is not a clean result.**",
+    );
+    expect(
+      formatFleetResultEnvelope(
+        { ...empty, findings: [{ severity: "low", message: "nit" }] },
+        { incomplete: true },
+      ),
+    ).toContain(
+      "**Review did not complete; 1 issue found before it stopped.**",
+    );
+  });
+
   it("rejects malformed envelopes and artifact paths outside the workspace", () => {
     const raw = JSON.stringify({
       type: "verification",

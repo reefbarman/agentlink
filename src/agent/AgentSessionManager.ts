@@ -13965,8 +13965,10 @@ ${instruction}`
       };
     }
 
+    // Reaching here means the marker did not authorize a completed result, so
+    // never render its review findings as a clean verdict.
     const markerPartialResult = marker?.result
-      ? formatFleetResultEnvelope(marker.result)
+      ? formatFleetResultEnvelope(marker.result, { incomplete: true })
       : marker?.summary;
     const emptyTextMarker =
       marker?.result?.type === "text" && !marker.result.text.trim();
@@ -14568,7 +14570,11 @@ ${instruction}`
     const marker = session?.getLastFinalMarker?.();
     const resultText =
       this.bgFinalResults.get(sessionId) ??
-      (marker?.result ? formatFleetResultEnvelope(marker.result) : undefined) ??
+      (marker?.result
+        ? formatFleetResultEnvelope(marker.result, {
+            incomplete: marker.status !== "completed",
+          })
+        : undefined) ??
       session?.fleetMetadata?.finalResult ??
       session?.getLastAssistantText();
     return { resultText, summary: marker?.summary };

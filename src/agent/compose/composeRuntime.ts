@@ -457,6 +457,14 @@ function summarizeInput(input: Record<string, unknown>): string {
   }
 }
 
+const COMPOSE_MAX_RECOVERY_INPUT_CHARS = 160;
+
+/** Child trace ids are `compose-child-<n>`, assigned in call order. */
+function childCallSequence(id: string): number {
+  const n = Number(id.slice(id.lastIndexOf("-") + 1));
+  return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+}
+
 function appendTrace(trace: ComposeTrace, child: ComposeTraceChild): void {
   trace.totalChildren += 1;
   trace.completedChildren += 1;
@@ -657,9 +665,23 @@ function createOversizedFinalResult(
     `Compose returned ${finalBytes} bytes; limit is ${COMPOSE_MAX_FINAL_BYTES} bytes. Reduce or aggregate inside the script.`,
     "final_result_too_large",
   );
-  const children = trace.children
+  // The trace records children in completion order; concurrent batches finish
+  // out of order, so report them in call order with their input to keep each
+  // status attached to the call the script actually made.
+  const children = [...trace.children]
+    .sort((a, b) => childCallSequence(a.id) - childCallSequence(b.id))
     .slice(0, COMPOSE_MAX_RECOVERY_CHILDREN)
-    .map(({ name, status }) => ({ name, status }));
+    .map(({ id, name, status, inputSummary }) => ({
+      // Zero-based position among the script's child calls.
+      call_index: childCallSequence(id) - 1,
+      name,
+      status,
+      ...(inputSummary
+        ? {
+            input: truncate(inputSummary, COMPOSE_MAX_RECOVERY_INPUT_CHARS),
+          }
+        : {}),
+    }));
   const preview = truncateUtf8(
     serializedFinal,
     COMPOSE_MAX_RECOVERY_PREVIEW_BYTES,

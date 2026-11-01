@@ -529,8 +529,19 @@ export function scoreFleetCandidate(result: FleetResultEnvelope): number {
   return Math.min(25, result.text.trim().length / 100);
 }
 
+export interface FleetResultFormatOptions {
+  /**
+   * The agent stopped before completing (blocked, interrupted, cancelled).
+   * Empty review findings then mean "not finished", never "no issues".
+   */
+  incomplete?: boolean;
+}
+
 /** Convert a validated background result into readable coordinator/UI text. */
-export function formatFleetResultEnvelope(result: FleetResultEnvelope): string {
+export function formatFleetResultEnvelope(
+  result: FleetResultEnvelope,
+  options: FleetResultFormatOptions = {},
+): string {
   if (result.type === "text") return result.text;
   if (result.type === "patch") {
     const lines = [result.summary];
@@ -568,6 +579,12 @@ export function formatFleetResultEnvelope(result: FleetResultEnvelope): string {
   const lines: string[] = [];
   if (result.emptyDiff) {
     lines.push("**Review could not resolve a change set.**");
+  } else if (options.incomplete) {
+    lines.push(
+      result.findings.length === 0
+        ? "**Review did not complete; this is not a clean result.**"
+        : `**Review did not complete; ${result.findings.length} issue${result.findings.length === 1 ? "" : "s"} found before it stopped.**`,
+    );
   } else if (result.findings.length === 0) {
     lines.push("**Review found no issues.**");
   } else {

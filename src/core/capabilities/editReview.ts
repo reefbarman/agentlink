@@ -147,6 +147,9 @@ export interface EditReviewResult {
   decision?: EditReviewDecision;
   writeApprovalResponse?: unknown;
   authorization?: WriteAuthorizationDecision;
+  /** Compare-and-swap evidence when a caller-supplied baseline hash is stale. */
+  expected_content_hash?: string;
+  current_content_hash?: string;
 }
 
 export interface EditReviewProvider {

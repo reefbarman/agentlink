@@ -897,7 +897,12 @@
     },
     {
       "name": "write_file",
-      "parameters": ["content", "path", "save_without_formatting"],
+      "parameters": [
+        "content",
+        "expected_content_hash",
+        "path",
+        "save_without_formatting"
+      ],
       "cluster": "edit",
       "sideEffect": "write",
       "devOnly": false,
@@ -905,5 +910,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "913d91284b3b618d52681e10e90758c9995355fe0e54e3e50539f1c568c6ee09"
+  "revision": "55570882ea7820825427d9b26165e26440d933898526878c5b9966fac1bbfdd9"
 }

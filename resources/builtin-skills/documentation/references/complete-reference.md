@@ -1107,10 +1107,12 @@ Get VS Code diagnostics (errors, warnings, etc.) for a file or the entire worksp
 
 Create or overwrite a file, creating missing parent directories if the write is approved. Opens a **diff view** in VS Code for the user to review, optionally edit, and accept or reject. After saving, AgentLink reads the file from disk and classifies the approved edit as durably exact, durably transformed, or failed. Known Unity serialization files use VS Code's Save without Formatting path so formatters and other save participants cannot rewrite their serialization.
 
-| Parameter | Type   | Description           |
-| --------- | ------ | --------------------- |
-| `path`    | string | File path             |
-| `content` | string | Complete file content |
+| Parameter                 | Type    | Description                                                                                                                             |
+| ------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`                    | string  | File path                                                                                                                               |
+| `content`                 | string  | Complete file content                                                                                                                   |
+| `save_without_formatting` | boolean | Optional. Save without format-on-save or other save participants, then verify exact preservation                                        |
+| `expected_content_hash`   | string  | Optional. SHA-256 of the content the rewrite replaces. A stale hash returns `content_hash_mismatch` with both hashes and writes nothing |
 
 Response fields may include `user_edits` (proposed content → reviewer-edited content) and `format_on_save_edits` (reviewer-edited/proposed content → final saved content). Every accepted result includes `durability.status: "durable"`, `durability.outcome` (`exact` or `transformed`), and `post_edit_content_hash` (SHA-256 of final disk content). If a complete transformation patch is too large, `format_on_save_edits_omitted: "size_cap"` and `durability.requires_reread: true` tell the agent to re-read before composing another edit. Reverted edits, editor/disk divergence, unreadable or missing post-save files, and transformations of exact-preservation formats return canonical errors with failed durability evidence. AgentLink leaves the observed editor/disk state inspectable instead of automatically restoring or overwriting it.
 

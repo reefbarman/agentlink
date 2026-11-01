@@ -7179,6 +7179,36 @@ describe("AgentSessionManager background agents", () => {
     },
   );
 
+  it("does not label a blocked review with empty findings as clean", () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const resolved = (mgr as any).resolveBackgroundResult(
+      {
+        id: "bg-blocked-review",
+        status: "idle",
+        getLastFinalMarker: () => ({
+          status: "blocked",
+          summary: "Stopped before reading files.",
+          result: {
+            type: "review_findings",
+            findings: [],
+            reviewedScope: "Not reviewed.",
+          },
+          source: "tool",
+        }),
+        getLastAssistantText: () => undefined,
+        getMessages: () => [],
+        fleetMetadata: {
+          taskClass: "review_code",
+          delegation: { expectedResult: "review_findings" },
+        },
+      },
+      "fallback",
+    );
+    expect(resolved.resultState).toBe("interrupted");
+    expect(resolved.partialResult).toContain("**Review did not complete");
+    expect(resolved.partialResult).not.toContain("Review found no issues");
+  });
+
   it("appends a completed-tool evidence digest to hard budget-exhausted native results", () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     const session = {

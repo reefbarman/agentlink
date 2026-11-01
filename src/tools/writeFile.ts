@@ -29,6 +29,7 @@ import {
   DEFAULT_DIAGNOSTIC_DELAY_MS,
   evaluateWriteAuthorization,
 } from "../core/capabilities/editReview.js";
+import { hashEditContent } from "../core/editDurability.js";
 
 function getWriteRiskWarnings(
   relPath: string,
@@ -58,7 +59,12 @@ export interface WriteFileProviders {
 }
 
 export async function handleWriteFile(
-  params: { path: string; content: string; save_without_formatting?: boolean },
+  params: {
+    path: string;
+    content: string;
+    save_without_formatting?: boolean;
+    expected_content_hash?: string;
+  },
   _approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
@@ -134,6 +140,7 @@ export async function handleWriteFile(
       },
     );
     const canAutoApprove = authorization.allowed;
+    const expectedHash = params.expected_content_hash?.toLowerCase();
     const approvalPromptEvent = !canAutoApprove
       ? {
           authorization,
@@ -153,6 +160,33 @@ export async function handleWriteFile(
       outsideWorkspace: !inWorkspace,
       diagnosticDelay: providers.diagnosticDelay ?? DEFAULT_DIAGNOSTIC_DELAY_MS,
       saveWithoutFormatting: params.save_without_formatting,
+      ...(expectedHash
+        ? {
+            // Compare-and-swap: runs inside the provider's write lock, so a
+            // concurrent edit between the caller's read and this write is
+            // refused rather than silently overwritten.
+            prepareContent: (currentContent: string) => {
+              const currentHash = hashEditContent(currentContent);
+              return currentHash === expectedHash
+                ? { status: "continue" as const, content: params.content }
+                : {
+                    status: "abort" as const,
+                    result: {
+                      status: "error" as const,
+                      path: relPath,
+                      reason: "content_hash_mismatch",
+                      error:
+                        "File changed since the content you based this rewrite on. Nothing was written.",
+                      expected_content_hash: expectedHash,
+                      current_content_hash: currentHash,
+                      next_steps: [
+                        "Re-read the file, merge the intervening change into your content, and retry with the new hash.",
+                      ],
+                    },
+                  };
+            },
+          }
+        : {}),
       approvalPanel,
       onApprovalRequest,
       prepareOneShotAuthorization: providers.prepareOneShotAuthorization,
