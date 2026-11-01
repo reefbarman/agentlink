@@ -2894,7 +2894,7 @@ export async function activate(
           });
       }
 
-      browserGatewayHelperLeaseClient?.dispose();
+      await browserGatewayHelperLeaseClient?.stop();
       browserGatewayHelperLeaseClient = new BrowserGatewayHelperLeaseClient({
         helperUrl: result.discovery.url,
         clientId: helperClientId,

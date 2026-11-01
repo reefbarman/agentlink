@@ -254,14 +254,14 @@ describe("browser gateway helper generation fault injection", () => {
       firstClient as unknown as { renewLease(): Promise<void> }
     ).renewLease();
     await leaseEntered.promise;
-    await firstClient.stop();
+    const stop = firstClient.stop();
 
     const secondClient = createLeaseClient(fixture, "owner-generation-2");
     await secondClient.start();
     await expectCurrentOwner(fixture, "owner-generation-2");
 
     releaseLease.resolve();
-    await staleRenewal;
+    await Promise.all([staleRenewal, stop]);
 
     await expectCurrentOwner(fixture, "owner-generation-2");
   });
@@ -282,9 +282,9 @@ describe("browser gateway helper generation fault injection", () => {
 
     const start = client.start();
     await leaseEntered.promise;
-    await client.stop();
+    const stop = client.stop();
     releaseLease.resolve();
-    await start;
+    await Promise.all([start, stop]);
 
     expect(
       (client as unknown as { timer: NodeJS.Timeout | undefined }).timer,

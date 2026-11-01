@@ -76,7 +76,7 @@ export class BrowserGatewayHelperLeaseClient {
     // A fetch abort cannot undo a heartbeat already being handled by the
     // helper. Drain the bounded renewal before releasing, otherwise that late
     // heartbeat can reconnect the owner after the release has completed.
-    await this.renewal?.promise;
+    if (this.renewal) await this.renewal.promise;
     for (const controller of this.renewalControllers) {
       controller.abort();
     }
@@ -241,6 +241,7 @@ export class BrowserGatewayHelperLeaseClient {
     signal: AbortSignal,
     deadline: Promise<never>,
   ): Promise<boolean> {
+    const lifecycleGeneration = this.lifecycleGeneration;
     const response = await Promise.race([
       fetch(`${this.options.helperUrl}/internal/core-owners/heartbeat`, {
         method: "POST",
@@ -271,6 +272,7 @@ export class BrowserGatewayHelperLeaseClient {
         productUpdatesSupported?: boolean;
         productUpdateRequest?: { requestId?: unknown; expiresAt?: unknown };
       };
+      if (!this.isActiveGeneration(lifecycleGeneration)) return true;
       const request = body.productUpdateRequest;
       const requestId = request?.requestId;
       const expiresAt = request?.expiresAt;
@@ -375,6 +377,7 @@ export class BrowserGatewayHelperLeaseClient {
     signal: AbortSignal,
     deadline: Promise<never>,
   ): Promise<void> {
+    const lifecycleGeneration = this.lifecycleGeneration;
     const response = await Promise.race([
       fetch(`${this.options.helperUrl}/internal/core-owners/register`, {
         method: "POST",
@@ -401,6 +404,7 @@ export class BrowserGatewayHelperLeaseClient {
         response.json(),
         deadline,
       ])) as BrowserGatewayCoreOwnerRegistrationResponse;
+      if (!this.isActiveGeneration(lifecycleGeneration)) return;
       if (
         body.productUpdatesSupported === true &&
         body.productUpdateRequest &&
