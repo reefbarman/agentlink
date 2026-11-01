@@ -6307,6 +6307,71 @@ describe("ChatViewProvider session state sync", () => {
     }
   });
 
+  it("continues an already-completed idle turn when Auto Continue is turned on", async () => {
+    vi.useFakeTimers();
+    try {
+      const completed = {
+        status: "completed",
+        source: "tool",
+        summary: "Phase one done.",
+      };
+      const session = {
+        ...makeBrowserQueueSession("session-idle", "idle"),
+        getAllMessages: () => [
+          { role: "user", content: "do phase one" },
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "t1", name: "set_task_status" }],
+            uiHint: { finalMarker: completed },
+          },
+          {
+            role: "user",
+            content: [
+              { type: "tool_result", tool_use_id: "t1", content: "ok" },
+            ],
+          },
+        ],
+      };
+      const { provider, sendMessage } = await makeBrowserQueueProvider(
+        [session],
+        { current: session },
+      );
+      const { getLatestTurnFinalMarker } =
+        await import("./ChatViewProvider.js");
+      // A later user message makes the marker stale.
+      expect(
+        getLatestTurnFinalMarker([
+          ...(session.getAllMessages() as never[]),
+          { role: "user", content: "something else" } as never,
+        ]),
+      ).toBeNull();
+
+      await (
+        provider as unknown as {
+          handleWebviewMessage(message: unknown): Promise<void>;
+        }
+      ).handleWebviewMessage({
+        command: "agentSetAutoContinue",
+        sessionId: session.id,
+        enabled: true,
+      });
+      await vi.runAllTimersAsync();
+
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith(
+        session.id,
+        expect.stringContaining("Continue working from where you left off"),
+        "code",
+        expect.objectContaining({ origin: "vscode" }),
+      );
+      expect(
+        provider.getBrowserDetachedSessionState(session.id).autoContinue,
+      ).toEqual({ enabled: true, status: "Auto Continue sent 1/10." });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps browser-queued messages when VS Code switches to another tab", async () => {
     const first = makeBrowserQueueSession("session-first", "streaming");
     const second = makeBrowserQueueSession("session-second", "idle");

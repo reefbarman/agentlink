@@ -44,6 +44,14 @@ export interface SessionAutoContinueControllerOptions {
   publish(update: SessionAutoContinueUpdate): void;
   /** Messages queued by a user win over the continue prompt. */
   hasQueuedUserMessages(sessionId: string): boolean;
+  /**
+   * The session's current final marker when it is idle and nothing has been
+   * sent since that marker, or null. Lets enabling Auto Continue after a turn
+   * already finished continue it instead of waiting for a turn that never ends.
+   */
+  getIdleFinalMarker?(sessionId: string): FinalMessageMarker | null;
+  /** Record why a continue was or was not sent, for diagnosing skips. */
+  log?(message: string): void;
 }
 
 interface SessionAutoContinueRecord extends SessionAutoContinueState {
@@ -95,8 +103,29 @@ export class SessionAutoContinueController {
       : "Auto Continue disabled.";
     record.count = 0;
     record.awaitingProgress = false;
+    record.skipNextDone = false;
     record.generation += 1;
     this.publish(sessionId, record);
+    if (!enabled) return;
+
+    // The turn may already have finished with a continuable status, for
+    // example when Auto Continue is turned on after a reload. No turn end is
+    // coming, so continue now rather than leave the toggle on and idle.
+    const marker = this.options.getIdleFinalMarker?.(sessionId) ?? null;
+    if (!marker || !getFinalMessageContinueAction(marker)) return;
+    this.log(sessionId, "enabled on an idle completed turn; continuing now");
+    this.decide(sessionId, record, marker);
+  }
+
+  /**
+   * The continue prompt never reached the agent. Pause visibly instead of
+   * leaving the toggle on with nothing happening.
+   */
+  reportSendFailure(sessionId: string, reason: string): void {
+    const record = this.sessions.get(sessionId);
+    if (!record?.enabled) return;
+    this.log(sessionId, `continue prompt not sent: ${reason}`);
+    this.stop(sessionId, record, `Auto Continue paused: ${reason}`);
   }
 
   /** The user stopped the turn: do not continue it automatically. */
@@ -157,10 +186,21 @@ export class SessionAutoContinueController {
     record.latestMarker = null;
     if (record.skipNextDone) {
       record.skipNextDone = false;
+      this.log(sessionId, "turn was stopped by the user; not continuing");
       return;
     }
-    if (!marker) return;
+    if (!marker) {
+      this.log(sessionId, "turn ended without a final status; not continuing");
+      return;
+    }
+    this.decide(sessionId, record, marker);
+  }
 
+  private decide(
+    sessionId: string,
+    record: SessionAutoContinueRecord,
+    marker: FinalMessageMarker,
+  ): void {
     const action = getFinalMessageContinueAction(marker);
     if (!action) {
       this.stop(
@@ -186,11 +226,18 @@ export class SessionAutoContinueController {
       return;
     }
     // Queued messages run next; their turn decides whether to continue.
-    if (this.options.hasQueuedUserMessages(sessionId)) return;
+    if (this.options.hasQueuedUserMessages(sessionId)) {
+      this.log(sessionId, "a queued user message runs first; not continuing");
+      return;
+    }
 
     record.count += 1;
     record.awaitingProgress = true;
     record.status = `Auto Continue sent ${record.count}/${AUTO_CONTINUE_MAX_TURNS}.`;
+    this.log(
+      sessionId,
+      `sending continue ${record.count}/${AUTO_CONTINUE_MAX_TURNS}`,
+    );
     this.publish(sessionId, record, { kind: "continued" });
     const generation = record.generation;
     this.options.sendPrompt(
@@ -212,6 +259,7 @@ export class SessionAutoContinueController {
     record.enabled = false;
     record.status = reason;
     record.awaitingProgress = false;
+    this.log(sessionId, `stopped: ${reason}`);
     this.publish(
       sessionId,
       record,
@@ -233,6 +281,10 @@ export class SessionAutoContinueController {
       this.sessions.set(sessionId, record);
     }
     return record;
+  }
+
+  private log(sessionId: string, message: string): void {
+    this.options.log?.(`[auto-continue] session=${sessionId} ${message}`);
   }
 
   private publish(

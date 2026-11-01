@@ -7,7 +7,11 @@ import {
   type SessionAutoContinueUpdate,
 } from "./SessionAutoContinueController.js";
 
-function makeController(queued = false) {
+function makeController(
+  queued = false,
+  idleMarker: Record<string, { status: string } | null> = {},
+) {
+  const logs: string[] = [];
   const sent: Array<{
     sessionId: string;
     prompt: string;
@@ -20,6 +24,8 @@ function makeController(queued = false) {
       sent.push({ sessionId, prompt, isStillWanted }),
     publish: (update) => updates.push(update),
     hasQueuedUserMessages: hasQueued,
+    getIdleFinalMarker: (sessionId) => (idleMarker[sessionId] as never) ?? null,
+    log: (message) => logs.push(message),
   });
   const finishTurn = (
     sessionId: string,
@@ -40,7 +46,7 @@ function makeController(queued = false) {
     });
     controller.observe({ type: "agentDone", sessionId });
   };
-  return { controller, sent, updates, hasQueued, finishTurn };
+  return { controller, sent, updates, hasQueued, finishTurn, logs };
 }
 
 describe("SessionAutoContinueController", () => {
@@ -144,6 +150,66 @@ describe("SessionAutoContinueController", () => {
     finishTurn("session-a");
     expect(sent).toEqual([]);
     expect(controller.getState("session-a").enabled).toBe(true);
+  });
+
+  it("continues straight away when enabled on a turn that already completed", () => {
+    const { controller, sent, updates } = makeController(false, {
+      "session-done": { status: "completed" },
+      "session-waiting": { status: "waiting_for_user" },
+    });
+
+    controller.setEnabled("session-done", true);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      sessionId: "session-done",
+      prompt: DEFAULT_COMPLETED_CONTINUE_ACTION.prompt,
+    });
+    expect(updates.at(-1)).toMatchObject({
+      sessionId: "session-done",
+      status: `Auto Continue sent 1/${AUTO_CONTINUE_MAX_TURNS}.`,
+      transcriptAction: { kind: "continued" },
+    });
+
+    // Nothing to continue: stay on for the next turn instead of stopping.
+    controller.setEnabled("session-waiting", true);
+    controller.setEnabled("session-idle", true);
+    expect(sent).toHaveLength(1);
+    expect(controller.getState("session-waiting").enabled).toBe(true);
+    expect(controller.getState("session-idle").enabled).toBe(true);
+  });
+
+  it("pauses visibly when the continue prompt cannot be sent", () => {
+    const { controller, updates, finishTurn, logs } = makeController();
+    controller.setEnabled("session-a", true);
+    finishTurn("session-a");
+
+    controller.reportSendFailure(
+      "session-a",
+      "the previous turn did not finish settling.",
+    );
+
+    expect(controller.getState("session-a")).toEqual({
+      enabled: false,
+      status:
+        "Auto Continue paused: the previous turn did not finish settling.",
+    });
+    expect(updates.at(-1)).toMatchObject({
+      transcriptAction: { kind: "stopped" },
+    });
+    expect(logs.some((line) => line.includes("sending continue 1/"))).toBe(
+      true,
+    );
+  });
+
+  it("logs why a finished turn was not continued", () => {
+    const { controller, logs } = makeController();
+    controller.setEnabled("session-a", true);
+
+    controller.observe({ type: "agentDone", sessionId: "session-a" });
+
+    expect(logs.at(-1)).toBe(
+      "[auto-continue] session=session-a turn ended without a final status; not continuing",
+    );
   });
 
   it("pauses after an agent error and ignores sessions that are off", () => {

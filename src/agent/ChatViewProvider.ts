@@ -335,6 +335,29 @@ function hasFinalContinueAction(message: ChatMessage): boolean {
   );
 }
 
+/**
+ * The final marker of the session's latest turn, or null once anything a user
+ * (or Auto Continue) sent follows it. Tool results are part of the turn.
+ */
+export function getLatestTurnFinalMarker(
+  messages: readonly import("./types.js").AgentMessage[],
+): FinalMessageMarker | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]!;
+    if (message.role === "user") {
+      const toolResultsOnly =
+        Array.isArray(message.content) &&
+        message.content.length > 0 &&
+        message.content.every((block) => block.type === "tool_result");
+      if (toolResultsOnly) continue;
+      return null;
+    }
+    const marker = message.uiHint?.finalMarker;
+    if (marker) return marker;
+  }
+  return null;
+}
+
 export function formatPersistedSessionMutationFailureMessage(
   result: Exclude<PersistedSessionMutationResult, { ok: true }>,
 ): string {
@@ -1448,6 +1471,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     publish: (update) => this.publishAutoContinueState(update),
     hasQueuedUserMessages: (sessionId) =>
       this.sessionManager?.getSession(sessionId)?.hasQueuedUiMessages ?? false,
+    getIdleFinalMarker: (sessionId) => {
+      const session = this.sessionManager?.getSession(sessionId);
+      if (
+        !session ||
+        session.background ||
+        session.runState ||
+        session.hasQueuedUiMessages ||
+        session.hasPendingInterjections ||
+        this.isSessionTurnLive(session)
+      ) {
+        return null;
+      }
+      return getLatestTurnFinalMarker(session.getAllMessages());
+    },
+    log: (message) => this.log(message),
   });
   private projectedDetectRequest: {
     requestId: string;
@@ -7861,6 +7899,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       type: "stateUpdate",
       state: this.buildChatState(session),
     });
+    // A recreated pane starts with the toggle off; show the host's state.
+    connection.postMessage({
+      type: "agentAutoContinueState",
+      sessionId: session.id,
+      ...this.autoContinue.getState(session.id),
+    });
     if (session.runState?.phase === "awaiting_question") {
       this.restorePendingQuestionRecovery(session, session.runState.question);
     }
@@ -9284,7 +9328,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentSetAutoContinue": {
-        const sessionId = msg.sessionId;
+        // An editor pane may only toggle the session it is bound to.
+        const sessionId = context?.sourceSessionId ?? msg.sessionId;
         if (typeof sessionId === "string" && sessionId) {
           this.autoContinue.setEnabled(sessionId, msg.enabled === true);
         }
@@ -10812,9 +10857,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ): void {
     setTimeout(
       () => {
+        if (!isStillWanted()) {
+          this.log(
+            `[auto-continue] session=${sessionId} continue superseded by a user turn or toggle`,
+          );
+          return;
+        }
         const mgr = this.sessionManager;
         const session = mgr?.getSession(sessionId);
-        if (!mgr || !session || !isStillWanted()) return;
+        if (!mgr || !session) {
+          this.autoContinue.reportSendFailure(
+            sessionId,
+            "the session is no longer loaded.",
+          );
+          return;
+        }
         if (this.isSessionTurnLive(session)) {
           // The finished run may still be saving; give it a moment.
           if (attempt < AUTO_CONTINUE_SETTLE_ATTEMPTS) {
@@ -10823,6 +10880,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               prompt,
               isStillWanted,
               attempt + 1,
+            );
+          } else {
+            this.autoContinue.reportSendFailure(
+              sessionId,
+              "the previous turn did not finish settling.",
             );
           }
           return;
@@ -10858,6 +10920,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       })
       .catch((err) => {
         this.log(`[error] auto continue send failed: ${err}`);
+        this.autoContinue.reportSendFailure(
+          sessionId,
+          "the continue prompt could not be sent.",
+        );
       });
   }
 
