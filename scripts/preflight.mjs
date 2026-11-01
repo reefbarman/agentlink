@@ -296,7 +296,9 @@ export function buildSteps({
     steps.push({
       id: "linux",
       label: `Linux container (node:${nodeMajor}): lint, build, test`,
-      command: `git archive --format=tar HEAD | docker run --rm -i -e CI=true -v agentlink-preflight-npm:/home/node/.npm node:${nodeMajor}-bookworm bash -c ${shellQuote(inner)}`,
+      // Reap orphaned subprocesses like a normal CI host, so killed background
+      // jobs do not remain visible as zombies to process-lifecycle tests.
+      command: `git archive --format=tar HEAD | docker run --init --rm -i -e CI=true -v agentlink-preflight-npm:/home/node/.npm node:${nodeMajor}-bookworm bash -c ${shellQuote(inner)}`,
     });
   }
   return steps.map((step) => ({ ...step, cwd: worktree }));
