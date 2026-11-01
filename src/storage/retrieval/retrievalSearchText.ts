@@ -25,14 +25,27 @@ export function buildRetrievalChunkSearchText(args: {
       source.title,
       chunk.location?.path,
       ...(chunk.location?.scope ?? []),
-      ...Object.values(source.metadata).map(String),
-      ...Object.values(chunk.metadata).map(String),
+      ...searchableMetadataValues(source.metadata),
+      ...searchableMetadataValues(chunk.metadata),
       ...relationTerms,
     ].filter((value): value is string => Boolean(value)),
     MAX_RETRIEVAL_CHUNK_METADATA_SEARCH_CHARS,
   );
 
   return metadata ? `${metadata}\n${chunk.content}` : chunk.content;
+}
+
+/**
+ * Metadata values worth matching in full-text search. Keys ending in `Json`
+ * hold serialized structured payloads (for example a derived session's whole
+ * chunk set), which only add noise to matches and bloat every chunk row.
+ */
+function searchableMetadataValues(
+  metadata: Readonly<Record<string, unknown>>,
+): string[] {
+  return Object.entries(metadata)
+    .filter(([key]) => !key.endsWith("Json"))
+    .map(([, value]) => String(value));
 }
 
 /**

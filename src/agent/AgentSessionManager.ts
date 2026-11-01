@@ -336,6 +336,8 @@ import type {
 
 const FLEET_VISIBILITY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+/** Delay before past-session history backfill, keeping it off the first send. */
+const WORKSPACE_HISTORY_BACKFILL_DELAY_MS = 30_000;
 const MAX_BACKGROUND_HANDOFF_IMAGES = 8;
 const SESSION_HANDOFF_RESERVATION_MS = 5 * 60 * 1000;
 const SESSION_HANDOFF_FIRST_TURN_PREFIX = `Continue this work in a fresh session using the reviewed handoff below.
@@ -1956,7 +1958,7 @@ export class AgentSessionManager {
       });
       this.workspaceSessionHistories.set(key, history);
       // Backfill in the background; searches wait only a bounded time for it.
-      void history.synchronize();
+      this.scheduleWorkspaceHistoryBackfill(history);
     }
     const rootPath = scope.rootPath;
     return {
@@ -2007,9 +2009,29 @@ export class AgentSessionManager {
       };
       this.worktreeSessionHistories.set(key, entry);
       // Backfill fully in the background, like the project-only index.
-      void history.synchronize();
+      this.scheduleWorkspaceHistoryBackfill(history);
     }
     return entry;
+  }
+
+  /**
+   * Start a full history backfill after a delay. This binding runs on the
+   * first send, and reading large past transcripts there stacked on top of
+   * request assembly and exhausted the extension host heap. Searches before
+   * the delay still reconcile within their own bounded budget.
+   */
+  private scheduleWorkspaceHistoryBackfill(
+    history: Pick<WorkspaceSessionHistory, "synchronize">,
+  ): void {
+    const timer = this.host.timers.setTimeout(() => {
+      void (async () => {
+        // A search may already own a time-budgeted run; this joins it, then
+        // continues unbudgeted if sessions are still pending.
+        const coverage = await history.synchronize();
+        if (coverage.pendingSessions > 0) await history.synchronize();
+      })();
+    }, WORKSPACE_HISTORY_BACKFILL_DELAY_MS);
+    (timer as { unref?: () => void } | undefined)?.unref?.();
   }
 
   private bindCapturedEngineToSession(

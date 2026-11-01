@@ -558,6 +558,7 @@ export function buildBackgroundFailurePayload(failure: {
   readonly expectedResultIssue?: string;
   readonly partialOutput?: string;
 }): Record<string, unknown> {
+  const recovery = backgroundFailureRecovery(failure);
   return {
     status: failure.status,
     terminalReason: failure.terminalReason,
@@ -566,10 +567,40 @@ export function buildBackgroundFailurePayload(failure: {
     ...(failure.expectedResultIssue !== undefined
       ? { expectedResultIssue: failure.expectedResultIssue }
       : {}),
+    ...(recovery !== undefined ? { recovery } : {}),
     ...(failure.partialOutput !== undefined
       ? { partialOutput: failure.partialOutput }
       : {}),
   };
+}
+
+const RETRY_FLAGS_NOTE =
+  "retrySafe only means a new run would not repeat side effects; it is not permission to retry. agentRetryable=false means the runtime does not authorize an automatic retry.";
+
+/**
+ * What a coordinator may do after a failure the runtime will not retry. It
+ * separates side-effect safety from retry authority and says plainly when no
+ * agent-side recovery exists, so a coordinator does not probe a blocked
+ * action to find out.
+ */
+function backgroundFailureRecovery(failure: {
+  readonly status: BackgroundResultState;
+  readonly terminalReason: string;
+  readonly agentRetryable: boolean;
+}): string | undefined {
+  if (failure.agentRetryable) return undefined;
+  if (failure.status === "cancelled") {
+    return "The run was cancelled. Start a new run only if the user still wants this work.";
+  }
+  const reason = failure.terminalReason;
+  if (
+    reason === "blocked" ||
+    reason === "waiting_for_user" ||
+    reason.endsWith(":refusal")
+  ) {
+    return `No agent-side recovery is available. ${RETRY_FLAGS_NOTE} Do not retry, rephrase, or route around this stop. Tell the user this agent's sessionId and terminalReason "${reason}"; partialOutput, when present, holds the agent's own explanation, and the user can review the agent's session transcript and decide how to proceed.`;
+  }
+  return `${RETRY_FLAGS_NOTE} Report the sessionId and terminalReason to the user, or start a new run only as a deliberate decision when the cause is understood; do not repeat an identical failing run.`;
 }
 
 export type BackgroundResultsWaitStatus =

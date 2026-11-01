@@ -1727,6 +1727,7 @@ Block until a background session finishes. Successful runs return the expected f
 - `retrySafe` — whether calling `get_background_result` again is safe and stable
 - `agentRetryable` — whether the provider/engine classified the run itself as retryable
 - `expectedResultIssue` — for `incomplete_expected_result`, which envelope validation failed
+- `recovery` — when `agentRetryable` is false, what the coordinator may do next: it separates side-effect retry safety from retry permission, and for a blocked or refused run states that no agent-side recovery exists
 - `partialOutput` when substantive output was captured before termination (always present for `incomplete_expected_result` so the raw response stays recoverable)
 
 A valid `set_task_status` result or parsed expected-result envelope remains authoritative even if the provider disconnects immediately afterward. Required structured output such as `review_findings` cannot be reported as a clean completion when only progress prose was produced. Persisted foreground sessions automatically restore their background tree so the original parent can retrieve durable child results after reload; inactive restored trees are pruned when another foreground is selected.

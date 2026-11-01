@@ -104,15 +104,70 @@ describe("background agent tool contract", () => {
     expect(
       JSON.stringify(
         buildBackgroundFailurePayload({
-          status: "cancelled",
+          status: "failed",
           terminalReason: "stopped",
           retrySafe: true,
-          agentRetryable: false,
+          agentRetryable: true,
         }),
       ),
     ).toBe(
-      '{"status":"cancelled","terminalReason":"stopped","retrySafe":true,"agentRetryable":false}',
+      '{"status":"failed","terminalReason":"stopped","retrySafe":true,"agentRetryable":true}',
     );
+    expect(
+      Object.keys(
+        buildBackgroundFailurePayload({
+          status: "interrupted",
+          terminalReason: "blocked",
+          retrySafe: true,
+          agentRetryable: false,
+          partialOutput: "stopped",
+        }),
+      ),
+    ).toEqual([
+      "status",
+      "terminalReason",
+      "retrySafe",
+      "agentRetryable",
+      "recovery",
+      "partialOutput",
+    ]);
+  });
+
+  it("explains recovery when the runtime will not retry a failure", () => {
+    const blocked = buildBackgroundFailurePayload({
+      status: "interrupted",
+      terminalReason: "blocked",
+      retrySafe: true,
+      agentRetryable: false,
+    });
+    expect(blocked.recovery).toContain("No agent-side recovery is available");
+    expect(blocked.recovery).toContain("not permission to retry");
+    expect(blocked.recovery).toContain('terminalReason "blocked"');
+
+    const refusal = buildBackgroundFailurePayload({
+      status: "failed",
+      terminalReason: "provider_stop:refusal",
+      retrySafe: true,
+      agentRetryable: false,
+    });
+    expect(refusal.recovery).toContain("No agent-side recovery is available");
+
+    const failed = buildBackgroundFailurePayload({
+      status: "failed",
+      terminalReason: "provider_error",
+      retrySafe: true,
+      agentRetryable: false,
+    });
+    expect(failed.recovery).toContain("deliberate decision");
+    expect(failed.recovery).not.toContain("No agent-side recovery");
+
+    const cancelled = buildBackgroundFailurePayload({
+      status: "cancelled",
+      terminalReason: "cancelled_by_user",
+      retrySafe: true,
+      agentRetryable: false,
+    });
+    expect(cancelled.recovery).toContain("cancelled");
   });
 
   it("reports several-agent waits with their completed and pending agents", () => {

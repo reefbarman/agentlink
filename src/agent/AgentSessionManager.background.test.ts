@@ -7552,6 +7552,7 @@ describe("AgentSessionManager background agents", () => {
       ),
       retrySafe: true,
       agentRetryable: false,
+      recovery: expect.stringContaining("not permission to retry"),
       partialOutput: "I inspected the change but did not finalize.",
     });
   });

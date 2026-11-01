@@ -591,29 +591,7 @@ export class DerivedSessionRetrievalService {
       surfaces?: string[];
     } = {},
   ): Promise<DerivedSessionInspection> {
-    const scopes = request.scopes?.length
-      ? uniqueScopes(request.scopes)
-      : [undefined];
-    const surfaces = request.surfaces?.length
-      ? uniqueStrings(request.surfaces)
-      : [undefined];
-    const sources = (
-      await Promise.all(
-        scopes.flatMap((scope) =>
-          surfaces.map((surface) =>
-            this.repository.listSources({
-              namespaces: ["session"],
-              sourceKinds: ["session"],
-              metadata: {
-                domain: DERIVED_SESSION_DOMAIN,
-                ...(scope ? { scopeKind: scope.kind, scopeId: scope.id } : {}),
-                ...(surface ? { surface } : {}),
-              },
-            }),
-          ),
-        ),
-      )
-    ).flat();
+    const sources = await this.listSessionSources(request);
     const sessions = deduplicateSources(sources)
       .map((source) => parseStoredSession(source))
       .sort(
@@ -631,6 +609,59 @@ export class DerivedSessionRetrievalService {
       0,
     );
     return { sessions, sessionCount: sessions.length, chunkCount };
+  }
+
+  /**
+   * Session ID to indexed source revision, read from source metadata. Unlike
+   * inspect(), this does not parse, validate or clone each stored payload,
+   * which holds the session's whole chunk set.
+   */
+  async listSessionRevisions(
+    request: {
+      scopes?: DerivedSessionScope[];
+      surfaces?: string[];
+    } = {},
+  ): Promise<Map<string, string>> {
+    const revisions = new Map<string, string>();
+    for (const { source } of deduplicateSources(
+      await this.listSessionSources(request),
+    )) {
+      const sessionId = source.metadata.sessionId;
+      const revision = source.metadata.sourceRevision;
+      if (typeof sessionId === "string" && typeof revision === "string") {
+        revisions.set(sessionId, revision);
+      }
+    }
+    return revisions;
+  }
+
+  private async listSessionSources(request: {
+    scopes?: DerivedSessionScope[];
+    surfaces?: string[];
+  }): Promise<RetrievalActiveSource[]> {
+    const scopes = request.scopes?.length
+      ? uniqueScopes(request.scopes)
+      : [undefined];
+    const surfaces = request.surfaces?.length
+      ? uniqueStrings(request.surfaces)
+      : [undefined];
+    return (
+      await Promise.all(
+        scopes.flatMap((scope) =>
+          surfaces.map((surface) =>
+            this.repository.listSources({
+              namespaces: ["session"],
+              sourceKinds: ["session"],
+              metadata: {
+                domain: DERIVED_SESSION_DOMAIN,
+                ...(scope ? { scopeKind: scope.kind, scopeId: scope.id } : {}),
+                ...(surface ? { surface } : {}),
+              },
+            }),
+          ),
+        ),
+      )
+    ).flat();
   }
 }
 

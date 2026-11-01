@@ -32,7 +32,11 @@ export function isWorkspaceHistoryIndexableText(text: string): boolean {
 export function createDerivedSessionWorkspaceHistoryIndex(options: {
   service: Pick<
     DerivedSessionRetrievalService,
-    "publish" | "publishBatch" | "deleteSession" | "inspect" | "recall"
+    | "publish"
+    | "publishBatch"
+    | "deleteSession"
+    | "listSessionRevisions"
+    | "recall"
   >;
   scope: DerivedSessionScope;
   surface?: string;
@@ -43,16 +47,10 @@ export function createDerivedSessionWorkspaceHistoryIndex(options: {
   const now = options.now ?? Date.now;
   return {
     async listIndexed() {
-      const inspection = await options.service.inspect({
+      return await options.service.listSessionRevisions({
         scopes: [scope],
         surfaces: [surface],
       });
-      return new Map(
-        inspection.sessions.map((session) => [
-          session.sessionId,
-          session.sourceRevision,
-        ]),
-      );
     },
     async publish(document: WorkspaceSessionIndexDocument) {
       const outcome = await options.service.publish(

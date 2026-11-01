@@ -637,8 +637,23 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
   async listSources(
     filters?: RetrievalQueryFilter,
   ): Promise<RetrievalActiveSource[]> {
-    return this.withReadableState(undefined, async (state) =>
-      activeSourceRows(state.sources)
+    // Read only the sources table. The full durable state also loads every
+    // chunk, relation, publication and snapshot row, which on a large
+    // session-history index cost hundreds of MB just to list sources.
+    return this.withReadableTables(undefined, async (tables) => {
+      const [rows, metadata] = await Promise.all([
+        readFilteredRows<SourceRow>(
+          tables.sources,
+          "deleted = false AND generation IS NOT NULL",
+        ),
+        readRows<MetadataRow>(tables.metadata),
+      ]);
+      // Keep the aggregate-metrics refresh the full state read provided.
+      this.aggregate = this.metricsWithPendingQueries(
+        metadataValue<RetrievalAggregateMetrics>(metadata, METRICS_KEY) ??
+          clone(EMPTY_METRICS),
+      );
+      return activeSourceRows(rows)
         .flatMap((row) => {
           if (!row.generation) return [];
           const source = parseJson<RetrievalSourceDocument>(row.payload_json);
@@ -646,8 +661,8 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
             ? [{ source, generation: row.generation }]
             : [];
         })
-        .sort((left, right) => left.source.id.localeCompare(right.source.id)),
-    );
+        .sort((left, right) => left.source.id.localeCompare(right.source.id));
+    });
   }
 
   async structuralSnapshot(

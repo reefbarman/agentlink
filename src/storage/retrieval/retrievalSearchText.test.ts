@@ -79,6 +79,32 @@ describe("retrieval chunk search text", () => {
     expect(text).not.toContain(source.content);
   });
 
+  it("omits serialized *Json metadata payloads but keeps other metadata", () => {
+    const text = buildRetrievalChunkSearchText({
+      chunk: {
+        ...chunk,
+        metadata: {
+          summary: "chunkSummaryNeedle",
+          idsJson: '["chunkIdsNeedle"]',
+        },
+      },
+      source: {
+        ...source,
+        metadata: {
+          sessionId: "sessionNeedle",
+          payloadJson: JSON.stringify({ chunks: ["payloadNeedle"] }),
+        },
+      },
+      relations: [],
+    });
+
+    expect(text).toContain("sessionNeedle");
+    expect(text).toContain("chunkSummaryNeedle");
+    expect(text).not.toContain("payloadNeedle");
+    expect(text).not.toContain("chunkIdsNeedle");
+    expect(text.endsWith(chunk.content)).toBe(true);
+  });
+
   it("truncates oversized metadata without truncating chunk content", () => {
     const text = buildRetrievalChunkSearchText({
       chunk,

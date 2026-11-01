@@ -36,6 +36,12 @@ export const WORKSPACE_SESSION_INDEX_MAX_CHUNKS = 400;
  */
 export const WORKSPACE_SESSION_INDEX_BATCH_SESSIONS = 25;
 const INDEX_BATCH_MAX_CHUNKS = 2_000;
+/**
+ * Flush once the batch's source transcripts reach this many messages. Large
+ * transcripts are the expensive part of a backfill, so committing right after
+ * them means a crash or restart does not have to read them all again.
+ */
+export const WORKSPACE_SESSION_INDEX_BATCH_MAX_SOURCE_MESSAGES = 2_000;
 /** Flush a partial batch after this long so progress stays visible. */
 const INDEX_BATCH_MAX_MS = 2_000;
 
@@ -568,6 +574,7 @@ export class WorkspaceSessionHistory {
       document: WorkspaceSessionIndexDocument;
     }> = [];
     let batchChunks = 0;
+    let batchSourceMessages = 0;
     let batchStartedAt = 0;
     const settle = (
       entry: WorkspaceSessionCatalogEntry,
@@ -587,6 +594,7 @@ export class WorkspaceSessionHistory {
       const items = batch;
       batch = [];
       batchChunks = 0;
+      batchSourceMessages = 0;
       if (items.length === 0) return;
       let committed = false;
       if (index.publishBatch && items.length > 1) {
@@ -632,6 +640,7 @@ export class WorkspaceSessionHistory {
         if (batch.length === 0) batchStartedAt = this.now();
         batch.push({ entry, document });
         batchChunks += document.chunks.length;
+        batchSourceMessages += record.messages.length;
       } catch (error) {
         settle(entry, undefined, error);
         update(remaining, lastError);
@@ -639,6 +648,8 @@ export class WorkspaceSessionHistory {
       if (
         batch.length >= WORKSPACE_SESSION_INDEX_BATCH_SESSIONS ||
         batchChunks >= INDEX_BATCH_MAX_CHUNKS ||
+        batchSourceMessages >=
+          WORKSPACE_SESSION_INDEX_BATCH_MAX_SOURCE_MESSAGES ||
         (batch.length > 0 && this.now() - batchStartedAt >= INDEX_BATCH_MAX_MS)
       ) {
         await flush();

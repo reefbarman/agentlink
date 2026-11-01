@@ -30,6 +30,9 @@ import {
   type AuthorizeAssistantProject,
 } from "./workspaceRoutes.js";
 
+/** Wait for a delegated child run; it spans several model turns. */
+const CHILD_RUN_WAIT = { timeout: 10_000 };
+
 let certificate: { cert: string; key: string };
 beforeAll(() => {
   certificate = createTestCertificate();
@@ -1577,7 +1580,7 @@ describe("assistant workspace routes", () => {
           ],
         },
       });
-    });
+    }, CHILD_RUN_WAIT);
     expect(childResults[0]).toContain("outside the active write scope");
     await expect(
       fs.access(path.join(harness.projectRoot, "other.txt")),
@@ -1628,7 +1631,7 @@ describe("assistant workspace routes", () => {
           agents: [{ lifecycle: "completed", resultText: "child done" }],
         },
       });
-    });
+    }, CHILD_RUN_WAIT);
     await expect(
       fs.readFile(path.join(harness.projectRoot, "child.txt"), "utf8"),
     ).resolves.toBe("from child\n");

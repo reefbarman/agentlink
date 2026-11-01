@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   buildWorkspaceSessionIndexDocument,
+  WORKSPACE_SESSION_INDEX_BATCH_MAX_SOURCE_MESSAGES,
   WORKSPACE_SESSION_INDEX_BATCH_SESSIONS,
   handleReadWorkspaceSessionExcerpt,
   handleSearchWorkspaceSessions,
@@ -315,6 +316,43 @@ describe("WorkspaceSessionHistory", () => {
       indexedSessions: WORKSPACE_SESSION_INDEX_BATCH_SESSIONS + 5,
       complete: true,
     });
+  });
+
+  it("commits right after a heavy transcript so a restart does not reread it", async () => {
+    const { source, index, history } = setup();
+    // Each entry is one index commit; single-document flushes use publish.
+    const batches: string[][] = [];
+    Object.assign(index, {
+      async publish(document: WorkspaceSessionIndexDocument) {
+        batches.push([document.sessionId]);
+        index.documents.set(document.sessionId, structuredClone(document));
+      },
+      async publishBatch(documents: WorkspaceSessionIndexDocument[]) {
+        batches.push(documents.map((document) => document.sessionId));
+        for (const document of documents) {
+          index.documents.set(document.sessionId, structuredClone(document));
+        }
+      },
+    });
+    // Newest first: the heavy session is read first and committed alone.
+    source.add(
+      record(
+        "heavy",
+        Array.from(
+          { length: WORKSPACE_SESSION_INDEX_BATCH_MAX_SOURCE_MESSAGES },
+          (_, i): ["user", string] => ["user", `message ${i}`],
+        ),
+        { lastActiveAt: 3_000 },
+      ),
+    );
+    source.add(record("light-a", [["user", "topic a"]]));
+    source.add(record("light-b", [["user", "topic b"]]));
+
+    const coverage = await history.synchronize();
+
+    expect(batches[0]).toEqual(["heavy"]);
+    expect(batches.slice(1).flat().sort()).toEqual(["light-a", "light-b"]);
+    expect(coverage).toMatchObject({ indexedSessions: 3, complete: true });
   });
 
   it("retries a failed batch singly so one bad session cannot block the rest", async () => {
