@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
 import {
+  MAX_REVIEW_CHECKED_ITEMS,
+  MAX_REVIEW_CHECKED_ITEM_CHARS,
   formatFleetResultEnvelope,
   parseFleetResultEnvelope,
   parseFleetResultEnvelopeDetailed,
@@ -7,6 +8,7 @@ import {
   scoreFleetCandidate,
   withFleetResultInstruction,
 } from "./FleetWorkflows.js";
+import { describe, expect, it } from "vitest";
 
 describe("fleet workflows", () => {
   it("builds structured review and verification delegations", () => {
@@ -276,6 +278,46 @@ describe("fleet workflows", () => {
     ).toContain(
       "**HIGH** — `src/indexer/workerLib.ts:42`: The checkpoint can be lost.",
     );
+  });
+
+  it("keeps bounded reviewer coverage notes on a clean review", () => {
+    const parsed = parseFleetResultEnvelope(
+      "review_findings",
+      JSON.stringify({
+        type: "review_findings",
+        findings: [],
+        checked: [
+          "Lock ordering in src/gpu/submit.ts:40 matches the queue owner",
+          { item: "Error paths", evidence: "src/gpu/submit.ts:88 releases" },
+          "   ",
+          7,
+          "x".repeat(MAX_REVIEW_CHECKED_ITEM_CHARS + 50),
+          ...Array.from(
+            { length: MAX_REVIEW_CHECKED_ITEMS },
+            (_, i) => `n${i}`,
+          ),
+        ],
+        emptyDiff: false,
+      }),
+    );
+    expect(parsed?.type).toBe("review_findings");
+    const checked = parsed?.type === "review_findings" ? parsed.checked : [];
+    expect(checked).toHaveLength(MAX_REVIEW_CHECKED_ITEMS);
+    expect(checked?.[0]).toBe(
+      "Lock ordering in src/gpu/submit.ts:40 matches the queue owner",
+    );
+    expect(checked?.[1]).toBe("Error paths: src/gpu/submit.ts:88 releases");
+    expect(checked?.[2]).toHaveLength(MAX_REVIEW_CHECKED_ITEM_CHARS);
+    expect(checked?.[2].endsWith("…")).toBe(true);
+
+    const text = formatFleetResultEnvelope(parsed!);
+    expect(text).toContain("**Review found no issues.**");
+    expect(text).toContain(
+      "**Checked**\n- Lock ordering in src/gpu/submit.ts:40 matches the queue owner",
+    );
+    expect(
+      withFleetResultInstruction("review_findings", "Review it."),
+    ).toContain('"checked":[');
   });
 
   it("never renders an incomplete review as a clean result", () => {

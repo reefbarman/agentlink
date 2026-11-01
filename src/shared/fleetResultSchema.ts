@@ -41,6 +41,12 @@ export const fleetResultSchemas = {
           "Optional override when the reviewed scope materially differs from the runtime target",
         )
         .optional(),
+      checked: z
+        .array(z.string())
+        .describe(
+          "Optional short notes on what you checked and the evidence (file:line), including items that were fine",
+        )
+        .optional(),
       emptyDiff: emptyDiff.optional(),
     })
     .passthrough(),

@@ -267,6 +267,7 @@ function interpretReviewFindingsCandidate(
             ["false", "no"].includes(value.emptyDiff.trim().toLowerCase())
           ? false
           : undefined;
+  const checked = normalizeReviewChecked(value.checked);
   return {
     ok: true,
     envelope: {
@@ -275,9 +276,51 @@ function interpretReviewFindingsCandidate(
       ...(typeof value.reviewedScope === "string"
         ? { reviewedScope: value.reviewedScope }
         : {}),
+      ...(checked.length > 0 ? { checked } : {}),
       ...(emptyDiff !== undefined ? { emptyDiff } : {}),
     },
   };
+}
+
+export const MAX_REVIEW_CHECKED_ITEMS = 40;
+export const MAX_REVIEW_CHECKED_ITEM_CHARS = 600;
+
+/**
+ * Keep the reviewer's coverage notes bounded. Accepts strings, or objects
+ * with an item/check plus evidence/note, and drops anything else.
+ */
+function normalizeReviewChecked(value: unknown): string[] {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? [value]
+      : [];
+  const checked: string[] = [];
+  for (const entry of raw) {
+    if (checked.length >= MAX_REVIEW_CHECKED_ITEMS) break;
+    let text: string | undefined;
+    if (typeof entry === "string") {
+      text = entry;
+    } else if (entry && typeof entry === "object") {
+      const item = entry as Record<string, unknown>;
+      const label = [item.item, item.check, item.area].find(
+        (part): part is string => typeof part === "string" && !!part.trim(),
+      );
+      const detail = [item.evidence, item.note, item.result].find(
+        (part): part is string => typeof part === "string" && !!part.trim(),
+      );
+      text =
+        label && detail ? `${label.trim()}: ${detail.trim()}` : label || detail;
+    }
+    const trimmed = text?.replace(/\s+/g, " ").trim();
+    if (!trimmed) continue;
+    checked.push(
+      trimmed.length > MAX_REVIEW_CHECKED_ITEM_CHARS
+        ? `${trimmed.slice(0, MAX_REVIEW_CHECKED_ITEM_CHARS - 1)}…`
+        : trimmed,
+    );
+  }
+  return checked;
 }
 
 function interpretFleetResultCandidate(
@@ -606,6 +649,9 @@ export function formatFleetResultEnvelope(
       );
     }
   }
+  if (result.checked?.length) {
+    lines.push("", "**Checked**", ...result.checked.map((item) => `- ${item}`));
+  }
   return lines.join("\n");
 }
 
@@ -616,7 +662,7 @@ export function withFleetResultInstruction(
   if (!expected || expected === "text") return message;
   const shapes = {
     review_findings:
-      '{"type":"review_findings","findings":[{"severity":"critical|high|medium|low","message":"...","path":"optional","line":1}],"emptyDiff":false}',
+      '{"type":"review_findings","findings":[{"severity":"critical|high|medium|low","message":"...","path":"optional","line":1}],"checked":["what you verified and the evidence (file:line)"],"emptyDiff":false}',
     patch:
       '{"type":"patch","summary":"...","files":["..."],"verification":"optional"}',
     verification:
@@ -624,7 +670,7 @@ export function withFleetResultInstruction(
   } as const;
   const guidance =
     expected === "review_findings"
-      ? " Set emptyDiff=true only when the requested live diff or range is empty or unavailable. The runtime already knows the target, so include reviewedScope only if you materially reviewed something different."
+      ? " List the main things you checked in checked (short notes with file:line evidence, including areas that were fine) so a clean result shows its coverage. Set emptyDiff=true only when the requested live diff or range is empty or unavailable. The runtime already knows the target, so include reviewedScope only if you materially reviewed something different."
       : "";
   return `${message}\n\nEnd with one JSON object matching this result envelope: ${shapes[expected]}${guidance} Do not repeat it or add prose after it.`;
 }

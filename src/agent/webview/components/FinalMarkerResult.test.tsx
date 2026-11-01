@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
+
 import { FinalMarkerResult } from "./FinalMarkerResult";
 
 afterEach(cleanup);
@@ -133,6 +134,25 @@ describe("FinalMarkerResult", () => {
     expect(screen.getByText("Missing validation")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "src/example.ts:42" }));
     expect(onOpenFile).toHaveBeenCalledWith("src/example.ts", 42);
+  });
+
+  it("shows the reviewer's checked items on a clean review", () => {
+    render(
+      <FinalMarkerResult
+        result={{
+          type: "review_findings",
+          findings: [],
+          emptyDiff: false,
+          checked: ["Retry loop bounded at src/net.ts:12"],
+        }}
+        citations={[]}
+      />,
+    );
+    expect(screen.getByText("No findings reported.")).toBeTruthy();
+    expect(screen.getByText("Checked")).toBeTruthy();
+    expect(
+      screen.getByText("Retry loop bounded at src/net.ts:12"),
+    ).toBeTruthy();
   });
 
   it.each([true, false])(

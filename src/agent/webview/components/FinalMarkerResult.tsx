@@ -1,5 +1,5 @@
-import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import type { CoreWebCitation } from "@agentlink/protocol/web-activity";
+import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import { StreamingText } from "./StreamingText";
 
 interface FinalMarkerResultProps {
@@ -98,6 +98,16 @@ export function FinalMarkerResult({
               </li>
             ))}
           </ul>
+          {result.checked?.length ? (
+            <div>
+              <div class="final-marker-section-label">Checked</div>
+              <ul class="final-marker-result-list">
+                {result.checked.map((item, index) => (
+                  <li key={index}>{prose(item)}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </>
       ) : result.type === "patch" ? (
         <>

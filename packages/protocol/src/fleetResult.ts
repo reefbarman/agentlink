@@ -10,6 +10,8 @@ export type FleetResultEnvelope =
       }>;
       /** What was actually reviewed, e.g. a commit range or file list. */
       reviewedScope?: string;
+      /** Bounded notes on what the reviewer checked and its evidence, so a clean result shows its coverage. */
+      checked?: string[];
       /** True when the requested diff was empty or missing, so an empty findings list is not a clean review. */
       emptyDiff?: boolean;
     }
