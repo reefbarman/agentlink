@@ -1,6 +1,66 @@
+import {
+  holdUnclassifiedUnits,
+  promoteUnreleased,
+  pruneDecisions,
+  readDecisionsCache,
+} from "./release-coordinator.mjs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+
 import assert from "node:assert/strict";
-import { promoteUnreleased } from "./release-coordinator.mjs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
+
+test("holds only units that would release commits the AI never classified", () => {
+  const release = (commits) => ({
+    status: "release",
+    version: "1.2.0",
+    effectiveBump: "minor",
+    breaking: false,
+    usedReservation: false,
+    consumedIntent: false,
+    commits,
+  });
+  const planned = {
+    vscode: release(["aaaaaaaa1", "bbbbbbbb2"]),
+    cli: release(["aaaaaaaa1"]),
+    sdk: release(["cccccccc3"]),
+    desktop: { status: "skip", commits: ["bbbbbbbb2"] },
+  };
+  holdUnclassifiedUnits(planned, {
+    candidateShas: ["aaaaaaaa1", "bbbbbbbb2", "cccccccc3"],
+    decisions: { aaaaaaaa1: { bump: "patch" } },
+    // Over the run budget: keeps the existing floor-only behaviour.
+    omitted: ["cccccccc3"],
+    reason: "HTTP 403",
+  });
+  assert.equal(planned.vscode.status, "hold");
+  assert.equal(planned.vscode.version, undefined);
+  assert.match(planned.vscode.reason, /unavailable.*bbbbbbbb/u);
+  assert.equal(planned.vscode.classifierError, "HTTP 403");
+  assert.equal(planned.cli.status, "release");
+  assert.equal(planned.sdk.status, "release");
+  assert.equal(planned.desktop.status, "skip");
+});
+
+test("decision cache tolerates missing or corrupt files and prunes released commits", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "release-cache-"));
+  try {
+    const file = path.join(dir, "decisions.json");
+    assert.deepEqual(readDecisionsCache(file), {});
+    assert.deepEqual(readDecisionsCache(undefined), {});
+    writeFileSync(file, "{not json");
+    assert.deepEqual(readDecisionsCache(file), {});
+    writeFileSync(
+      file,
+      JSON.stringify({ schemaVersion: 1, decisions: { a: { bump: "patch" } } }),
+    );
+    assert.deepEqual(readDecisionsCache(file), { a: { bump: "patch" } });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  assert.deepEqual(pruneDecisions({ a: 1, b: 2 }, ["b", "c"]), { b: 2 });
+});
 
 test("moves Unreleased entries under the new version heading", () => {
   const changelog =

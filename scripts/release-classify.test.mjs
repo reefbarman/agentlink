@@ -218,6 +218,49 @@ test("persistent omissions fail closed after bounded retries", async () => {
   assert.equal(calls, 2);
 });
 
+test("failures carry cached and validated decisions so callers can keep them", async () => {
+  const cached = {
+    bump: "minor",
+    breakingUnits: [],
+    summary: "Cached.",
+    promptVersion: CLASSIFIER_PROMPT_VERSION,
+  };
+  const partial = await classifyCommits(
+    [commit("c"), commit("a"), commit("b")],
+    {
+      apiKey: "k",
+      cache: { c: cached },
+      fetchImpl: async () =>
+        okResponse([
+          { sha: "a", bump: "patch", breakingUnits: [], summary: "A." },
+        ]),
+    },
+  ).catch((error) => error);
+  assert.match(partial.message, /Classifier omitted b/u);
+  assert.deepEqual(Object.keys(partial.decisions).sort(), ["a", "c"]);
+  assert.equal(partial.decisions.c, cached);
+  assert.equal(partial.decisions.a.promptVersion, CLASSIFIER_PROMPT_VERSION);
+
+  // A budget error (HTTP 403) is not retried and still returns the cache.
+  let calls = 0;
+  const budget = await classifyCommits([commit("c"), commit("a")], {
+    apiKey: "k",
+    cache: { c: cached },
+    fetchImpl: async () => {
+      calls++;
+      return {
+        ok: false,
+        status: 403,
+        text: async () =>
+          JSON.stringify({ error: { message: "budget limit exceeded" } }),
+      };
+    },
+  }).catch((error) => error);
+  assert.equal(calls, 1);
+  assert.match(budget.message, /HTTP 403: budget limit exceeded/u);
+  assert.deepEqual(Object.keys(budget.decisions), ["c"]);
+});
+
 test("invalid partial responses cannot supply retained decisions", async () => {
   const requests = [];
   await assert.rejects(

@@ -236,9 +236,14 @@ async function requestBatch(
       }
     }
   }
-  throw new Error(`Release classification failed: ${lastError?.message}`, {
-    cause: lastError,
-  });
+  const error = new Error(
+    `Release classification failed: ${lastError?.message}`,
+    { cause: lastError },
+  );
+  // Validated decisions from a partially answered batch are still worth
+  // caching so the next run does not pay for them again.
+  error.partialDecisions = decisions;
+  throw error;
 }
 
 /** OpenRouter's bounded error message, e.g. "No endpoints found ...". */
@@ -255,6 +260,10 @@ async function errorDetail(response) {
 /**
  * Classifies commits not already present in `cache`. Returns decisions keyed
  * by SHA plus the SHAs that exceeded the run budget and stay unclassified.
+ *
+ * On failure the thrown error carries `decisions`: every cached and newly
+ * validated decision collected before the failure, so callers can persist
+ * them and only pay for the remainder on the next run.
  */
 export async function classifyCommits(
   commits,
@@ -276,19 +285,24 @@ export async function classifyCommits(
       decisions[commit.sha] = cached;
     } else pending.push(commit);
   }
-  const { batches, omitted } = batchCommits(pending);
-  for (const batch of batches) {
-    const result = await requestBatch(batch, {
-      apiKey,
-      model,
-      fallbackModel,
-      fetchImpl,
-    });
+  const record = (result) => {
     for (const [sha, decision] of Object.entries(result)) {
       decisions[sha] = {
         ...decision,
         promptVersion: CLASSIFIER_PROMPT_VERSION,
       };
+    }
+  };
+  const { batches, omitted } = batchCommits(pending);
+  for (const batch of batches) {
+    try {
+      record(
+        await requestBatch(batch, { apiKey, model, fallbackModel, fetchImpl }),
+      );
+    } catch (error) {
+      record(error.partialDecisions ?? {});
+      error.decisions = decisions;
+      throw error;
     }
   }
   return { decisions, omitted };

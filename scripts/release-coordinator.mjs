@@ -6,6 +6,7 @@
 //
 //   node scripts/release-coordinator.mjs plan [--classify] [--out plan.json]
 //        [--published-tags-file tags.json] [--github-output]
+//        [--decisions-cache decisions.json]
 //   node scripts/release-coordinator.mjs apply --plan plan.json
 //   node scripts/release-coordinator.mjs notes --unit vscode
 
@@ -199,6 +200,65 @@ function commitDiff(commit) {
 // ---------------------------------------------------------------------------
 // plan
 
+/**
+ * Reads the cross-run AI decision cache. Commit SHAs are immutable, so a
+ * decision stays valid for as long as its prompt version matches; the
+ * classifier checks that. A missing or unreadable cache is just empty.
+ */
+export function readDecisionsCache(file) {
+  if (!file || !existsSync(file)) return {};
+  try {
+    const value = JSON.parse(readFileSync(file, "utf8"));
+    return value && typeof value.decisions === "object" && value.decisions
+      ? value.decisions
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Keeps only decisions for commits that are still unreleased candidates. */
+export function pruneDecisions(decisions, candidateShas) {
+  const keep = new Set(candidateShas);
+  return Object.fromEntries(
+    Object.entries(decisions).filter(([sha]) => keep.has(sha)),
+  );
+}
+
+/**
+ * When the classifier could not run, holds every unit that would otherwise
+ * release a commit the AI never saw, so an unmarked breaking change cannot
+ * ship under a Conventional Commit floor. Commits deliberately left out by
+ * the run budget (`omitted`) keep their existing floor-only behaviour.
+ */
+export function holdUnclassifiedUnits(
+  planned,
+  { candidateShas, decisions, omitted = [], reason },
+) {
+  const needed = new Set(
+    candidateShas.filter((sha) => !decisions[sha] && !omitted.includes(sha)),
+  );
+  for (const result of Object.values(planned)) {
+    if (result.status !== "release") continue;
+    const missing = result.commits.filter((sha) => needed.has(sha));
+    if (missing.length === 0) continue;
+    for (const key of [
+      "version",
+      "effectiveBump",
+      "breaking",
+      "usedReservation",
+      "consumedIntent",
+    ])
+      delete result[key];
+    Object.assign(result, {
+      status: "hold",
+      reason: `AI classification unavailable; waiting to classify ${missing.map((sha) => sha.slice(0, 8)).join(", ")}`,
+      classifierError: reason,
+    });
+  }
+  return planned;
+}
+
 async function plan(options) {
   const tags = publishedTags(options);
   const units = {};
@@ -208,22 +268,46 @@ async function plan(options) {
   const classifierEnabled = Boolean(options.classify);
   let decisions = {};
   let omitted = [];
+  let classifierError;
+  let candidateShas = [];
   const model = process.env.RELEASE_AI_MODEL || DEFAULT_MODEL;
   const fallbackModel =
     process.env.RELEASE_AI_FALLBACK_MODEL || DEFAULT_FALLBACK_MODEL;
+  const cacheFile = options["decisions-cache"];
   if (classifierEnabled) {
     const candidates = [...commitCache.values()]
       .map((commit) => ({ ...commit, units: commitUnits(commit) }))
       .filter((commit) => commit.units.length > 0);
-    ({ decisions, omitted } = await classifyCommits(
-      candidates.map((commit) => ({ ...commit, diff: commitDiff(commit) })),
-      {
-        apiKey: process.env.OPENROUTER_API_KEY,
-        model,
-        fallbackModel,
-        cache: previous?.decisions ?? {},
-      },
-    ));
+    candidateShas = candidates.map((commit) => commit.sha);
+    // Without a cross-run cache every push re-sent every unreleased commit,
+    // so cost grew with the backlog until the provider budget ran out.
+    const cache = {
+      ...previous?.decisions,
+      ...readDecisionsCache(cacheFile),
+    };
+    try {
+      ({ decisions, omitted } = await classifyCommits(
+        candidates.map((commit) => ({ ...commit, diff: commitDiff(commit) })),
+        {
+          apiKey: process.env.OPENROUTER_API_KEY,
+          model,
+          fallbackModel,
+          cache,
+        },
+      ));
+    } catch (error) {
+      classifierError = String(error?.message ?? error)
+        .replace(/\s+/gu, " ")
+        .slice(0, 300);
+      decisions = error?.decisions ?? {};
+      console.log(`::warning title=Release classification::${classifierError}`);
+    }
+    if (cacheFile) {
+      writeFileSync(
+        cacheFile,
+        `${JSON.stringify({ schemaVersion: 1, decisions: pruneDecisions(decisions, candidateShas) }, null, 2)}\n`,
+      );
+    }
   }
 
   // Overrides stay out of `decisions`, which is the AI cache for later runs.
@@ -232,6 +316,14 @@ async function plan(options) {
     (sha) => effective[sha].source === "maintainer" && commitCache.has(sha),
   );
   const planned = planRelease({ units, decisions: effective });
+  if (classifierError) {
+    holdUnclassifiedUnits(planned, {
+      candidateShas,
+      decisions: effective,
+      omitted,
+      reason: classifierError,
+    });
+  }
   for (const [id, result] of Object.entries(planned)) {
     const tag =
       result.version && `${RELEASE_UNITS[id].tagPrefix}${result.version}`;
@@ -261,7 +353,12 @@ async function plan(options) {
     sourceSha: git("rev-parse", "HEAD").trim(),
     createdAt: new Date().toISOString(),
     classifier: classifierEnabled
-      ? { model, fallbackModel, omitted }
+      ? {
+          model,
+          fallbackModel,
+          omitted,
+          ...(classifierError ? { error: classifierError } : {}),
+        }
       : { enabled: false },
     overrides: overridden,
     units: planned,
@@ -315,6 +412,11 @@ function renderSummary(record) {
   if (record.classifier.omitted?.length > 0) {
     notes.push(
       `Commits over the AI budget (deterministic floor only): ${record.classifier.omitted.map((sha) => sha.slice(0, 8)).join(", ")}`,
+    );
+  }
+  if (record.classifier.error) {
+    notes.push(
+      `AI classification failed, affected units held until the next run: ${record.classifier.error}`,
     );
   }
   notes.push(

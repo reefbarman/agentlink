@@ -94,6 +94,17 @@ jobs:
         with:
           node-version-file: .nvmrc
 
+      # AI decisions are keyed by immutable commit SHA. Carrying them between
+      # runs means each commit is classified once instead of on every push
+      # until it ships, which previously exhausted the OpenRouter budget.
+      - name: Restore release classification cache
+        if: steps.source.outputs.sha
+        uses: actions/cache/restore@v6
+        with:
+          path: release-classifier-cache
+          key: release-classifier-${{ github.run_id }}
+          restore-keys: release-classifier-
+
       - name: Plan releases
         id: plan
         if: steps.source.outputs.sha
@@ -102,15 +113,26 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           RELEASE_AI_MODEL: ${{ vars.RELEASE_AI_MODEL }}
           RELEASE_AI_FALLBACK_MODEL: ${{ vars.RELEASE_AI_FALLBACK_MODEL }}
+          DECISIONS_CACHE: release-classifier-cache/decisions.json
         run: |
           gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 \
             --json tagName,isDraft --jq '[.[] | select(.isDraft | not) | .tagName]' \
             > published-tags.json
+          mkdir -p "$(dirname "$DECISIONS_CACHE")"
           CLASSIFY=()
           if [ -n "$OPENROUTER_API_KEY" ]; then CLASSIFY=(--classify); fi
           node scripts/release-coordinator.mjs plan "${CLASSIFY[@]}" \
             --published-tags-file published-tags.json \
+            --decisions-cache "$DECISIONS_CACHE" \
             --out release-plan.json --github-output
+
+      # Save even when planning fails so paid-for decisions are never lost.
+      - name: Save release classification cache
+        if: always() && steps.source.outputs.sha && hashFiles('release-classifier-cache/decisions.json') != ''
+        uses: actions/cache/save@v6
+        with:
+          path: release-classifier-cache
+          key: release-classifier-${{ github.run_id }}
 
       - uses: actions/upload-artifact@v7
         if: steps.source.outputs.sha
