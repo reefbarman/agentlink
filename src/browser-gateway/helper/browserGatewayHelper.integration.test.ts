@@ -6100,6 +6100,92 @@ describe("BrowserGatewayHelper proxy routing", () => {
     ).toContain("Preceding assistant messages are intentionally not used");
   });
 
+  it("publishes the answered Ask Agent question before the resumed model turn produces output", async () => {
+    const publications: AskAgentControllerPublication[] = [];
+    let callCount = 0;
+    let releaseResumedTurn: (() => void) | undefined;
+    const resumedTurnGate = new Promise<void>((resolve) => {
+      releaseResumedTurn = resolve;
+    });
+    const modelClient = makeAskAgentToolLoopClient(async ({ onDelta }) => {
+      callCount++;
+      if (callCount === 1) {
+        onDelta?.("Need input before continuing.");
+        return {
+          text: "Need input before continuing.",
+          toolCalls: [
+            {
+              id: "call_question",
+              name: "ask_user",
+              input: {
+                context: "Need a read-only choice.",
+                questions: [
+                  {
+                    id: "continue",
+                    type: "yes_no",
+                    question: "Continue with the read-only plan?",
+                  },
+                ],
+              },
+            },
+          ],
+        };
+      }
+      await resumedTurnGate;
+      onDelta?.("Continuing.");
+      return { text: "Continuing.", toolCalls: [] };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      beforeAskAgentSnapshotPublish: (publication) => {
+        publications.push(publication);
+      },
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Ask me something" }),
+    });
+    expect(send.ok).toBe(true);
+    const beforeAnswerRevision = Math.max(
+      0,
+      ...publications.map(({ revision }) => revision),
+    );
+
+    const answerPromise = fetch(
+      `${harness.helperBase}/api/ask-agent/question`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify({
+          id: "call_question",
+          answers: { continue: true },
+        }),
+      },
+    );
+    try {
+      await waitForExpectation(() => {
+        expect(callCount).toBe(2);
+        const answered = publications.find(
+          ({ revision, snapshot }) =>
+            revision > beforeAnswerRevision &&
+            snapshot.ui.question === null &&
+            snapshot.session.foreground.projectedMessages.some((message) =>
+              message.blocks?.some((block) => block.type === "question_answer"),
+            ),
+        );
+        expect(answered).toBeTruthy();
+      });
+    } finally {
+      releaseResumedTurn?.();
+    }
+    const answer = await answerPromise;
+    expect(answer.ok).toBe(true);
+  });
+
   it("surfaces safe Ask Agent ask_user tool calls and resumes after submitted answers", async () => {
     let callCount = 0;
     const seenToolMessages: CoreModelMessage[][] = [];

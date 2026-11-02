@@ -2890,6 +2890,20 @@ export class BrowserGatewayHelper {
       let sendOutcome = "model_success";
       activeTurn = this.beginAskAgentTurn(answerResult.messageId);
       if (!activeTurn) throw new Error("ask_agent_turn_in_progress");
+      // Publish the answered card and resumed streaming state before the model
+      // turn starts, as send and retry do; otherwise the browser keeps the
+      // stale question until the first model delta or the turn finishes.
+      const streamSnapshot = this.askAgentController.projectState({
+        now,
+        theme,
+        modelCredentialStatus: this.getAskAgentModelCredentialStatus(
+          now,
+          modelContext.ownerId,
+        ),
+        approval: this.askAgentController.getPendingApproval(),
+        memoryCandidateNudge: this.askAgentController.getMemoryCandidateNudge(),
+      });
+      await this.publishAskAgentSnapshot(streamSnapshot.snapshot);
       try {
         const transcriptMessages =
           this.askAgentSessionStore.getTranscriptMessages();
