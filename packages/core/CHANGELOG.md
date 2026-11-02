@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.39.0 — 2026-11-02
+
 - `@agentlink/core/background-agent-tools` adds VS Code's task-class and budget policy: `normalizeTaskClass`, `isReviewTaskClass`, `BASE_REVIEW_TASK_CLASS`, `isResearchTaskClass`, `isSharedBudgetMemberTaskClass`, `inferReviewTier`, `getBudgetHardLimitRatio`, `getEngineHardLimit`, `resolveBackgroundBudget`, the `AGENT_BUDGET_PROPERTY` schema and `AGENT_BUDGET_DESCRIPTION`, and the `parseModelTierInput` and `parseAgentBudgetInput` readers. VS Code delegates to them unchanged.
 
 ## 0.38.0 — 2026-11-02

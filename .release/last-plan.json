@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "6513bf69d3c9e7bfd80d459ad358326ed1f8094a",
-  "createdAt": "2026-11-02T01:34:21.160Z",
+  "sourceSha": "90741b587fdbd211d28aa58b443f958a573a0a3a",
+  "createdAt": "2026-11-02T02:17:53.506Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,132 +10,149 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.69.0",
-      "baselineRef": "v1.69.0",
-      "reserved": "1.69.0",
-      "commits": ["6513bf69d3c9e7bfd80d459ad358326ed1f8094a"],
+      "published": "1.70.0",
+      "baselineRef": "v1.70.0",
+      "reserved": "1.70.0",
+      "commits": [
+        "c726851fc64e4b7b185d5eb06334ce7e1158d2a3",
+        "90741b587fdbd211d28aa58b443f958a573a0a3a"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.70.0",
+      "version": "1.71.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.70.0",
+      "tag": "v1.71.0",
       "notes": [
         {
-          "sha": "6513bf69d3c9e7bfd80d459ad358326ed1f8094a",
-          "subject": "feat(workspace-host): give background agents VS Code's expectedResult and reviewScope",
-          "summary": "CLI and Assistant background agents now accept VS Code's reviewScope and expectedResult, returning validated structured results, and the SDK adds @agentlink/core/background-results and review-scope subpaths.",
+          "sha": "c726851fc64e4b7b185d5eb06334ce7e1158d2a3",
+          "subject": "docs: add Best of Agent Harnesses badge to README",
+          "summary": "Adds a Best of Agent Harnesses badge to the README, a documentation-only change with no effect on shipped behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "90741b587fdbd211d28aa58b443f958a573a0a3a",
+          "subject": "feat(workspace-host): add VS Code taskClass, modelTier and budget to background agents",
+          "summary": "CLI and Assistant background agents now accept taskClass, modelTier and budget with read-only review and research children, tier model roles and budget_exhausted stops; core exports the shared policy, and VS Code behaviour is unchanged.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.69.0",
-      "baselineRef": "desktop-v0.69.0",
-      "reserved": "0.69.0",
-      "commits": ["6513bf69d3c9e7bfd80d459ad358326ed1f8094a"],
+      "published": "0.70.0",
+      "baselineRef": "desktop-v0.70.0",
+      "reserved": "0.70.0",
+      "commits": ["90741b587fdbd211d28aa58b443f958a573a0a3a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.70.0",
+      "version": "0.71.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.70.0",
+      "tag": "desktop-v0.71.0",
       "notes": [
         {
-          "sha": "6513bf69d3c9e7bfd80d459ad358326ed1f8094a",
-          "subject": "feat(workspace-host): give background agents VS Code's expectedResult and reviewScope",
-          "summary": "CLI and Assistant background agents now accept VS Code's reviewScope and expectedResult, returning validated structured results, and the SDK adds @agentlink/core/background-results and review-scope subpaths.",
+          "sha": "90741b587fdbd211d28aa58b443f958a573a0a3a",
+          "subject": "feat(workspace-host): add VS Code taskClass, modelTier and budget to background agents",
+          "summary": "CLI and Assistant background agents now accept taskClass, modelTier and budget with read-only review and research children, tier model roles and budget_exhausted stops; core exports the shared policy, and VS Code behaviour is unchanged.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.47.0",
-      "baselineRef": "cli-v0.47.0",
-      "reserved": "0.47.0",
-      "commits": ["6513bf69d3c9e7bfd80d459ad358326ed1f8094a"],
+      "published": "0.48.0",
+      "baselineRef": "cli-v0.48.0",
+      "reserved": "0.48.0",
+      "commits": ["90741b587fdbd211d28aa58b443f958a573a0a3a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.48.0",
+      "version": "0.49.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.48.0",
+      "tag": "cli-v0.49.0",
       "notes": [
         {
-          "sha": "6513bf69d3c9e7bfd80d459ad358326ed1f8094a",
-          "subject": "feat(workspace-host): give background agents VS Code's expectedResult and reviewScope",
-          "summary": "CLI and Assistant background agents now accept VS Code's reviewScope and expectedResult, returning validated structured results, and the SDK adds @agentlink/core/background-results and review-scope subpaths.",
+          "sha": "90741b587fdbd211d28aa58b443f958a573a0a3a",
+          "subject": "feat(workspace-host): add VS Code taskClass, modelTier and budget to background agents",
+          "summary": "CLI and Assistant background agents now accept taskClass, modelTier and budget with read-only review and research children, tier model roles and budget_exhausted stops; core exports the shared policy, and VS Code behaviour is unchanged.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.37.0",
-      "baselineRef": "sdk-v0.37.0",
-      "reserved": "0.37.0",
-      "commits": ["6513bf69d3c9e7bfd80d459ad358326ed1f8094a"],
+      "published": "0.38.0",
+      "baselineRef": "sdk-v0.38.0",
+      "reserved": "0.38.0",
+      "commits": ["90741b587fdbd211d28aa58b443f958a573a0a3a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.38.0",
+      "version": "0.39.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.38.0",
+      "tag": "sdk-v0.39.0",
       "notes": [
         {
-          "sha": "6513bf69d3c9e7bfd80d459ad358326ed1f8094a",
-          "subject": "feat(workspace-host): give background agents VS Code's expectedResult and reviewScope",
-          "summary": "CLI and Assistant background agents now accept VS Code's reviewScope and expectedResult, returning validated structured results, and the SDK adds @agentlink/core/background-results and review-scope subpaths.",
+          "sha": "90741b587fdbd211d28aa58b443f958a573a0a3a",
+          "subject": "feat(workspace-host): add VS Code taskClass, modelTier and budget to background agents",
+          "summary": "CLI and Assistant background agents now accept taskClass, modelTier and budget with read-only review and research children, tier model roles and budget_exhausted stops; core exports the shared policy, and VS Code behaviour is unchanged.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.41.0",
-      "baselineRef": "assistant-v0.41.0",
-      "reserved": "0.41.0",
-      "commits": ["6513bf69d3c9e7bfd80d459ad358326ed1f8094a"],
+      "published": "0.42.0",
+      "baselineRef": "assistant-v0.42.0",
+      "reserved": "0.42.0",
+      "commits": ["90741b587fdbd211d28aa58b443f958a573a0a3a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.42.0",
+      "version": "0.43.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.42.0",
+      "tag": "assistant-v0.43.0",
       "notes": [
         {
-          "sha": "6513bf69d3c9e7bfd80d459ad358326ed1f8094a",
-          "subject": "feat(workspace-host): give background agents VS Code's expectedResult and reviewScope",
-          "summary": "CLI and Assistant background agents now accept VS Code's reviewScope and expectedResult, returning validated structured results, and the SDK adds @agentlink/core/background-results and review-scope subpaths.",
+          "sha": "90741b587fdbd211d28aa58b443f958a573a0a3a",
+          "subject": "feat(workspace-host): add VS Code taskClass, modelTier and budget to background agents",
+          "summary": "CLI and Assistant background agents now accept taskClass, modelTier and budget with read-only review and research children, tier model roles and budget_exhausted stops; core exports the shared policy, and VS Code behaviour is unchanged.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "6513bf69d3c9e7bfd80d459ad358326ed1f8094a": {
+    "c726851fc64e4b7b185d5eb06334ce7e1158d2a3": {
+      "bump": "none",
+      "breakingUnits": [],
+      "summary": "Adds a Best of Agent Harnesses badge to the README, a documentation-only change with no effect on shipped behaviour.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "90741b587fdbd211d28aa58b443f958a573a0a3a": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "CLI and Assistant background agents now accept VS Code's reviewScope and expectedResult, returning validated structured results, and the SDK adds @agentlink/core/background-results and review-scope subpaths.",
-      "coverage": "partial",
+      "summary": "CLI and Assistant background agents now accept taskClass, modelTier and budget with read-only review and research children, tier model roles and budget_exhausted stops; core exports the shared policy, and VS Code behaviour is unchanged.",
+      "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     }
