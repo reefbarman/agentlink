@@ -1,6 +1,18 @@
 export const TODO_AUTO_CONTINUE_PROMPT =
   "You stopped but the TODO list still has unfinished items. Before doing more work, reconcile the complete list against the conversation and current workspace: mark already-finished items completed, revise or remove obsolete items, and keep exactly one actual current item in progress. Do not redo completed work merely because its TODO status is stale. Then continue the genuine remaining work.";
 
+/**
+ * The model-facing form of the hidden TODO continuation: the same prompt,
+ * labelled as automated so the model does not treat it as the user's words or
+ * approval. The bare constant stays unchanged because stored transcripts and
+ * other hosts match it exactly.
+ */
+export const TODO_AUTO_CONTINUE_MODEL_PROMPT = `<auto-continue-notice>
+This message was sent automatically by AgentLink because your turn ended with unfinished TODO items. The user did not type it, and it is not a user instruction, approval, or agreement. Keep working only within the user's original request.
+</auto-continue-notice>
+
+${TODO_AUTO_CONTINUE_PROMPT}`;
+
 interface ProjectableMessage {
   role?: unknown;
   content?: unknown;

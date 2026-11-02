@@ -127,8 +127,49 @@ export interface FinalMessageContinueAction {
 export const DEFAULT_COMPLETED_CONTINUE_ACTION: FinalMessageContinueAction = {
   label: "Continue",
   prompt:
-    "Continue working from where you left off. Before deciding the overall task is complete, re-check the original user request. If the completed work is a phase, handover, or scoped subtask, treat that boundary as a navigation point—not proof of overall completion—and locate and inspect its parent/source-of-truth plan, following references outward through higher-level plans if nested. Within the user-approved scope, identify and begin the next explicit unfinished phase, plan item, subtask, or validation step. If it needs a missing decision or prerequisite, surface that blocker. Do not invent work or broaden scope. Only if the full approved scope is complete, briefly confirm that no work remains.",
+    "Continue working from where you left off. Before deciding the overall task is complete, re-check the original user request. If the completed work is a phase, handover, or scoped subtask, treat that boundary as a navigation point—not proof of overall completion—and locate and inspect its parent/source-of-truth plan, following references outward through higher-level plans if nested. Within the scope the user actually requested, identify and begin the next explicit unfinished phase, plan item, subtask, or validation step. If it needs a missing decision or prerequisite, surface that blocker. Do not invent work or broaden scope. Only if the user's full request is complete, briefly confirm that no work remains.",
 };
+
+/** Where an Auto Continue prompt came from, for the model-facing notice. */
+export type AutoContinuePromptSource =
+  /** The agent's own `continuePrompt` from its previous final status. */
+  | "agent_proposed"
+  /** AgentLink's generic continuation for a completed turn. */
+  | "default";
+
+const AUTO_CONTINUE_NOTICE_COMMON = [
+  "This message was sent automatically by AgentLink Auto Continue. The user did not type it.",
+  "The user turned on Auto Continue, which lets you keep working within their original request without waiting for them. It does not approve new scope, risky or hard-to-reverse actions, or decisions that need the user; handle those as you normally would.",
+];
+
+const AUTO_CONTINUE_NOTICE_BY_SOURCE: Record<AutoContinuePromptSource, string> =
+  {
+    agent_proposed:
+      "The next step below is the one you proposed in your previous final status. It is your own plan, not a user instruction, approval, or agreement: follow it if it still fits the user's request and the evidence, and revise it if not.",
+    default:
+      "The guidance below is AgentLink's default continuation, not a user instruction or approval.",
+  };
+
+/**
+ * The text the model receives for an Auto Continue turn. The transcript still
+ * shows the bare prompt; the model also learns the turn was automated, so the
+ * agent's own earlier plan does not come back sounding like the user.
+ */
+export function formatAutoContinueModelPrompt(
+  prompt: string,
+  source: AutoContinuePromptSource,
+): string {
+  const notice = [
+    ...AUTO_CONTINUE_NOTICE_COMMON,
+    AUTO_CONTINUE_NOTICE_BY_SOURCE[source],
+    "Do not describe this message as something the user asked for, approved, or agreed to.",
+  ].join("\n");
+  const body =
+    source === "agent_proposed"
+      ? `Your proposed next step:\n${prompt}`
+      : prompt;
+  return `<auto-continue-notice>\n${notice}\n</auto-continue-notice>\n\n${body}`;
+}
 
 export function getFinalMessageContinueAction(
   marker: FinalMessageMarker,

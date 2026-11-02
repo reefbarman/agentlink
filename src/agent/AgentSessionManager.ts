@@ -316,7 +316,7 @@ import {
   getLegacyTodoContinuationIndexes,
   getVisibleUserMessageIndexes,
   migrateLegacyTodoContinuationTurnIndex,
-  TODO_AUTO_CONTINUE_PROMPT,
+  TODO_AUTO_CONTINUE_MODEL_PROMPT,
 } from "@agentlink/protocol/todo-continuation";
 import {
   resolveForkUserMessageIndex,
@@ -8025,7 +8025,7 @@ export class AgentSessionManager {
                 this.log?.(
                   `[agent] auto-continuing (${autoContinueCount}/${MAX_AUTO_CONTINUE}): pending todos remain`,
                 );
-                session.addUserMessage(TODO_AUTO_CONTINUE_PROMPT, {
+                session.addUserMessage(TODO_AUTO_CONTINUE_MODEL_PROMPT, {
                   hidden: true,
                 });
                 session.status = "streaming";

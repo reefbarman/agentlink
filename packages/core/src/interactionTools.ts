@@ -191,7 +191,7 @@ export const SET_TASK_STATUS_TOOL: ToolDefinition = {
       continuePrompt: {
         type: "string",
         description:
-          "Visible user message sent when the continuation button is clicked. Make it specific enough to start the named next step, not just a generic 'continue', whenever there is remaining work from the original plan or a concrete follow-up in the summary. Wrap any command, slash command, file path, or code in backticks (for example `npm test`) so sending the prompt unchanged cannot invoke it as a command.",
+          "Next-step prompt, shown to the user and sent when they click the button or Auto Continue runs. Name the specific next step, not a generic 'continue', when work remains from the plan or a follow-up is in the summary; never claim the user approved it. Wrap commands, slash commands, file paths, and code in backticks (for example `npm test`) so sending it unchanged cannot invoke them.",
       },
     },
     required: ["status"],

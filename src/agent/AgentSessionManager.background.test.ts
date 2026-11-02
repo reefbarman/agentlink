@@ -9464,6 +9464,13 @@ describe("AgentSessionManager background agents", () => {
       ),
       { hidden: true },
     );
+    // The model is told the continuation is automated, not the user's words.
+    expect(addUserMessageSpy).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^<auto-continue-notice>\n[^\n]*The user did not type it/,
+      ),
+      { hidden: true },
+    );
   });
 
   it("does not auto-continue pending todos after an explicit final marker", async () => {

@@ -1,4 +1,5 @@
 import {
+  formatAutoContinueModelPrompt,
   getFinalMessageContinueAction,
   type FinalMessageMarker,
 } from "@agentlink/protocol/final-status";
@@ -30,16 +31,23 @@ export type SessionAutoContinueObservedMessage = {
   toolName?: string;
 };
 
-export interface SessionAutoContinueControllerOptions {
+/** One continue turn for a surface to commit. */
+export interface SessionAutoContinueSendRequest {
+  sessionId: string;
+  /** The bare continue prompt, shown in the transcript. */
+  displayText: string;
+  /** What the model receives: the prompt labelled as automated. */
+  modelText: string;
   /**
-   * Send the continue prompt as a new user turn. `isStillWanted` turns false
-   * once the user turns Auto Continue off or another user message lands.
+   * Turns false once the user turns Auto Continue off or another user
+   * message lands.
    */
-  sendPrompt(
-    sessionId: string,
-    prompt: string,
-    isStillWanted: () => boolean,
-  ): void;
+  isStillWanted: () => boolean;
+}
+
+export interface SessionAutoContinueControllerOptions {
+  /** Send the continue prompt as a new user turn. */
+  sendPrompt(request: SessionAutoContinueSendRequest): void;
   /** Publish a changed state to every surface. */
   publish(update: SessionAutoContinueUpdate): void;
   /** Messages queued by a user win over the continue prompt. */
@@ -240,14 +248,19 @@ export class SessionAutoContinueController {
     );
     this.publish(sessionId, record, { kind: "continued" });
     const generation = record.generation;
-    this.options.sendPrompt(
+    this.options.sendPrompt({
       sessionId,
-      action.prompt,
-      () =>
+      displayText: action.prompt,
+      modelText: formatAutoContinueModelPrompt(
+        action.prompt,
+        // getFinalMessageContinueAction prefers the agent's own next step.
+        marker.continueAction ? "agent_proposed" : "default",
+      ),
+      isStillWanted: () =>
         this.sessions.get(sessionId) === record &&
         record.enabled &&
         record.generation === generation,
-    );
+    });
   }
 
   private stop(

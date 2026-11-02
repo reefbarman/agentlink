@@ -8,6 +8,7 @@ import type { AgentMessage } from "./types.js";
 import type { AppAction } from "../shared/chatProjection.js";
 import type { ChatStateSnapshot as ChatState } from "@agentlink/protocol/chat-state";
 import type { ChatTab } from "@agentlink/protocol/chat-workspace";
+import { formatAutoContinueModelPrompt } from "@agentlink/protocol/final-status";
 
 const testHome = vi.hoisted(() => {
   const fs = require("node:fs") as typeof import("node:fs");
@@ -6284,11 +6285,16 @@ describe("ChatViewProvider session state sync", () => {
       await vi.runAllTimersAsync();
 
       expect(sendMessage).toHaveBeenCalledTimes(1);
+      // The model is told the turn is automated and the step is its own
+      // proposal; the transcript shows only the prompt.
       expect(sendMessage).toHaveBeenCalledWith(
         session.id,
-        "Do the next slice.",
+        formatAutoContinueModelPrompt("Do the next slice.", "agent_proposed"),
         "code",
-        expect.objectContaining({ origin: "vscode" }),
+        expect.objectContaining({
+          origin: "vscode",
+          displayText: "Do the next slice.",
+        }),
       );
       expect(
         provider.getBrowserDetachedSessionState(session.id).autoContinue,
@@ -6360,7 +6366,9 @@ describe("ChatViewProvider session state sync", () => {
       expect(sendMessage).toHaveBeenCalledTimes(1);
       expect(sendMessage).toHaveBeenCalledWith(
         session.id,
-        expect.stringContaining("Continue working from where you left off"),
+        expect.stringMatching(
+          /^<auto-continue-notice>[\s\S]*AgentLink's default continuation[\s\S]*Continue working from where you left off/,
+        ),
         "code",
         expect.objectContaining({ origin: "vscode" }),
       );

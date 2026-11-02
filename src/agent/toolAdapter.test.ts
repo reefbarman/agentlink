@@ -2389,7 +2389,11 @@ describe("getAgentTools", () => {
       "when the final summary names a concrete follow-up",
     );
     expect(properties.continuePrompt.description).toContain(
-      "remaining work from the original plan",
+      "when work remains from the plan",
+    );
+    // Auto Continue sends this back to the agent; it must not pose as the user.
+    expect(properties.continuePrompt.description).toContain(
+      "never claim the user approved it",
     );
   });
 

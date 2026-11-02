@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   DEFAULT_COMPLETED_CONTINUE_ACTION,
+  formatAutoContinueModelPrompt,
   getFinalMessageContinueAction,
   getLatestAutoContinueAction,
   getLatestFinalMessageMarker,
@@ -42,13 +43,40 @@ describe("getLatestAutoContinueAction", () => {
     expect(prompt).toContain("original user request");
     expect(prompt).toContain("parent/source-of-truth plan");
     expect(prompt).toContain("higher-level plans if nested");
-    expect(prompt).toContain("user-approved scope");
+    expect(prompt).toContain("scope the user actually requested");
+    expect(prompt).not.toMatch(/approv/i);
     expect(DEFAULT_COMPLETED_CONTINUE_ACTION.prompt).toContain(
       "next explicit unfinished phase, plan item, subtask, or validation step",
     );
     expect(prompt).toContain("missing decision or prerequisite");
     expect(prompt).toContain("Do not invent work or broaden scope");
-    expect(prompt).toContain("full approved scope is complete");
+    expect(prompt).toContain("user's full request is complete");
+  });
+
+  it("labels Auto Continue prompts as automated, not user approval", () => {
+    const proposed = formatAutoContinueModelPrompt(
+      "Run the tests",
+      "agent_proposed",
+    );
+    expect(proposed).toMatch(/^<auto-continue-notice>\n/);
+    expect(proposed).toContain("The user did not type it.");
+    expect(proposed).toContain("does not approve new scope");
+    expect(proposed).toContain("your own plan, not a user instruction");
+    expect(proposed).toMatch(
+      /<\/auto-continue-notice>\n\nYour proposed next step:\nRun the tests$/,
+    );
+
+    const fallback = formatAutoContinueModelPrompt(
+      DEFAULT_COMPLETED_CONTINUE_ACTION.prompt,
+      "default",
+    );
+    expect(fallback).toContain("AgentLink's default continuation");
+    expect(fallback).not.toContain("Your proposed next step");
+    expect(
+      fallback.endsWith(
+        `</auto-continue-notice>\n\n${DEFAULT_COMPLETED_CONTINUE_ACTION.prompt}`,
+      ),
+    ).toBe(true);
   });
 
   it("continues completed markers even when the legacy tool-set suppression field is present", () => {

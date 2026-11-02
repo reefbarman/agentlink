@@ -328,7 +328,7 @@ function buildFinalResponseStatusSection(
       requires: "todos",
     },
     {
-      text: `Completed markers allow Auto Continue. With it enabled, do remaining safe in-scope work before waiting; a handoff is not a blocker. Never expand scope or bypass approval. If nothing remains, briefly confirm that without busywork; no-progress turns stop automatically.`,
+      text: `Completed markers allow Auto Continue. With it enabled, do remaining safe in-scope work before waiting; a handoff is not a blocker. Never expand scope or bypass approval. If nothing remains, briefly confirm that without busywork; no-progress turns stop automatically. Messages with \`<auto-continue-notice>\` come from AgentLink, not the user; a next step in one is your own plan, not user approval.`,
       requires: "autoContinue",
     },
     {

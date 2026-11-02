@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { AUTO_CONTINUE_NO_PROGRESS_REASON } from "@agentlink/protocol/auto-continue-progress";
-import { DEFAULT_COMPLETED_CONTINUE_ACTION } from "@agentlink/protocol/final-status";
+import {
+  DEFAULT_COMPLETED_CONTINUE_ACTION,
+  formatAutoContinueModelPrompt,
+} from "@agentlink/protocol/final-status";
 import {
   AUTO_CONTINUE_MAX_TURNS,
   SessionAutoContinueController,
+  type SessionAutoContinueSendRequest,
   type SessionAutoContinueUpdate,
 } from "./SessionAutoContinueController.js";
 
@@ -12,16 +16,11 @@ function makeController(
   idleMarker: Record<string, { status: string } | null> = {},
 ) {
   const logs: string[] = [];
-  const sent: Array<{
-    sessionId: string;
-    prompt: string;
-    isStillWanted: () => boolean;
-  }> = [];
+  const sent: SessionAutoContinueSendRequest[] = [];
   const updates: SessionAutoContinueUpdate[] = [];
   const hasQueued = vi.fn(() => queued);
   const controller = new SessionAutoContinueController({
-    sendPrompt: (sessionId, prompt, isStillWanted) =>
-      sent.push({ sessionId, prompt, isStillWanted }),
+    sendPrompt: (request) => sent.push(request),
     publish: (update) => updates.push(update),
     hasQueuedUserMessages: hasQueued,
     getIdleFinalMarker: (sessionId) => (idleMarker[sessionId] as never) ?? null,
@@ -78,7 +77,11 @@ describe("SessionAutoContinueController", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({
       sessionId: "session-a",
-      prompt: DEFAULT_COMPLETED_CONTINUE_ACTION.prompt,
+      displayText: DEFAULT_COMPLETED_CONTINUE_ACTION.prompt,
+      modelText: formatAutoContinueModelPrompt(
+        DEFAULT_COMPLETED_CONTINUE_ACTION.prompt,
+        "default",
+      ),
     });
     expect(sent[0]!.isStillWanted()).toBe(true);
     expect(updates.at(-1)).toMatchObject({
@@ -93,6 +96,32 @@ describe("SessionAutoContinueController", () => {
       sessionId: "session-a",
     });
     expect(sent[0]!.isStillWanted()).toBe(false);
+  });
+
+  it("labels the agent's own next step as its proposal, not the user's", () => {
+    const { controller, sent } = makeController();
+    controller.setEnabled("session-a", true);
+
+    controller.observe({
+      type: "agentFinalMarker",
+      sessionId: "session-a",
+      marker: {
+        status: "completed",
+        source: "tool",
+        continueAction: { label: "Run tests", prompt: "Run `npm test`." },
+      },
+    });
+    controller.observe({ type: "agentDone", sessionId: "session-a" });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      displayText: "Run `npm test`.",
+      modelText: formatAutoContinueModelPrompt(
+        "Run `npm test`.",
+        "agent_proposed",
+      ),
+    });
+    expect(sent[0]!.modelText).toContain("<auto-continue-notice>");
   });
 
   it("stops when the agent waits for the user", () => {
@@ -162,7 +191,7 @@ describe("SessionAutoContinueController", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({
       sessionId: "session-done",
-      prompt: DEFAULT_COMPLETED_CONTINUE_ACTION.prompt,
+      displayText: DEFAULT_COMPLETED_CONTINUE_ACTION.prompt,
     });
     expect(updates.at(-1)).toMatchObject({
       sessionId: "session-done",

@@ -270,6 +270,7 @@ import {
 import { stripMemoryCandidateReminders } from "../shared/memoryCandidates.js";
 import {
   SessionAutoContinueController,
+  type SessionAutoContinueSendRequest,
   type SessionAutoContinueState,
   type SessionAutoContinueUpdate,
 } from "./SessionAutoContinueController.js";
@@ -1466,8 +1467,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     new vscode.EventEmitter<void>();
   /** Auto Continue is per session and shared by VS Code and the browser. */
   private readonly autoContinue = new SessionAutoContinueController({
-    sendPrompt: (sessionId, prompt, isStillWanted) =>
-      this.sendAutoContinuePrompt(sessionId, prompt, isStillWanted),
+    sendPrompt: (request) => this.sendAutoContinuePrompt(request),
     publish: (update) => this.publishAutoContinueState(update),
     hasQueuedUserMessages: (sessionId) =>
       this.sessionManager?.getSession(sessionId)?.hasQueuedUiMessages ?? false,
@@ -10850,11 +10850,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * started the session first or Auto Continue was turned off meanwhile.
    */
   private sendAutoContinuePrompt(
-    sessionId: string,
-    prompt: string,
-    isStillWanted: () => boolean,
+    request: SessionAutoContinueSendRequest,
     attempt = 0,
   ): void {
+    const { sessionId, isStillWanted } = request;
     setTimeout(
       () => {
         if (!isStillWanted()) {
@@ -10875,12 +10874,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (this.isSessionTurnLive(session)) {
           // The finished run may still be saving; give it a moment.
           if (attempt < AUTO_CONTINUE_SETTLE_ATTEMPTS) {
-            this.sendAutoContinuePrompt(
-              sessionId,
-              prompt,
-              isStillWanted,
-              attempt + 1,
-            );
+            this.sendAutoContinuePrompt(request, attempt + 1);
           } else {
             this.autoContinue.reportSendFailure(
               sessionId,
@@ -10889,7 +10883,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
           return;
         }
-        this.commitAutoContinuePrompt(mgr, session, prompt);
+        this.commitAutoContinuePrompt(mgr, session, request);
       },
       attempt === 0 ? 0 : AUTO_CONTINUE_SETTLE_RETRY_MS,
     );
@@ -10898,24 +10892,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private commitAutoContinuePrompt(
     mgr: AgentSessionManager,
     session: AgentSession,
-    prompt: string,
+    request: SessionAutoContinueSendRequest,
   ): void {
     const sessionId = session.id;
+    const { displayText, modelText } = request;
     const reasoningEffort = session.reasoningEffort;
     this.postMessage({
       type: "agentCommittedUserMessage",
       sessionId,
       id: randomUUID(),
-      text: prompt,
-      displayText: prompt,
+      text: modelText,
+      displayText,
       origin: "vscode",
     });
+    // The model sees the automated-turn notice; the transcript shows the
+    // bare prompt.
     mgr
-      .sendMessage(sessionId, prompt, session.mode, {
+      .sendMessage(sessionId, modelText, session.mode, {
         thinkingEnabled: reasoningEffort !== "none",
         reasoningEffort,
         activeFilePath: session.activeFilePath,
-        displayText: prompt,
+        displayText,
         origin: "vscode",
       })
       .catch((err) => {
