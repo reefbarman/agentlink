@@ -247,6 +247,145 @@ export const FORBIDDEN_PATHS_PROPERTY = {
   description: "Paths the delegated agent must not modify.",
 } as const;
 
+// --- Review targets and structured results ----------------------------------
+
+/** VS Code's `reviewScope` property of `spawn_background_agent`. */
+export const REVIEW_SCOPE_PROPERTY = {
+  description:
+    "Structured review target. working_tree, files, and commit_range are compact live selectors: the reviewer inspects the current workspace when it starts, so concurrent unrelated work may be visible and should be triaged by the foreground coordinator. Relative paths resolve from the executing project; absolute paths inside open workspace roots are accepted. Git selectors stay within one root, chosen with root in multi-root workspaces; files may span roots. excludePaths tells the live reviewer what to omit. Use diff only as an explicit immutable escape hatch for bounded caller-supplied hunks.",
+  oneOf: [
+    {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["working_tree"] },
+        include: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["staged", "unstaged", "untracked"],
+          },
+        },
+        paths: { type: "array", items: { type: "string" } },
+        excludePaths: { type: "array", items: { type: "string" } },
+        root: { type: "string" },
+      },
+      required: ["kind"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["files"] },
+        paths: { type: "array", items: { type: "string" } },
+        excludePaths: { type: "array", items: { type: "string" } },
+      },
+      required: ["kind", "paths"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["commit_range"] },
+        range: { type: "string" },
+        paths: { type: "array", items: { type: "string" } },
+        excludePaths: { type: "array", items: { type: "string" } },
+        root: { type: "string" },
+      },
+      required: ["kind", "range"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["diff"] },
+        content: { type: "string" },
+        label: { type: "string" },
+      },
+      required: ["kind", "content"],
+      additionalProperties: false,
+    },
+  ],
+} as const;
+
+/** VS Code's `expectedResult` property of `spawn_background_agent`. */
+export const EXPECTED_RESULT_PROPERTY = {
+  type: "string",
+  enum: ["text", "review_findings", "patch", "verification"],
+  description:
+    "Structured result envelope the agent must return. review_findings reports emptyDiff when a live diff/range is empty or unavailable; the runtime attributes the normalized target automatically and accepts reviewedScope only as an optional override.",
+} as const;
+
+/** VS Code's reading of a `spawn_background_agent` `expectedResult` input. */
+export function parseExpectedResultInput(
+  value: unknown,
+): SpawnBackgroundRequest["expectedResult"] {
+  return value === "text" ||
+    value === "review_findings" ||
+    value === "patch" ||
+    value === "verification"
+    ? value
+    : undefined;
+}
+
+/**
+ * VS Code's reading of a `spawn_background_agent` `reviewScope` input: known
+ * fields only, coerced to strings. Validation against the workspace happens
+ * when the scope is captured.
+ */
+export function parseReviewScopeInput(value: unknown): ReviewScope | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const scope = value as Record<string, unknown>;
+  const paths = Array.isArray(scope.paths)
+    ? scope.paths.map(String)
+    : undefined;
+  const excludePaths = Array.isArray(scope.excludePaths)
+    ? scope.excludePaths.map(String)
+    : undefined;
+  const root =
+    typeof scope.root === "string" && scope.root.trim()
+      ? scope.root
+      : undefined;
+  if (scope.kind === "working_tree") {
+    const include = Array.isArray(scope.include)
+      ? scope.include.filter(
+          (entry): entry is "staged" | "unstaged" | "untracked" =>
+            entry === "staged" || entry === "unstaged" || entry === "untracked",
+        )
+      : undefined;
+    return {
+      kind: "working_tree",
+      include,
+      paths,
+      excludePaths,
+      root,
+    };
+  }
+  if (scope.kind === "files") {
+    return {
+      kind: "files",
+      paths: paths ?? [],
+      excludePaths,
+    };
+  }
+  if (scope.kind === "commit_range") {
+    return {
+      kind: "commit_range",
+      range: String(scope.range ?? ""),
+      paths,
+      excludePaths,
+      root,
+    };
+  }
+  if (scope.kind === "diff") {
+    return {
+      kind: "diff",
+      content: String(scope.content ?? ""),
+      label: scope.label === undefined ? undefined : String(scope.label),
+    };
+  }
+  return undefined;
+}
+
 /**
  * Who enforces delegated paths: VS Code's native agents, external ACP agents
  * (advisory only), or a workspace host, where a child without owned paths

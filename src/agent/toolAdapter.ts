@@ -34,11 +34,10 @@ import type {
   FleetWorkflowOutcome,
   FleetWorkflowRequest,
 } from "./FleetWorkflows.js";
-import { isFleetResultEnvelope } from "./FleetWorkflows.js";
 import {
-  getFleetResultSchema,
-  validateFleetResult,
-} from "../shared/fleetResultSchema.js";
+  backgroundSetTaskStatusTool,
+  checkBackgroundTaskStatusResult,
+} from "@agentlink/core/background-results";
 import type { FleetAutomation } from "./FleetAutomationStore.js";
 import {
   mcpMutationTarget,
@@ -86,8 +85,12 @@ import {
   parseAskUserInput,
 } from "@agentlink/core/interaction-tools";
 import {
+  EXPECTED_RESULT_PROPERTY,
   FORBIDDEN_PATHS_PROPERTY,
   OWNED_PATHS_PROPERTY,
+  REVIEW_SCOPE_PROPERTY,
+  parseExpectedResultInput,
+  parseReviewScopeInput,
   GET_BACKGROUND_RESULT_TOOL,
   GET_BACKGROUND_STATUS_TOOL,
   KILL_BACKGROUND_AGENT_TOOL,
@@ -527,23 +530,7 @@ function getSetTaskStatusTool(
   isBackground = false,
 ): ToolDefinition {
   if (!isBackground) return SET_TASK_STATUS_TOOL;
-  const { $schema: _, ...resultSchema } = z.toJSONSchema(
-    getFleetResultSchema(expectedResult),
-  );
-  const resultGuidance = expectedResult
-    ? `This background task expects a structured ${expectedResult} result; include it in the result field when completing the task instead of printing serialized JSON in assistant text.`
-    : "For coordinator-facing information or summaries, you may return a structured result instead of serializing data into assistant text.";
-  return {
-    ...SET_TASK_STATUS_TOOL,
-    description: `${SET_TASK_STATUS_TOOL.description} ${resultGuidance} The result field is the coordinator-facing output, so summary may be omitted and should not duplicate it.`,
-    input_schema: {
-      ...SET_TASK_STATUS_TOOL.input_schema,
-      properties: {
-        ...SET_TASK_STATUS_TOOL.input_schema.properties,
-        result: resultSchema,
-      },
-    },
-  };
+  return backgroundSetTaskStatusTool(expectedResult);
 }
 
 const RESPOND_TO_BACKGROUND_QUESTION_TOOL: ToolDefinition = {
@@ -691,68 +678,8 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
           description:
             "Copy recent images from the foreground session into the background agent's first message. Includes user-attached images and screenshot/image tool results. Pass true for up to 4 recent images or a number for that many (maximum 8). Native in-process backgrounds only.",
         },
-        reviewScope: {
-          description:
-            "Structured review target. working_tree, files, and commit_range are compact live selectors: the reviewer inspects the current workspace when it starts, so concurrent unrelated work may be visible and should be triaged by the foreground coordinator. Relative paths resolve from the executing project; absolute paths inside open workspace roots are accepted. Git selectors stay within one root, chosen with root in multi-root workspaces; files may span roots. excludePaths tells the live reviewer what to omit. Use diff only as an explicit immutable escape hatch for bounded caller-supplied hunks.",
-          oneOf: [
-            {
-              type: "object",
-              properties: {
-                kind: { type: "string", enum: ["working_tree"] },
-                include: {
-                  type: "array",
-                  items: {
-                    type: "string",
-                    enum: ["staged", "unstaged", "untracked"],
-                  },
-                },
-                paths: { type: "array", items: { type: "string" } },
-                excludePaths: { type: "array", items: { type: "string" } },
-                root: { type: "string" },
-              },
-              required: ["kind"],
-              additionalProperties: false,
-            },
-            {
-              type: "object",
-              properties: {
-                kind: { type: "string", enum: ["files"] },
-                paths: { type: "array", items: { type: "string" } },
-                excludePaths: { type: "array", items: { type: "string" } },
-              },
-              required: ["kind", "paths"],
-              additionalProperties: false,
-            },
-            {
-              type: "object",
-              properties: {
-                kind: { type: "string", enum: ["commit_range"] },
-                range: { type: "string" },
-                paths: { type: "array", items: { type: "string" } },
-                excludePaths: { type: "array", items: { type: "string" } },
-                root: { type: "string" },
-              },
-              required: ["kind", "range"],
-              additionalProperties: false,
-            },
-            {
-              type: "object",
-              properties: {
-                kind: { type: "string", enum: ["diff"] },
-                content: { type: "string" },
-                label: { type: "string" },
-              },
-              required: ["kind", "content"],
-              additionalProperties: false,
-            },
-          ],
-        },
-        expectedResult: {
-          type: "string",
-          enum: ["text", "review_findings", "patch", "verification"],
-          description:
-            "Structured result envelope the agent must return. review_findings reports emptyDiff when a live diff/range is empty or unavailable; the runtime attributes the normalized target automatically and accepts reviewedScope only as an optional override.",
-        },
+        reviewScope: REVIEW_SCOPE_PROPERTY,
+        expectedResult: EXPECTED_RESULT_PROPERTY,
         budget: AGENT_BUDGET_SCHEMA,
         goalId: { type: "string" },
       },
@@ -3935,45 +3862,16 @@ async function dispatchToolCallWithTrackedApprovals(
           isError: true,
         };
       }
-      const expectedResult = ctx.backgroundExpectedResult;
       const structuredResult = params.result;
-      if (
-        status === "completed" &&
-        isFleetResultEnvelope(structuredResult) &&
-        structuredResult.type === "text" &&
-        !structuredResult.text.trim()
-      ) {
+      const rejection = checkBackgroundTaskStatusResult({
+        status,
+        result: structuredResult,
+        expectedResult: ctx.backgroundExpectedResult,
+      });
+      if (rejection) {
         return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error:
-                  "Completion requires non-empty text in set_task_status.result.text",
-              }),
-            },
-          ],
+          content: [{ type: "text", text: JSON.stringify(rejection) }],
         };
-      }
-      const requiredResult =
-        status === "completed" ? expectedResult : undefined;
-      if (requiredResult || structuredResult !== undefined) {
-        const issues = validateFleetResult(structuredResult, requiredResult);
-        if (issues.length) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  error: requiredResult
-                    ? `Background completion requires a valid ${requiredResult} result in set_task_status.result`
-                    : "Invalid structured result",
-                  issues,
-                }),
-              },
-            ],
-          };
-        }
       }
       const marker = buildTaskStatusMarker({
         status,
@@ -5107,73 +5005,8 @@ async function dispatchToolCallWithTrackedApprovals(
             : undefined,
 
         ...(images.length ? { images } : {}),
-        reviewScope:
-          params.reviewScope && typeof params.reviewScope === "object"
-            ? (() => {
-                const scope = params.reviewScope as Record<string, unknown>;
-                const paths = Array.isArray(scope.paths)
-                  ? scope.paths.map(String)
-                  : undefined;
-                const excludePaths = Array.isArray(scope.excludePaths)
-                  ? scope.excludePaths.map(String)
-                  : undefined;
-                const root =
-                  typeof scope.root === "string" && scope.root.trim()
-                    ? scope.root
-                    : undefined;
-                if (scope.kind === "working_tree") {
-                  const include = Array.isArray(scope.include)
-                    ? scope.include.filter(
-                        (value): value is "staged" | "unstaged" | "untracked" =>
-                          value === "staged" ||
-                          value === "unstaged" ||
-                          value === "untracked",
-                      )
-                    : undefined;
-                  return {
-                    kind: "working_tree" as const,
-                    include,
-                    paths,
-                    excludePaths,
-                    root,
-                  };
-                }
-                if (scope.kind === "files") {
-                  return {
-                    kind: "files" as const,
-                    paths: paths ?? [],
-                    excludePaths,
-                  };
-                }
-                if (scope.kind === "commit_range") {
-                  return {
-                    kind: "commit_range" as const,
-                    range: String(scope.range ?? ""),
-                    paths,
-                    excludePaths,
-                    root,
-                  };
-                }
-                if (scope.kind === "diff") {
-                  return {
-                    kind: "diff" as const,
-                    content: String(scope.content ?? ""),
-                    label:
-                      scope.label === undefined
-                        ? undefined
-                        : String(scope.label),
-                  };
-                }
-                return undefined;
-              })()
-            : undefined,
-        expectedResult:
-          params.expectedResult === "text" ||
-          params.expectedResult === "review_findings" ||
-          params.expectedResult === "patch" ||
-          params.expectedResult === "verification"
-            ? params.expectedResult
-            : undefined,
+        reviewScope: parseReviewScopeInput(params.reviewScope),
+        expectedResult: parseExpectedResultInput(params.expectedResult),
         budget:
           params.budget && typeof params.budget === "object"
             ? (() => {

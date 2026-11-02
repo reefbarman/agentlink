@@ -358,6 +358,36 @@
         "default": "./dist/cjs/backgroundAgentTools.cjs"
       }
     },
+    "./background-results": {
+      "browser": {
+        "types": "./dist/backgroundResults.d.ts",
+        "default": "./dist/backgroundResults.js"
+      },
+      "edge": {
+        "types": "./dist/backgroundResults.d.ts",
+        "default": "./dist/backgroundResults.js"
+      },
+      "import": {
+        "types": "./dist/backgroundResults.d.ts",
+        "default": "./dist/backgroundResults.js"
+      },
+      "require": {
+        "types": "./dist/cjs/backgroundResults.d.cts",
+        "default": "./dist/cjs/backgroundResults.cjs"
+      }
+    },
+    "./review-scope": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/reviewScope.d.ts",
+        "default": "./dist/reviewScope.js"
+      },
+      "require": {
+        "types": "./dist/cjs/reviewScope.d.cts",
+        "default": "./dist/cjs/reviewScope.cjs"
+      }
+    },
     "./command-classifier": {
       "browser": null,
       "edge": null,

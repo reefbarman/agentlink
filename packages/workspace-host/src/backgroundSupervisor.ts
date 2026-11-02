@@ -9,10 +9,25 @@ import type {
   BackgroundResultState,
 } from "@agentlink/protocol";
 
-import { appendOwnershipHandoff } from "@agentlink/core/background-agent-tools";
+import {
+  appendOwnershipHandoff,
+  type ReviewScope,
+} from "@agentlink/core/background-agent-tools";
+import {
+  withFleetResultInstruction,
+  type BackgroundExpectedResult,
+} from "@agentlink/core/background-results";
+import {
+  buildReviewHandoff,
+  captureReviewScope,
+} from "@agentlink/core/review-scope";
+import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
+import type { FleetResultEnvelope } from "@agentlink/protocol/fleet-result";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+
+import { resolveWorkspaceBackgroundCompletion } from "./backgroundCompletion.js";
 
 const STATE_VERSION = 1;
 const STATE_FILE = "background-agents.json";
@@ -90,6 +105,14 @@ export interface WorkspaceBackgroundRecord {
   readonly terminalReason?: string;
   readonly approval?: WorkspaceBackgroundApproval;
   readonly steeringQueued: number;
+  /** VS Code's `expectedResult`: the result envelope the child must return. */
+  readonly expectedResult?: BackgroundExpectedResult;
+  /** The captured `reviewScope`, credited to review results without one. */
+  readonly reviewScopeSummary?: string;
+  /** The child's validated result envelope, once it completed. */
+  readonly structuredResult?: FleetResultEnvelope;
+  /** Why an `incomplete_expected_result` run is not a completed result. */
+  readonly expectedResultIssue?: string;
 }
 
 export interface SpawnWorkspaceBackgroundRequest {
@@ -117,6 +140,13 @@ export interface SpawnWorkspaceBackgroundRequest {
   readonly ownedPaths?: readonly string[];
   /** VS Code's `forbiddenPaths`: never writable, even inside owned paths. */
   readonly forbiddenPaths?: readonly string[];
+  /**
+   * VS Code's `reviewScope`: what a reviewer should review. Validated against
+   * the project and handed to the child as VS Code's review brief.
+   */
+  readonly reviewScope?: ReviewScope;
+  /** VS Code's `expectedResult`: the envelope the child must return. */
+  readonly expectedResult?: BackgroundExpectedResult;
   readonly model?: AgentModelReference;
   readonly reasoningEffort?: CoreReasoningEffort;
 }
@@ -203,6 +233,13 @@ export interface CreateWorkspaceBackgroundSupervisorOptions {
     readonly { readonly path: string; readonly kind: "file" | "directory" }[]
   >;
   readonly maxOutputBytes?: number;
+  /**
+   * Whether children can report through VS Code's background
+   * `set_task_status` (see `recordFinalStatus`). Without it, a child owing a
+   * structured result is told to print the envelope, as VS Code tells
+   * agents without that tool.
+   */
+  readonly childFinalStatus?: boolean;
   readonly now?: () => number;
   readonly createChildSession: (request: {
     readonly parentSessionId: string;
@@ -291,6 +328,11 @@ export class WorkspaceBackgroundSupervisor {
   private readonly steering = new Map<string, string[]>();
   private readonly waiters = new Map<string, Set<() => void>>();
   private readonly hostApprovals = new Map<string, PendingHostApproval>();
+  /** The latest `set_task_status` each running child reported. */
+  private readonly finalStatuses = new Map<
+    string,
+    Pick<FinalMessageMarker, "status" | "summary" | "result">
+  >();
   private readonly statePath: string;
   private readonly projectRoot: string;
   private readonly maxActiveChildren: number;
@@ -385,6 +427,13 @@ export class WorkspaceBackgroundSupervisor {
         MAX_MESSAGE_BYTES,
         "message",
       );
+      // As in VS Code, an invalid review target refuses the spawn before any
+      // child exists.
+      const reviewTarget = request.reviewScope
+        ? captureReviewScope(this.projectRoot, request.reviewScope, {
+            workspaceRoots: [this.projectRoot],
+          })
+        : undefined;
       // No write scopes makes a read-only child (for example a reviewer):
       // `assertWriteAllowed` refuses every write it attempts.
       const ownedScopes = await Promise.all(
@@ -448,15 +497,23 @@ export class WorkspaceBackgroundSupervisor {
         createdAt: timestamp,
         updatedAt: timestamp,
         steeringQueued: 0,
+        ...(request.expectedResult
+          ? { expectedResult: request.expectedResult }
+          : {}),
+        ...(reviewTarget ? { reviewScopeSummary: reviewTarget.summary } : {}),
       };
       this.records.set(record.childSessionId, record);
       this.steering.set(record.childSessionId, []);
       await this.persist();
-      // As in VS Code, a child given ownership is told its paths, which the
-      // host enforces.
-      const handoff =
+      // As in VS Code: a reviewer gets the review brief around its target,
+      // and a child given ownership is told its paths, which the host
+      // enforces.
+      const brief = reviewTarget
+        ? buildReviewHandoff({ message, target: reviewTarget })
+        : message;
+      const owned =
         request.ownedPaths !== undefined || request.forbiddenPaths !== undefined
-          ? appendOwnershipHandoff(message, {
+          ? appendOwnershipHandoff(brief, {
               ownedPaths: scopes
                 .filter((scope) => scope.access === "read_write")
                 .map((scope) => scope.path),
@@ -466,7 +523,10 @@ export class WorkspaceBackgroundSupervisor {
               backend: "workspace",
               executionRoot: this.projectRoot,
             })
-          : message;
+          : brief;
+      const handoff = this.options.childFinalStatus
+        ? owned
+        : withFleetResultInstruction(request.expectedResult, owned);
       this.startRun(record.childSessionId, handoff, false);
       return cloneRecord(
         this.requireOwned({
@@ -770,6 +830,22 @@ export class WorkspaceBackgroundSupervisor {
     return children.map((child) => child.childSessionId);
   }
 
+  /**
+   * Record a running child's VS Code `set_task_status` (already validated
+   * against its `expectedResult`). The latest one decides how the child's
+   * finished turn is recorded.
+   */
+  recordFinalStatus(
+    childSessionId: string,
+    marker: Pick<FinalMessageMarker, "status" | "summary" | "result">,
+  ): void {
+    const record = this.records.get(childSessionId);
+    if (!record || !isActive(record)) {
+      throw new Error("background_child_not_running");
+    }
+    this.finalStatuses.set(childSessionId, structuredClone(marker));
+  }
+
   assertWriteAllowed(sessionId: string, relativePath: string): boolean {
     const child = this.records.get(sessionId);
     if (child) {
@@ -951,16 +1027,56 @@ export class WorkspaceBackgroundSupervisor {
     const next = queued.shift();
     this.steering.set(childSessionId, queued);
     if (next && !controller.signal.aborted) {
+      // The steered turn reports for itself: an earlier set_task_status
+      // must not decide its result.
+      this.finalStatuses.delete(childSessionId);
       this.update(childSessionId, { steeringQueued: queued.length });
       await this.persist();
       await this.executeRun(childSessionId, next, false, controller);
       return;
     }
+    const record = this.requireRecord(childSessionId);
+    const completion = resolveWorkspaceBackgroundCompletion({
+      ...(record.expectedResult
+        ? { expectedResult: record.expectedResult }
+        : {}),
+      ...(record.reviewScopeSummary
+        ? { reviewScopeSummary: record.reviewScopeSummary }
+        : {}),
+      marker: this.finalStatuses.get(childSessionId),
+      text: result.text,
+      ...(record.partialOutput ? { partialOutput: record.partialOutput } : {}),
+      workspaceRoots: [this.projectRoot],
+    });
     await this.finish(childSessionId, {
-      lifecycle: "completed",
-      phase: "completed",
-      resultState: "completed",
-      resultText: result.text,
+      lifecycle: completion.lifecycle,
+      phase:
+        completion.lifecycle === "completed"
+          ? "completed"
+          : completion.lifecycle === "cancelled"
+            ? "cancelled"
+            : "failed",
+      resultState: completion.resultState,
+      ...(completion.terminalReason
+        ? { terminalReason: completion.terminalReason }
+        : {}),
+      ...(completion.resultText !== undefined
+        ? { resultText: completion.resultText }
+        : {}),
+      ...(completion.structuredResult
+        ? { structuredResult: completion.structuredResult }
+        : {}),
+      ...(completion.expectedResultIssue
+        ? { expectedResultIssue: completion.expectedResultIssue }
+        : {}),
+      ...(completion.partialOutput
+        ? {
+            partialOutput: boundedUtf8Tail(
+              completion.partialOutput,
+              this.maxOutputBytes,
+            ),
+          }
+        : {}),
     });
   }
 
@@ -1013,12 +1129,20 @@ export class WorkspaceBackgroundSupervisor {
     values: Pick<
       WorkspaceBackgroundRecord,
       "lifecycle" | "phase" | "resultState"
-    > & {
-      readonly terminalReason?: string;
-      readonly resultText?: string;
-    },
+    > &
+      Partial<
+        Pick<
+          WorkspaceBackgroundRecord,
+          | "terminalReason"
+          | "resultText"
+          | "structuredResult"
+          | "expectedResultIssue"
+          | "partialOutput"
+        >
+      >,
   ): Promise<void> {
     if (isTerminal(this.records.get(childSessionId))) return;
+    this.finalStatuses.delete(childSessionId);
     const steering = this.steering.get(childSessionId) ?? [];
     steering.length = 0;
     this.steering.set(childSessionId, steering);
@@ -1447,9 +1571,18 @@ function validRecord(value: unknown): value is WorkspaceBackgroundRecord {
     typeof record.resultState === "string" &&
     typeof record.createdAt === "number" &&
     typeof record.updatedAt === "number" &&
-    typeof record.steeringQueued === "number"
+    typeof record.steeringQueued === "number" &&
+    (record.expectedResult === undefined ||
+      EXPECTED_RESULTS.has(record.expectedResult))
   );
 }
+
+const EXPECTED_RESULTS: ReadonlySet<string> = new Set([
+  "text",
+  "review_findings",
+  "patch",
+  "verification",
+]);
 
 function uniquePaths(
   entries: readonly WorkspaceBackgroundForbiddenPath[],

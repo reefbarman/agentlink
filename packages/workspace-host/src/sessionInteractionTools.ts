@@ -28,7 +28,14 @@ import {
   switchModeToolDefinition,
   type ModeSwitchOutcome,
 } from "@agentlink/core/interaction-tools";
+import {
+  backgroundSetTaskStatusTool,
+  checkBackgroundTaskStatusResult,
+  formatFleetResultEnvelope,
+  type BackgroundExpectedResult,
+} from "@agentlink/core/background-results";
 import type { TodoItem } from "@agentlink/protocol/chat-transcript";
+import type { FleetResultEnvelope } from "@agentlink/protocol/fleet-result";
 import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import type {
   UserQuestion,
@@ -80,6 +87,19 @@ export interface WorkspaceFinalStatusDisplay {
   readonly todos?: readonly TodoItem[];
 }
 
+/**
+ * How background children report: VS Code's background `set_task_status`,
+ * whose `result` envelope is typed to the child's `expectedResult`.
+ */
+export interface WorkspaceBackgroundFinalStatus {
+  /** The child's delegation, or undefined for a foreground session. */
+  readonly delegation: (
+    sessionId: string,
+  ) => { readonly expectedResult?: BackgroundExpectedResult } | undefined;
+  /** Record a child's accepted status, which decides its result. */
+  readonly record: (sessionId: string, marker: FinalMessageMarker) => void;
+}
+
 export interface CreateWorkspaceSessionInteractionToolsOptions {
   /**
    * Answers VS Code's `ask_user`. Without it only `todo_write` is offered,
@@ -100,6 +120,11 @@ export interface CreateWorkspaceSessionInteractionToolsOptions {
    * sessions this switcher says can change modes.
    */
   readonly modeSwitch?: WorkspaceModeSwitcher;
+  /**
+   * Background children get VS Code's background `set_task_status` (even
+   * without `finalStatus`), so they can return a structured result.
+   */
+  readonly backgroundFinalStatus?: WorkspaceBackgroundFinalStatus;
   readonly onTodosChanged?: (
     sessionId: string,
     todos: readonly TodoItem[],
@@ -151,13 +176,16 @@ export function createWorkspaceSessionInteractionTools(
     const modeSwitch = options.modeSwitch?.available(request.sessionId)
       ? options.modeSwitch
       : undefined;
+    const delegation = options.backgroundFinalStatus?.delegation(
+      request.sessionId,
+    );
     return [
       ...(askQuestions
         ? [createAskUserTool(request, askQuestions, modeSwitch)]
         : []),
       createTodoWriteTool(request, todos, options),
-      ...(options.finalStatus
-        ? [createSetTaskStatusTool(request, todos, options)]
+      ...(options.finalStatus || delegation
+        ? [createSetTaskStatusTool(request, todos, options, delegation)]
         : []),
       ...(modeSwitch ? [createSwitchModeTool(request, modeSwitch)] : []),
     ];
@@ -305,18 +333,35 @@ function createTodoWriteTool<TPrincipal extends AgentPrincipal>(
 }
 
 /**
- * VS Code's `set_task_status` without background `result` envelopes:
- * standalone background children report through their own runtime.
+ * VS Code's `set_task_status`. A background child gets the background
+ * variant: a `result` envelope checked against its `expectedResult` (a
+ * refused one leaves the turn running so the child can correct it), and an
+ * accepted status recorded as the child's result.
  */
 function createSetTaskStatusTool<TPrincipal extends AgentPrincipal>(
   discovery: HostToolResolveRequest<TPrincipal>,
   todos: Map<string, readonly TodoItem[]>,
   options: CreateWorkspaceSessionInteractionToolsOptions,
+  delegation?: { readonly expectedResult?: BackgroundExpectedResult },
 ): HostTool<TPrincipal> {
-  return defineTool({
-    name: SET_TASK_STATUS_TOOL.name,
-    description: SET_TASK_STATUS_TOOL.description,
-    inputSchema: SET_TASK_STATUS_TOOL.input_schema,
+  const definition = delegation
+    ? backgroundSetTaskStatusTool(delegation.expectedResult)
+    : SET_TASK_STATUS_TOOL;
+  const tool = defineTool({
+    name: definition.name,
+    description: definition.description,
+    // A child's `result` is accepted by the schema check and judged by VS
+    // Code's own check below, so a malformed envelope gets VS Code's
+    // bounded diagnostics rather than a schema error.
+    inputSchema: delegation
+      ? {
+          ...SET_TASK_STATUS_TOOL.input_schema,
+          properties: {
+            ...SET_TASK_STATUS_TOOL.input_schema.properties,
+            result: {},
+          },
+        }
+      : definition.input_schema,
     effect: "read",
     parallelSafe: false,
     displayInput: (input) => ({
@@ -328,7 +373,27 @@ function createSetTaskStatusTool<TPrincipal extends AgentPrincipal>(
       if (!isTaskStatus(status)) return toolError("Invalid status");
       const continuationError = validateTaskStatusContinuation(status, input);
       if (continuationError) return toolError(continuationError);
-      const marker = buildTaskStatusMarker({ status, params: input });
+      let result: FleetResultEnvelope | undefined;
+      if (delegation) {
+        const rejection = checkBackgroundTaskStatusResult({
+          status,
+          result: input.result,
+          ...(delegation.expectedResult
+            ? { expectedResult: delegation.expectedResult }
+            : {}),
+        });
+        // As in VS Code: an ordinary result the child reads and corrects.
+        if (rejection) return { modelContent: JSON.stringify(rejection) };
+        result = input.result as FleetResultEnvelope | undefined;
+      }
+      const marker = buildTaskStatusMarker({
+        status,
+        params: input,
+        ...(result ? { result } : {}),
+      });
+      if (delegation) {
+        options.backgroundFinalStatus!.record(context.sessionId, marker);
+      }
       const completeTodosRequested = input.completeTodos === true;
       let completed: TodoItem[] | undefined;
       if (status === "completed" && completeTodosRequested) {
@@ -351,10 +416,24 @@ function createSetTaskStatusTool<TPrincipal extends AgentPrincipal>(
           }),
         ),
         displayContent: display,
-        endTurn: { finalText: marker.summary ?? "" },
+        endTurn: {
+          finalText:
+            marker.summary ??
+            (marker.result ? formatFleetResultEnvelope(marker.result) : ""),
+        },
       };
     },
   });
+  // The model is offered VS Code's typed background schema.
+  return delegation
+    ? Object.freeze({
+        ...tool,
+        definition: Object.freeze({
+          ...tool.definition,
+          input_schema: definition.input_schema,
+        }),
+      })
+    : tool;
 }
 
 function createSwitchModeTool<TPrincipal extends AgentPrincipal>(

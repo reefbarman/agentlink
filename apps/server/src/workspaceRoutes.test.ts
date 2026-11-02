@@ -97,6 +97,8 @@ async function startHarness(
     turnsPaused?: (projectId: string) => boolean;
     /** Keep session events in files under `<parent>/events`. */
     eventLog?: boolean;
+    /** Todos and VS Code's set_task_status, as the service sets up. */
+    finalStatus?: boolean;
   } = {},
 ) {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-routes-"));
@@ -200,6 +202,9 @@ async function startHarness(
       },
     ],
     ...commandOptions,
+    ...(options.finalStatus
+      ? { sessionInteractions: { finalStatus: true } }
+      : {}),
     files: {
       enabled: true,
       ...(autonomous
@@ -1590,6 +1595,83 @@ describe("assistant workspace routes", () => {
     ).resolves.toBe("from child\n");
   });
 
+  it("hands a reviewer its reviewScope and keeps its expected review_findings result", async () => {
+    const harness = await startHarness({ finalStatus: true });
+    const { owner, request } = harness;
+    await fs.writeFile(
+      path.join(harness.projectRoot, "notes.md"),
+      "add = (a, b) => a - b\n",
+    );
+    harness.fetch.mockImplementation(async (_url, init) =>
+      hasToolResult(init)
+        ? completion("parent done")
+        : toolCall("spawn_background_agent", {
+            task: "Review notes.md",
+            message: "check add",
+            model_role: "review",
+            reviewScope: { kind: "files", paths: ["notes.md"] },
+            expectedResult: "review_findings",
+          }),
+    );
+    let brief = "";
+    harness.claudeFetch.mockImplementation(async (_url, init) => {
+      brief = String(
+        requestBody(init).messages?.find((message) => message.role === "user")
+          ?.content ?? "",
+      );
+      return toolCall("set_task_status", {
+        status: "completed",
+        result: {
+          type: "review_findings",
+          findings: [
+            {
+              severity: "high",
+              message: "add subtracts",
+              path: "notes.md",
+              line: 1,
+            },
+          ],
+          emptyDiff: false,
+        },
+      });
+    });
+    const sessionId = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    await request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: owner,
+      body: { text: "get a review" },
+    });
+    await vi.waitFor(async () => {
+      await expect(
+        request({ path: `${base}/agents`, session: owner }),
+      ).resolves.toMatchObject({
+        body: {
+          agents: [
+            {
+              lifecycle: "completed",
+              resultState: "completed",
+              structuredResult: {
+                type: "review_findings",
+                reviewedScope: "current files: notes.md",
+              },
+            },
+          ],
+        },
+      });
+    }, CHILD_RUN_WAIT);
+    const listed = await request({ path: `${base}/agents`, session: owner });
+    const [agent] = (listed.body as { agents: [{ resultText: string }] })
+      .agents;
+    expect(agent.resultText).toContain("**Review found 1 issue.**");
+    expect(agent.resultText).toContain(
+      "**Reviewed scope:** current files: notes.md",
+    );
+    expect(brief).toContain("## Review goal");
+    expect(brief).toContain("Paths: notes.md");
+  });
+
   it("lets a child of an autonomous chat write without asking when children inherit its grant", async () => {
     const harness = await startHarness({
       approvalModes: true,
@@ -1681,7 +1763,7 @@ describe("assistant workspace routes", () => {
           (agent) => agent.lifecycle,
         ),
       ).toContain("awaiting_approval");
-    });
+    }, CHILD_RUN_WAIT);
     await expect(
       fs.readFile(path.join(harness.projectRoot, "second.txt"), "utf8"),
     ).rejects.toThrow();

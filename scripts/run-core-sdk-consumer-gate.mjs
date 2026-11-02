@@ -26,6 +26,9 @@ const BROWSER_SAFE_CORE_EXPORTS = new Set([
   "./codex-device-auth",
   // VS Code's shell lexer and command splitter: pure string code.
   "./shell-command",
+  // VS Code's background result envelopes: zod schemas and string code,
+  // validated by browser surfaces too.
+  "./background-results",
 ]);
 
 async function run(command, args, options = {}) {

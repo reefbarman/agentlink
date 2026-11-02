@@ -9,8 +9,12 @@ import {
   type HostToolResolver,
 } from "@agentlink/core";
 import {
+  EXPECTED_RESULT_PROPERTY,
   FORBIDDEN_PATHS_PROPERTY,
   OWNED_PATHS_PROPERTY,
+  REVIEW_SCOPE_PROPERTY,
+  parseExpectedResultInput,
+  parseReviewScopeInput,
   GET_BACKGROUND_STATUS_TOOL,
   KILL_BACKGROUND_AGENT_TOOL,
   STEER_BACKGROUND_AGENT_TOOL,
@@ -27,6 +31,7 @@ import {
   type BackgroundResultState,
   type BackgroundResultsCompletedEntry,
 } from "@agentlink/core/background-agent-tools";
+import { MISSING_TEXT_RESULT_ISSUE } from "@agentlink/core/background-results";
 
 import {
   type SpawnWorkspaceBackgroundRequest,
@@ -121,8 +126,10 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
           minLength: 1,
           maxLength: 65_536,
           description:
-            "Full instruction for the background agent. Be specific and self-contained. For writable work, include the files it owns, files to avoid, allowed commands/tests, and how to report conflicts.",
+            "Full instruction for the background agent. Be specific and self-contained. For writable work, include the files it owns, files to avoid, allowed commands/tests, and how to report conflicts. For review work, keep this to a concise intent/risk summary and use reviewScope for the live working tree, current files, or a commit range; use kind=diff only for small exact hunks that must remain immutable.",
         },
+        reviewScope: REVIEW_SCOPE_PROPERTY,
+        expectedResult: EXPECTED_RESULT_PROPERTY,
         ownedPaths: {
           ...OWNED_PATHS_PROPERTY,
           maxItems: 64,
@@ -182,12 +189,16 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
         : providerId && modelId
           ? { providerId, modelId }
           : undefined;
+      const reviewScope = parseReviewScopeInput(input.reviewScope);
+      const expectedResult = parseExpectedResultInput(input.expectedResult);
       try {
         const record = await options.supervisor.spawn({
           callerSessionId: discovery.sessionId,
           callerTurnId: discovery.turnId,
           task: String(input.task),
           message: String(input.message),
+          ...(reviewScope ? { reviewScope } : {}),
+          ...(expectedResult ? { expectedResult } : {}),
           ...(input.read_paths !== undefined
             ? { readScopes: parseScopes(input.read_paths) }
             : {}),
@@ -568,8 +579,7 @@ export function workspaceBackgroundOutcome(record: WorkspaceBackgroundRecord): {
           terminalReason: "incomplete_expected_result",
           retrySafe: true,
           agentRetryable: false,
-          expectedResultIssue:
-            "The agent stopped without a completed final text result. Any partial output is evidence only, not a completed review.",
+          expectedResultIssue: MISSING_TEXT_RESULT_ISSUE,
           ...(record.partialOutput
             ? { partialOutput: record.partialOutput }
             : {}),
@@ -587,6 +597,9 @@ export function workspaceBackgroundOutcome(record: WorkspaceBackgroundRecord): {
         terminalReason,
         retrySafe: true,
         agentRetryable: false,
+        ...(record.expectedResultIssue
+          ? { expectedResultIssue: record.expectedResultIssue }
+          : {}),
         ...(record.partialOutput
           ? { partialOutput: record.partialOutput }
           : {}),

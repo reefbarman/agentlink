@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- New browser-safe `@agentlink/core/background-results` subpath: VS Code's background result envelopes (`fleetResultSchemas`, `getFleetResultSchema`, `validateFleetResult`, `isFleetResultEnvelope`), the background `set_task_status` (`backgroundSetTaskStatusTool`, `checkBackgroundTaskStatusResult`), the tolerant envelope parse (`parseFleetResultEnvelopeDetailed`), `formatFleetResultEnvelope`, `withFleetResultInstruction`, and `describeExpectedResultIssue`/`MISSING_TEXT_RESULT_ISSUE` for `incomplete_expected_result` failures. New Node-only `@agentlink/core/review-scope` subpath: VS Code's `captureReviewScope`, `assertReviewScopeAvailable` and `buildReviewHandoff`. `@agentlink/core/background-agent-tools` adds the `REVIEW_SCOPE_PROPERTY` and `EXPECTED_RESULT_PROPERTY` schemas with `parseReviewScopeInput` and `parseExpectedResultInput`. VS Code delegates to all of them unchanged.
+
 ## 0.37.0 — 2026-11-02
 
 - Reduces session-history indexing memory use and delays the history backfill; get_background_result failure JSON now includes a recovery explanation when a run is not retryable.

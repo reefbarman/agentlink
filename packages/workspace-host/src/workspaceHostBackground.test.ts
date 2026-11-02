@@ -1,10 +1,19 @@
+import {
+  EXPECTED_RESULT_PROPERTY,
+  REVIEW_SCOPE_PROPERTY,
+} from "@agentlink/core/background-agent-tools";
 import { describe, expect, it, vi } from "vitest";
+import {
+  formatFleetResultEnvelope,
+  withFleetResultInstruction,
+} from "@agentlink/core/background-results";
 
 import { createHash } from "node:crypto";
 import { createWorkspaceHost } from "./workspaceHostRuntime.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { workspaceBackgroundOutcome } from "./backgroundTools.js";
 
 function toolCall(name: string, input: Record<string, unknown>): Response {
   return new Response(
@@ -663,6 +672,271 @@ describe("workspace host background composition", () => {
       expect(await fs.readFile(filePath, "utf8")).toBe(
         "export const add = (a, b) => a - b;\n",
       );
+    } finally {
+      await host.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("briefs a reviewer on its reviewScope and holds it to VS Code's expectedResult envelope", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "workspace-background-expected-"),
+    );
+    const projectRoot = path.join(root, "project");
+    await fs.mkdir(projectRoot);
+    await fs.writeFile(
+      path.join(projectRoot, "math.js"),
+      "export const add = (a, b) => a - b;\n",
+    );
+    const parentToolResults: string[] = [];
+    const childToolResults: string[] = [];
+    let childBrief = "";
+    let childResultSchema: unknown;
+    const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as {
+        messages?: Array<{ role?: string; content?: string }>;
+        tools?: Array<{
+          function?: {
+            name?: string;
+            parameters?: { properties?: Record<string, unknown> };
+          };
+        }>;
+      };
+      const messages = body.messages ?? [];
+      const firstUser = messages.find((m) => m.role === "user")?.content ?? "";
+      const results = messages
+        .filter((message) => message.role === "tool")
+        .map((message) => String(message.content));
+      if (firstUser.startsWith("## Review goal")) {
+        childBrief = firstUser;
+        childResultSchema = body.tools?.find(
+          (tool) => tool.function?.name === "set_task_status",
+        )?.function?.parameters?.properties?.result;
+        childToolResults.splice(0, Infinity, ...results);
+        if (results.length === 0) {
+          // Missing emptyDiff: refused, and the child keeps going.
+          return toolCall("set_task_status", {
+            status: "completed",
+            result: { type: "review_findings", findings: [] },
+          });
+        }
+        return toolCall("set_task_status", {
+          status: "completed",
+          result: {
+            type: "review_findings",
+            findings: [
+              {
+                severity: "high",
+                message: "add subtracts",
+                path: "math.js",
+                line: 1,
+              },
+            ],
+            emptyDiff: false,
+          },
+        });
+      }
+      parentToolResults.splice(0, Infinity, ...results);
+      if (firstUser === "missing review" && results.length === 0) {
+        return toolCall("spawn_background_agent", {
+          task: "Review gone.js",
+          message: "review gone.js",
+          reviewScope: { kind: "files", paths: ["gone.js"] },
+        });
+      }
+      if (firstUser === "review math" && results.length === 0) {
+        const spawn = body.tools?.find(
+          (tool) => tool.function?.name === "spawn_background_agent",
+        );
+        expect(spawn?.function?.parameters?.properties).toMatchObject({
+          reviewScope: REVIEW_SCOPE_PROPERTY,
+          expectedResult: EXPECTED_RESULT_PROPERTY,
+        });
+        return toolCall("spawn_background_agent", {
+          task: "Review math.js",
+          message: "check add",
+          reviewScope: { kind: "files", paths: ["math.js"] },
+          expectedResult: "review_findings",
+        });
+      }
+      return completion("parent done");
+    });
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(root, "data"),
+      ownerId: "background-expected",
+      providers: [
+        {
+          type: "openai-compatible",
+          id: "fixture",
+          baseURL: "https://example.invalid/v1",
+          noAuth: true,
+          models: [
+            {
+              id: "fixture-model",
+              contextWindow: 32_768,
+              maxOutputTokens: 4_096,
+              supportsToolUse: true,
+            },
+          ],
+          fetch,
+        },
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      files: { enabled: true },
+      sessionInteractions: { finalStatus: true },
+      background: { enabled: true },
+    });
+    try {
+      const missing = await host.createSession();
+      await host.runTurn(missing.sessionId, "missing review");
+      expect(parentToolResults[0]).toContain(
+        "Live review file target is unavailable: gone.js",
+      );
+      expect(host.listBackgroundAgents(missing.sessionId)).toEqual([]);
+
+      const { sessionId } = await host.createSession();
+      await expect(
+        host.runTurn(sessionId, "review math"),
+      ).resolves.toMatchObject({ status: "completed" });
+      await vi.waitFor(() => {
+        expect(host.listBackgroundAgents(sessionId)[0]).toMatchObject({
+          lifecycle: "completed",
+          resultState: "completed",
+          expectedResult: "review_findings",
+          reviewScopeSummary: "current files: math.js",
+          structuredResult: {
+            type: "review_findings",
+            reviewedScope: "current files: math.js",
+            emptyDiff: false,
+          },
+        });
+      });
+      const child = host.listBackgroundAgents(sessionId)[0]!;
+      expect(child.resultText).toBe(
+        formatFleetResultEnvelope(child.structuredResult!),
+      );
+      expect(child.resultText).toContain("**Review found 1 issue.**");
+      // VS Code's review brief around the captured target.
+      expect(childBrief).toContain("check add");
+      expect(childBrief).toContain("## Live review target");
+      expect(childBrief).toContain("Paths: math.js");
+      expect(childBrief).toContain("## Review boundaries");
+      expect(childResultSchema).toMatchObject({
+        required: expect.arrayContaining(["type", "findings", "emptyDiff"]),
+      });
+      expect(JSON.parse(childToolResults[0]!)).toMatchObject({
+        error:
+          "Background completion requires a valid review_findings result in set_task_status.result",
+        issues: [{ path: "result.emptyDiff" }],
+      });
+    } finally {
+      await host.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("asks a child without set_task_status to print its envelope, and fails one that does not", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "workspace-background-printed-"),
+    );
+    const projectRoot = path.join(root, "project");
+    await fs.mkdir(projectRoot);
+    const briefs: string[] = [];
+    const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as {
+        messages?: Array<{ role?: string; content?: string }>;
+      };
+      const messages = body.messages ?? [];
+      const firstUser = messages.find((m) => m.role === "user")?.content ?? "";
+      const hasToolResult = messages.some((m) => m.role === "tool");
+      if (firstUser.startsWith("make a patch")) {
+        briefs.push(firstUser);
+        return completion(
+          'Done.\n\n```json\n{"type":"patch","summary":"Added notes","files":["notes.md"]}\n```',
+        );
+      }
+      if (firstUser.startsWith("verify it")) {
+        return completion("It looks fine to me.");
+      }
+      if (!hasToolResult) {
+        return toolCall("spawn_background_agent", {
+          task: firstUser === "delegate patch" ? "Patch" : "Verify",
+          message:
+            firstUser === "delegate patch" ? "make a patch" : "verify it",
+          expectedResult:
+            firstUser === "delegate patch" ? "patch" : "verification",
+        });
+      }
+      return completion("parent done");
+    });
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(root, "data"),
+      ownerId: "background-printed",
+      providers: [
+        {
+          type: "openai-compatible",
+          id: "fixture",
+          baseURL: "https://example.invalid/v1",
+          noAuth: true,
+          models: [
+            {
+              id: "fixture-model",
+              contextWindow: 32_768,
+              maxOutputTokens: 4_096,
+              supportsToolUse: true,
+            },
+          ],
+          fetch,
+        },
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      files: { enabled: true },
+      background: { enabled: true },
+    });
+    try {
+      const patch = await host.createSession();
+      await host.runTurn(patch.sessionId, "delegate patch");
+      await vi.waitFor(() => {
+        expect(host.listBackgroundAgents(patch.sessionId)[0]).toMatchObject({
+          lifecycle: "completed",
+          structuredResult: {
+            type: "patch",
+            summary: "Added notes",
+            files: ["notes.md"],
+          },
+          resultText: "Added notes\n\n**Files**\n- `notes.md`",
+        });
+      });
+      expect(briefs[0]).toBe(
+        withFleetResultInstruction("patch", "make a patch"),
+      );
+
+      const verify = await host.createSession();
+      await host.runTurn(verify.sessionId, "delegate verify");
+      await vi.waitFor(() => {
+        expect(host.listBackgroundAgents(verify.sessionId)[0]).toMatchObject({
+          lifecycle: "failed",
+          resultState: "incomplete_expected_result",
+          terminalReason: "incomplete_expected_result",
+          partialOutput: "It looks fine to me.",
+        });
+      });
+      const failed = host.listBackgroundAgents(verify.sessionId)[0]!;
+      expect(failed.expectedResultIssue).toContain(
+        'Expected a "verification" envelope; the final message parsed as plain text without a valid envelope.',
+      );
+      expect(
+        JSON.parse(workspaceBackgroundOutcome(failed).result),
+      ).toMatchObject({
+        status: "incomplete_expected_result",
+        terminalReason: "incomplete_expected_result",
+        retrySafe: true,
+        agentRetryable: false,
+        expectedResultIssue: failed.expectedResultIssue,
+        partialOutput: "It looks fine to me.",
+      });
     } finally {
       await host.close();
       await fs.rm(root, { recursive: true, force: true });

@@ -812,6 +812,9 @@ export async function createWorkspaceHost(
         projectRoot: project.root,
         projectId: project.id,
         maxActiveChildren: options.background.maxActiveChildren,
+        // Children report through VS Code's background set_task_status
+        // whenever the session interaction tools are on.
+        childFinalStatus: options.sessionInteractions !== undefined,
         // A child spawned without read_paths reads what its parent can.
         ...(options.files?.resolveScopes
           ? {
@@ -1189,6 +1192,23 @@ export async function createWorkspaceHost(
     ? createWorkspaceSessionInteractionTools({
         ...options.sessionInteractions,
         ...(modeSwitcher ? { modeSwitch: modeSwitcher } : {}),
+        ...(backgroundSupervisor
+          ? {
+              backgroundFinalStatus: {
+                delegation: (sessionId: string) => {
+                  const child =
+                    backgroundSupervisor!.getRecordForSession(sessionId);
+                  return child
+                    ? child.expectedResult
+                      ? { expectedResult: child.expectedResult }
+                      : {}
+                    : undefined;
+                },
+                record: (sessionId, marker) =>
+                  backgroundSupervisor!.recordFinalStatus(sessionId, marker),
+              },
+            }
+          : {}),
         readTranscript: async (sessionId) =>
           (await engine.sessions.hydrate({ principal, sessionId })).record
             .messages,

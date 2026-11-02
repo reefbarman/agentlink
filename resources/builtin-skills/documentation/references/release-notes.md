@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The CLI and Assistant now take VS Code's `reviewScope` and `expectedResult` when starting a background agent. A review scope (working tree, files, commit range or explicit diff) is checked against the project before the child starts and handed over in VS Code's review brief. A child owing a `review_findings`, `patch` or `verification` result returns it through VS Code's background `set_task_status`, which refuses a malformed envelope with VS Code's diagnostics so the child can fix it; a child that ends without the envelope finishes as `incomplete_expected_result` with VS Code's explanation instead of passing its text off as the result. Assistant agent cards carry the validated result.
+
 ## 1.69.0
 
 - Attaching a document to a chat on an OpenAI-compatible model (such as Claude through Meridian) no longer fails every request with "OpenAI-compatible Chat Completions does not support document input". Text, Markdown, CSV and JSON documents are now sent as text. PDFs are sent as standard `file` inputs when the model sets the new `supportsDocuments` option, and are otherwise replaced by a short note to the model, so one attachment can no longer break the rest of the chat. PDFs returned by tools follow the same rule. Model discovery fills in `supportsDocuments` (and `supportsImages`) from Meridian's `capabilities` and OpenRouter's input modalities, and the configuration wizard has a matching **PDF document input** option.

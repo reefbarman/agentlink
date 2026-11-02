@@ -275,6 +275,7 @@ import {
   snapshotComposeEfficiencyStats,
   type ComposeEfficiencyStats,
 } from "./composeEfficiency.js";
+import { describeExpectedResultIssue } from "@agentlink/core/background-results";
 import {
   formatFleetResultEnvelope,
   parseFleetResultEnvelope,
@@ -14208,15 +14209,13 @@ ${instruction}`
         // the coordinator can salvage findings instead of guessing.
         ...(incompleteEnvelope
           ? {
-              expectedResultIssue: missingTextResult
-                ? "The agent stopped without a completed final text result. Any partial output is evidence only, not a completed review."
-                : providerStopReason
-                  ? `The provider stopped before finalizing the result (${providerStopReason}). Partial output is not a completed result.`
-                  : `Expected a "${expected}" envelope; the final message parsed as ${
-                      structuredResult.type === "text"
-                        ? "plain text without a valid envelope"
-                        : `a "${structuredResult.type}" envelope`
-                    }.${parsedEnvelope.issue ? ` ${parsedEnvelope.issue}.` : ""} The raw final output is preserved in partialOutput.`,
+              expectedResultIssue: describeExpectedResultIssue({
+                expected,
+                missingTextResult,
+                providerStopReason,
+                parsedType: structuredResult.type,
+                parseIssue: parsedEnvelope.issue,
+              }),
             }
           : {}),
         ...(partialResult

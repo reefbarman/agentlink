@@ -364,6 +364,52 @@ describe("WorkspaceBackgroundSupervisor", () => {
     }
   });
 
+  it("lets a steered turn report for itself after an earlier set_task_status", async () => {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let supervisor!: WorkspaceBackgroundSupervisor;
+    const test = await fixture({
+      runTurn: async (sessionId, message) => {
+        if (message === "Try again") return completed(sessionId, "steered");
+        await released;
+        supervisor.recordFinalStatus(sessionId, {
+          status: "completed",
+          result: { type: "text", text: "first answer" },
+        });
+        return completed(sessionId, "first answer");
+      },
+    });
+    supervisor = test.supervisor;
+    try {
+      const child = await test.supervisor.spawn(spawnRequest("src/a.ts"));
+      await test.supervisor.steer({
+        callerSessionId: "parent-a",
+        childSessionId: child.childSessionId,
+        message: "Try again",
+      });
+      release();
+      await expect(
+        test.supervisor.wait({
+          callerSessionId: "parent-a",
+          childSessionId: child.childSessionId,
+          timeoutMs: 5_000,
+        }),
+      ).resolves.toMatchObject({
+        status: "completed",
+        record: {
+          lifecycle: "completed",
+          resultText: "steered",
+          structuredResult: { type: "text", text: "steered" },
+        },
+      });
+    } finally {
+      await test.supervisor.close();
+      await fs.rm(test.root, { recursive: true, force: true });
+    }
+  });
+
   it("exposes one foreground approval and resumes only the exact child interaction", async () => {
     const test = await fixture({
       runTurn: async (sessionId) => suspended(sessionId),

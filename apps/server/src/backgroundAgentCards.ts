@@ -66,6 +66,10 @@ export function toAgentCard(record: WorkspaceBackgroundRecord): BgSessionInfo {
     ...(!active && record.partialOutput && !record.resultText
       ? { partialResult: record.partialOutput }
       : {}),
+    // A child's validated result envelope, as VS Code's cards carry it.
+    ...(record.structuredResult
+      ? { structuredResult: structuredClone(record.structuredResult) }
+      : {}),
     ...(record.lifecycle === "awaiting_approval"
       ? { attention: "approval" as const }
       : {}),
