@@ -339,7 +339,8 @@ describe("Codex model resolution", () => {
       "gpt-5.6-luna",
     );
     expect(getCodexModelMigration("gpt-5.3-codex-spark")).toBe("gpt-5.6-luna");
-    expect(getCodexModelMigration("gpt-5.3-codex")).toBe(CODEX_DEFAULT_MODEL);
+    // Official upstream migration, independent of AgentLink's default model.
+    expect(getCodexModelMigration("gpt-5.3-codex")).toBe("gpt-5.6-sol");
   });
 
   it("maps API-retired codex models to their published replacements", () => {

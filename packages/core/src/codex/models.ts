@@ -241,10 +241,12 @@ const CHATGPT_BACKEND_MODEL_SET = new Set<string>(
 );
 
 /**
- * Default Codex model — routed to for background agents on the codex/gpt side
- * (e.g. "opposite" provider strategy) and used as the OAuth remap target.
+ * Default Codex model: the fallback agent model when no mode preference is
+ * saved, the OAuth remap target for models the backend no longer serves, and
+ * the model for detached helpers (standalone web, image generation). Keep it
+ * on the current-generation Sol. Background routing uses CODEX_MODELS tiers.
  */
-export const CODEX_DEFAULT_MODEL = "gpt-5.6-sol";
+export const CODEX_DEFAULT_MODEL = "gpt-6.1-sol";
 
 /** Cheapest OAuth-served Codex model, used for condensing and cheap-tier tasks. */
 export const CODEX_OAUTH_CHEAP_MODEL = "gpt-5.6-luna";

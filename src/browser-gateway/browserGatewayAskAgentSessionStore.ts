@@ -56,7 +56,7 @@ type AskAgentResultImage = {
   attribution?: ImageAttribution;
 };
 
-export const BROWSER_GATEWAY_ASK_AGENT_DEFAULT_MODEL = "gpt-5.6-luna";
+export const BROWSER_GATEWAY_ASK_AGENT_DEFAULT_MODEL = "gpt-6-luna";
 export const BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE = "chat";
 
 export interface BrowserGatewayAskAgentSessionStoreOptions {
@@ -66,8 +66,8 @@ export interface BrowserGatewayAskAgentSessionStoreOptions {
 
 const BROWSER_GATEWAY_ASK_AGENT_FALLBACK_MODELS: WebviewModelInfo[] = [
   {
-    id: "gpt-5.6-luna",
-    displayName: "GPT-5.6 Luna",
+    id: "gpt-6-luna",
+    displayName: "GPT-6 Luna",
     provider: "browser-gateway",
     contextWindow: 1_050_000,
     reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
@@ -75,8 +75,8 @@ const BROWSER_GATEWAY_ASK_AGENT_FALLBACK_MODELS: WebviewModelInfo[] = [
     authenticated: true,
   },
   {
-    id: "gpt-5.6-terra",
-    displayName: "GPT-5.6 Terra",
+    id: "gpt-6.1-terra",
+    displayName: "GPT-6.1 Terra",
     provider: "browser-gateway",
     contextWindow: 1_050_000,
     reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
@@ -84,13 +84,13 @@ const BROWSER_GATEWAY_ASK_AGENT_FALLBACK_MODELS: WebviewModelInfo[] = [
     authenticated: true,
   },
   {
-    id: "gpt-5.5",
-    displayName: "GPT-5.5",
+    // ChatGPT-backend window and efforts (Ask Agent leases OAuth credentials).
+    id: "gpt-6.1-sol",
+    displayName: "GPT-6.1 Sol",
     provider: "browser-gateway",
-    contextWindow: 400_000,
-    maxInputTokens: 272_000,
-    reasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
-    defaultReasoningEffort: "medium",
+    contextWindow: 872_000,
+    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    defaultReasoningEffort: "low",
     authenticated: true,
   },
 ];

@@ -58,7 +58,7 @@ describe("AskAgentController", () => {
     };
 
     controller.restoreState(
-      { model: "gpt-5.5", reasoningEffort: "high" },
+      { model: "gpt-6.1-terra", reasoningEffort: "high" },
       {
         activeSessionId: BROWSER_GATEWAY_ASK_AGENT_SESSION_ID,
         sessions: [
@@ -83,7 +83,7 @@ describe("AskAgentController", () => {
     expect(state.snapshot.session.foreground).toMatchObject({
       sessionId: BROWSER_GATEWAY_ASK_AGENT_SESSION_ID,
       title: "Restored session",
-      model: "gpt-5.5",
+      model: "gpt-6.1-terra",
       reasoningEffort: "high",
       streaming: false,
       status: "idle",

@@ -298,7 +298,7 @@ describe("CodexProvider.complete", () => {
 
     expect(authManager.forceRefreshModelAuth).toHaveBeenCalledTimes(1);
     expect(createMock).toHaveBeenCalledTimes(2);
-    expect(attempts).toEqual(["gpt-5.6-sol", "gpt-5.6-sol"]);
+    expect(attempts).toEqual([CODEX_DEFAULT_MODEL, CODEX_DEFAULT_MODEL]);
     expect(result.text).toBe("ok");
   });
 
@@ -390,7 +390,7 @@ describe("CodexProvider.complete", () => {
 
     expect(authManager.forceRefreshModelAuth).toHaveBeenCalledTimes(1);
     expect(createMock).toHaveBeenCalledTimes(2);
-    expect(attempts).toEqual(["gpt-5.6-sol", "gpt-5.6-sol"]);
+    expect(attempts).toEqual([CODEX_DEFAULT_MODEL, CODEX_DEFAULT_MODEL]);
   });
 
   it("recreates OpenAI client when oauth token changes after refresh", async () => {
@@ -808,7 +808,8 @@ describe("CodexProvider.complete", () => {
     const authManager = makeAuthManager();
     const provider = new CodexProvider(authManager as never);
     for await (const _event of provider.stream({
-      model: "gpt-5.2-codex",
+      // A non-Lite model: Responses Lite sends tools as an input item instead.
+      model: "gpt-6.1-terra",
       systemPrompt: "system",
       messages: [{ role: "user", content: "ping" }],
       maxTokens: 64,
@@ -1194,7 +1195,7 @@ describe("CodexProvider.stream", () => {
       {
         type: "model_fallback",
         requestedModel: "gpt-5.2-codex",
-        effectiveModel: "gpt-5.6-sol",
+        effectiveModel: CODEX_DEFAULT_MODEL,
       },
       {
         type: "tool_start",
@@ -1293,7 +1294,7 @@ describe("CodexProvider.stream", () => {
       {
         type: "model_fallback",
         requestedModel: "gpt-5.2-codex",
-        effectiveModel: "gpt-5.6-sol",
+        effectiveModel: CODEX_DEFAULT_MODEL,
       },
       {
         type: "thinking_start",
@@ -1393,7 +1394,7 @@ describe("CodexProvider.stream", () => {
       {
         type: "model_fallback",
         requestedModel: "gpt-5.2-codex",
-        effectiveModel: "gpt-5.6-sol",
+        effectiveModel: CODEX_DEFAULT_MODEL,
       },
       { type: "text_delta", text: "hello" },
       { type: "text_delta", text: " world" },
@@ -1671,7 +1672,7 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     },
   );
 
-  it("remaps an OAuth-unavailable model to gpt-5.6-sol on the ChatGPT backend", async () => {
+  it("remaps an OAuth-unavailable model to the default model on the ChatGPT backend", async () => {
     const captured = captureBodyOnce();
     const provider = new CodexProvider(makeAuthManager() as never);
     for await (const _event of provider.stream({
@@ -1682,7 +1683,7 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     })) {
       // drain
     }
-    expect(captured.current?.model).toBe("gpt-5.6-sol");
+    expect(captured.current?.model).toBe(CODEX_DEFAULT_MODEL);
   });
 
   it("remaps mini/nano tiers to the cheap served model", async () => {

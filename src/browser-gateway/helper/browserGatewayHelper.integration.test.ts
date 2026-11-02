@@ -3864,7 +3864,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
           event: "ask-agent.send",
           textChars: "Hello Ask Agent".length,
           credential: "missing",
-          model: "gpt-5.6-luna",
+          model: "gpt-6-luna",
           reasoning: "low",
           ok: true,
           phase: "received",
@@ -3980,7 +3980,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       snapshot: {
         session: {
           foreground: {
-            model: "gpt-5.6-luna",
+            model: "gpt-6-luna",
             reasoningEffort: "high",
           },
         },
@@ -8773,7 +8773,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       expect(await response.text()).toContain("Automatic profile applied.");
       expect(bodies).toHaveLength(1);
       expect(bodies[0]?.model).toBe(
-        modelId === "gpt-5.4-pro" ? "gpt-5.6-sol" : modelId,
+        modelId === "gpt-5.4-pro" ? "gpt-6.1-sol" : modelId,
       );
       const input = bodies[0]?.input as Array<{
         role?: string;
@@ -9173,7 +9173,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(completionParams[0]?.hostedTools).toBeUndefined();
     expect(executeNativeWebTool).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "gpt-5.6-sol",
+        model: "gpt-6.1-sol",
         kind: "search",
         credential: expect.objectContaining({
           providerId: "openai-codex",

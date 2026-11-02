@@ -14,6 +14,7 @@ import {
 } from "./translation.js";
 import { describe, expect, it } from "vitest";
 
+import { CODEX_DEFAULT_MODEL } from "./models.js";
 import type { CoreJsonValue } from "@agentlink/protocol/provider-replay";
 
 const LONG_TOOL_CALL_ID = `tool call:${"x".repeat(80)}`;
@@ -947,10 +948,10 @@ describe("Codex translation", () => {
         instructions: "system",
       }),
     ).toMatchObject({
-      configuredModel: "gpt-5.6-sol",
-      model: "gpt-5.6-sol",
+      configuredModel: CODEX_DEFAULT_MODEL,
+      model: CODEX_DEFAULT_MODEL,
       remapped: false,
-      body: { model: "gpt-5.6-sol", store: false },
+      body: { model: CODEX_DEFAULT_MODEL, store: false },
     });
   });
 
