@@ -89,7 +89,9 @@ import {
   FORBIDDEN_PATHS_PROPERTY,
   OWNED_PATHS_PROPERTY,
   REVIEW_SCOPE_PROPERTY,
+  parseAgentBudgetInput,
   parseExpectedResultInput,
+  parseModelTierInput,
   parseReviewScopeInput,
   GET_BACKGROUND_RESULT_TOOL,
   GET_BACKGROUND_STATUS_TOOL,
@@ -4980,17 +4982,7 @@ async function dispatchToolCallWithTrackedApprovals(
           params.taskClass !== undefined && params.taskClass !== null
             ? String(params.taskClass)
             : undefined,
-        modelTier:
-          params.modelTier !== undefined && params.modelTier !== null
-            ? String(params.modelTier) === "cheap" ||
-              String(params.modelTier) === "balanced" ||
-              String(params.modelTier) === "deep_reasoning" ||
-              String(params.modelTier) === "foreground"
-              ? (String(
-                  params.modelTier,
-                ) as SpawnBackgroundRequest["modelTier"])
-              : undefined
-            : undefined,
+        modelTier: parseModelTierInput(params.modelTier),
         ownedPaths: Array.isArray(params.ownedPaths)
           ? params.ownedPaths.map(String)
           : undefined,
@@ -5007,28 +4999,7 @@ async function dispatchToolCallWithTrackedApprovals(
         ...(images.length ? { images } : {}),
         reviewScope: parseReviewScopeInput(params.reviewScope),
         expectedResult: parseExpectedResultInput(params.expectedResult),
-        budget:
-          params.budget && typeof params.budget === "object"
-            ? (() => {
-                const budget = params.budget as Record<string, unknown>;
-                return {
-                  maxTokens: Number(budget.maxTokens) || undefined,
-                  maxToolCalls: Number(budget.maxToolCalls) || undefined,
-                  maxApiTurns: Number(budget.maxApiTurns) || undefined,
-                  maxElapsedMs: Number(budget.maxElapsedMs) || undefined,
-                  maxEstimatedCostUsd:
-                    Number(budget.maxEstimatedCostUsd) || undefined,
-                  estimatedCostPerMillionTokens:
-                    Number(budget.estimatedCostPerMillionTokens) || undefined,
-                  warningThresholdRatio:
-                    Number(budget.warningThresholdRatio) || undefined,
-                  scope:
-                    budget.scope === "subtree" || budget.scope === "goal"
-                      ? budget.scope
-                      : "session",
-                };
-              })()
-            : undefined,
+        budget: parseAgentBudgetInput(params.budget),
         goalId:
           typeof params.goalId === "string" ? params.goalId.trim() : undefined,
       });

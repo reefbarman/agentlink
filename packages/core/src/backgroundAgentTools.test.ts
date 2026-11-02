@@ -8,8 +8,67 @@ import {
   buildBackgroundStillRunningPayload,
   buildBackgroundWaitInterruptedPayload,
   getBackgroundResultToolDefinition,
+  getEngineHardLimit,
+  inferReviewTier,
+  isResearchTaskClass,
+  isReviewTaskClass,
+  parseAgentBudgetInput,
+  parseModelTierInput,
+  resolveBackgroundBudget,
 } from "./backgroundAgentTools.js";
 import { describe, expect, it } from "vitest";
+
+describe("background task classes and budgets", () => {
+  it("classifies VS Code's task classes", () => {
+    expect(isReviewTaskClass(" Review_Plan ")).toBe(true);
+    expect(isReviewTaskClass("readonly-research")).toBe(false);
+    expect(isResearchTaskClass("readonly-research")).toBe(true);
+    expect(inferReviewTier({ taskClass: "review_code" })).toBe("balanced");
+    expect(inferReviewTier({ taskClass: "general" })).toBeUndefined();
+  });
+
+  it("allows 1.5x a review's budget and 3x otherwise", () => {
+    expect(getEngineHardLimit(4, "review_code")).toBe(6);
+    expect(getEngineHardLimit(3, "review_code")).toBe(5);
+    expect(getEngineHardLimit(2, "general")).toBe(6);
+    expect(getEngineHardLimit(undefined, "general")).toBeUndefined();
+  });
+
+  it("keeps only work-unit and time limits for reviews", () => {
+    const requested = parseAgentBudgetInput({
+      maxTokens: 100,
+      maxApiTurns: "4",
+      maxElapsedMs: 0,
+      scope: "nonsense",
+    });
+    expect(requested).toMatchObject({
+      maxTokens: 100,
+      maxApiTurns: 4,
+      maxElapsedMs: undefined,
+      scope: "session",
+    });
+    expect(resolveBackgroundBudget("review_code", requested)).toEqual({
+      maxApiTurns: 4,
+      scope: "session",
+    });
+    expect(resolveBackgroundBudget("general", requested)).toEqual({
+      maxTokens: 100,
+      maxApiTurns: 4,
+      scope: "session",
+    });
+    // A scope alone is not a budget.
+    expect(
+      resolveBackgroundBudget("general", parseAgentBudgetInput({})),
+    ).toBeUndefined();
+    expect(parseAgentBudgetInput(undefined)).toBeUndefined();
+  });
+
+  it("reads modelTier like VS Code", () => {
+    expect(parseModelTierInput("foreground")).toBe("foreground");
+    expect(parseModelTierInput("huge")).toBeUndefined();
+    expect(parseModelTierInput(null)).toBeUndefined();
+  });
+});
 
 describe("background agent tool contract", () => {
   it("tells a workspace child that no owned paths means no writes", () => {

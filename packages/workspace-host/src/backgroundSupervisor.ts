@@ -8,9 +8,19 @@ import type {
   BackgroundAgentRuntimePhase,
   BackgroundResultState,
 } from "@agentlink/protocol";
+import type { BackgroundAgentBudgetUsage } from "@agentlink/protocol/background-result";
 
 import {
   appendOwnershipHandoff,
+  getBudgetHardLimitRatio,
+  getEngineHardLimit,
+  isResearchTaskClass,
+  isReviewTaskClass,
+  normalizeTaskClass,
+  resolveBackgroundBudget,
+  type AgentBudget,
+  type BackgroundModelTier,
+  type BackgroundModelTierRequest,
   type ReviewScope,
 } from "@agentlink/core/background-agent-tools";
 import {
@@ -44,6 +54,32 @@ const MAX_STEERING_MESSAGES = 8;
  * identifier-shaped names are recorded; anything else is reported unnamed.
  */
 const REPORTABLE_TOOL_NAME = /^[A-Za-z0-9_.:-]{1,128}$/u;
+/** VS Code's task class when a spawn names none. */
+export const DEFAULT_BACKGROUND_TASK_CLASS = "general";
+
+/**
+ * Task classes VS Code runs without write tools (review mode, or Ask mode
+ * for research): their children own no paths and run only commands VS
+ * Code's read-only check clears.
+ */
+export function isReadOnlyBackgroundTaskClass(
+  taskClass: string | undefined,
+): boolean {
+  return isReviewTaskClass(taskClass) || isResearchTaskClass(taskClass);
+}
+
+/**
+ * The mode VS Code's routing gives a task class's child, when the host has
+ * modes: Review for reviews, Ask for research. Other classes keep the
+ * parent's mode.
+ */
+export function backgroundTaskClassMode(
+  taskClass: string | undefined,
+): string | undefined {
+  if (isReviewTaskClass(taskClass)) return "review";
+  if (isResearchTaskClass(taskClass)) return "ask";
+  return undefined;
+}
 
 export type WorkspaceBackgroundLifecycle =
   | "queued"
@@ -113,7 +149,30 @@ export interface WorkspaceBackgroundRecord {
   readonly structuredResult?: FleetResultEnvelope;
   /** Why an `incomplete_expected_result` run is not a completed result. */
   readonly expectedResultIssue?: string;
+  /** VS Code's `taskClass`, normalized. Absent on older records (`general`). */
+  readonly taskClass?: string;
+  /** The mode the child was created in, when it differs from its parent's. */
+  readonly resolvedMode?: string;
+  /** The `modelTier` the parent asked for. */
+  readonly requestedModelTier?: BackgroundModelTierRequest;
+  /** The tier the child's model was chosen for, when one was. */
+  readonly modelTier?: BackgroundModelTier;
+  readonly routingReason?: string;
+  readonly fallbackUsed?: boolean;
+  /**
+   * The explicit budget in force (VS Code's `resolveBackgroundBudget`). Only
+   * `maxApiTurns` and `maxElapsedMs` stop the child here.
+   */
+  readonly budget?: AgentBudget;
+  /** Model turns, tool calls and tokens so far (absent on older records). */
+  readonly budgetUsage?: BackgroundAgentBudgetUsage;
 }
+
+/** Budget limits this host enforces; others are reported, not applied. */
+export const ENFORCED_BACKGROUND_BUDGET_LIMITS = [
+  "maxApiTurns",
+  "maxElapsedMs",
+] as const;
 
 export interface SpawnWorkspaceBackgroundRequest {
   readonly callerSessionId: string;
@@ -149,6 +208,21 @@ export interface SpawnWorkspaceBackgroundRequest {
   readonly expectedResult?: BackgroundExpectedResult;
   readonly model?: AgentModelReference;
   readonly reasoningEffort?: CoreReasoningEffort;
+  /**
+   * VS Code's `taskClass` (default `general`). Review and research classes
+   * make a read-only child and, for reviews, default `expectedResult` to
+   * `review_findings`.
+   */
+  readonly taskClass?: string;
+  /** How the child's model was chosen, reported in its status. */
+  readonly routing?: {
+    readonly requestedModelTier?: BackgroundModelTierRequest;
+    readonly modelTier?: BackgroundModelTier;
+    readonly routingReason: string;
+    readonly fallbackUsed: boolean;
+  };
+  /** VS Code's explicit `budget`. */
+  readonly budget?: AgentBudget;
 }
 
 export interface WorkspaceBackgroundTargetRequest {
@@ -245,10 +319,13 @@ export interface CreateWorkspaceBackgroundSupervisorOptions {
     readonly parentSessionId: string;
     readonly model?: AgentModelReference;
     readonly reasoningEffort?: CoreReasoningEffort;
+    /** A mode for the child instead of its parent's (see `backgroundTaskClassMode`). */
+    readonly mode?: string;
   }) => Promise<{
     readonly sessionId: string;
     readonly model?: AgentModelReference;
     readonly reasoningEffort?: CoreReasoningEffort;
+    readonly mode?: string;
   }>;
   readonly validateScopes?: (request: {
     readonly parentSessionId: string;
@@ -302,6 +379,8 @@ interface LiveBackgroundChild {
   streamedOutput: boolean;
   /** Tool calls started but not yet completed or failed, in start order. */
   readonly activeTools: Map<string, string | undefined>;
+  /** Fires when the child's `maxElapsedMs` hard limit passes. */
+  elapsedTimer?: NodeJS.Timeout;
 }
 
 interface PendingHostApproval {
@@ -421,6 +500,23 @@ export class WorkspaceBackgroundSupervisor {
       if (this.activeCount(request.callerSessionId) >= this.maxActiveChildren) {
         throw new Error("background_child_capacity_reached");
       }
+      const taskClass =
+        normalizeTaskClass(request.taskClass) || DEFAULT_BACKGROUND_TASK_CLASS;
+      const readOnly = isReadOnlyBackgroundTaskClass(taskClass);
+      if (
+        readOnly &&
+        ((request.ownedPaths?.length ?? 0) > 0 ||
+          (request.writeScopes?.length ?? 0) > 0)
+      ) {
+        // VS Code runs these classes without write tools; refuse rather than
+        // silently drop the paths.
+        throw new Error("background_task_class_is_read_only");
+      }
+      // As in VS Code, a review owes structured findings unless told otherwise.
+      const expectedResult =
+        request.expectedResult ??
+        (isReviewTaskClass(taskClass) ? "review_findings" : undefined);
+      const budget = resolveBackgroundBudget(taskClass, request.budget);
       const task = boundedRequiredText(request.task, MAX_TASK_BYTES, "task");
       const message = boundedRequiredText(
         request.message,
@@ -470,10 +566,12 @@ export class WorkspaceBackgroundSupervisor {
         throw new Error("background_scope_exceeds_parent_authority");
       }
       this.assertDisjointWriteReservations(scopes);
+      const childMode = backgroundTaskClassMode(taskClass);
       const child = await this.options.createChildSession({
         parentSessionId: request.callerSessionId,
         model: request.model,
         reasoningEffort: request.reasoningEffort,
+        ...(childMode ? { mode: childMode } : {}),
       });
       const timestamp = this.now();
       const record: WorkspaceBackgroundRecord = {
@@ -497,10 +595,24 @@ export class WorkspaceBackgroundSupervisor {
         createdAt: timestamp,
         updatedAt: timestamp,
         steeringQueued: 0,
-        ...(request.expectedResult
-          ? { expectedResult: request.expectedResult }
-          : {}),
+        ...(expectedResult ? { expectedResult } : {}),
         ...(reviewTarget ? { reviewScopeSummary: reviewTarget.summary } : {}),
+        taskClass,
+        ...(child.mode ? { resolvedMode: child.mode } : {}),
+        ...(request.routing?.requestedModelTier
+          ? { requestedModelTier: request.routing.requestedModelTier }
+          : {}),
+        ...(request.routing?.modelTier
+          ? { modelTier: request.routing.modelTier }
+          : {}),
+        ...(request.routing
+          ? {
+              routingReason: request.routing.routingReason,
+              fallbackUsed: request.routing.fallbackUsed,
+            }
+          : {}),
+        ...(budget ? { budget } : {}),
+        budgetUsage: { tokens: 0, toolCalls: 0, apiTurns: 0, elapsedMs: 0 },
       };
       this.records.set(record.childSessionId, record);
       this.steering.set(record.childSessionId, []);
@@ -526,7 +638,7 @@ export class WorkspaceBackgroundSupervisor {
           : brief;
       const handoff = this.options.childFinalStatus
         ? owned
-        : withFleetResultInstruction(request.expectedResult, owned);
+        : withFleetResultInstruction(expectedResult, owned);
       this.startRun(record.childSessionId, handoff, false);
       return cloneRecord(
         this.requireOwned({
@@ -957,6 +1069,7 @@ export class WorkspaceBackgroundSupervisor {
       startedAt: record.startedAt ?? this.now(),
     });
     await this.persist();
+    this.armElapsedBudget(childSessionId);
     const onEvent = (event: AgentTurnEvent) =>
       this.captureEvent(childSessionId, event);
     const result = resume
@@ -1112,7 +1225,101 @@ export class WorkspaceBackgroundSupervisor {
       });
     } else if (event.type === "model.resolved") {
       this.update(childSessionId, { phase: "waiting_for_provider" });
+    } else if (event.type === "usage.updated") {
+      this.chargeBudget(childSessionId, {
+        tokens: event.usage.inputTokens + event.usage.outputTokens,
+      });
+    } else if (event.type === "execution.updated") {
+      if (event.event.type === "model_call_started") {
+        // VS Code's engine limit: a child gets ceil(maxApiTurns × ratio)
+        // successful model turns, then the next one is refused.
+        const record = this.requireRecord(childSessionId);
+        const hardLimit = getEngineHardLimit(
+          record.budget?.maxApiTurns,
+          record.taskClass,
+        );
+        if (
+          hardLimit !== undefined &&
+          (record.budgetUsage?.apiTurns ?? 0) >= hardLimit
+        ) {
+          void this.exhaustBudget(childSessionId, "api_turns");
+        }
+      } else if (event.event.type === "model_call_completed") {
+        this.chargeBudget(childSessionId, { apiTurns: 1 });
+      } else if (event.event.type === "tool_call_completed") {
+        this.chargeBudget(childSessionId, { toolCalls: 1 });
+      }
     }
+  }
+
+  /** Add to a child's usage, which its budget (if any) is checked against. */
+  private chargeBudget(
+    childSessionId: string,
+    charge: Partial<Omit<BackgroundAgentBudgetUsage, "elapsedMs">>,
+  ): void {
+    const record = this.requireRecord(childSessionId);
+    const usage = record.budgetUsage;
+    this.update(childSessionId, {
+      budgetUsage: {
+        tokens: (usage?.tokens ?? 0) + (charge.tokens ?? 0),
+        toolCalls: (usage?.toolCalls ?? 0) + (charge.toolCalls ?? 0),
+        apiTurns: (usage?.apiTurns ?? 0) + (charge.apiTurns ?? 0),
+        elapsedMs: this.elapsedSinceStart(record),
+      },
+    });
+    this.schedulePersist();
+  }
+
+  private elapsedSinceStart(record: WorkspaceBackgroundRecord): number {
+    return record.startedAt === undefined
+      ? 0
+      : Math.max(0, this.now() - record.startedAt);
+  }
+
+  /**
+   * Stop a child whose `maxElapsedMs` hard limit (× VS Code's ratio) passes,
+   * counted from when it started, so waiting for approval also counts.
+   */
+  private armElapsedBudget(childSessionId: string): void {
+    const live = this.live.get(childSessionId);
+    const record = this.requireRecord(childSessionId);
+    const limit = record.budget?.maxElapsedMs;
+    if (!live || live.elapsedTimer || limit === undefined) return;
+    const hardLimitMs = limit * getBudgetHardLimitRatio(record.taskClass);
+    const remaining = hardLimitMs - this.elapsedSinceStart(record);
+    live.elapsedTimer = setTimeout(
+      () => void this.exhaustBudget(childSessionId, "elapsed_time"),
+      Math.max(0, remaining),
+    );
+    live.elapsedTimer.unref?.();
+  }
+
+  /**
+   * End a child that reached a hard budget limit, as VS Code does: the run
+   * is stopped and recorded as `budget_exhausted` with reason
+   * `budget_exhausted:<kind>`.
+   */
+  private async exhaustBudget(
+    childSessionId: string,
+    kind: "api_turns" | "elapsed_time",
+  ): Promise<void> {
+    const record = this.records.get(childSessionId);
+    if (!record || isTerminal(record)) return;
+    const reason = `budget_exhausted:${kind}`;
+    // Record the outcome before stopping the run, so the cancelled turn it
+    // returns cannot be recorded instead.
+    const finished = this.finish(childSessionId, {
+      lifecycle: "failed",
+      phase: "failed",
+      resultState: "budget_exhausted",
+      terminalReason: reason,
+    });
+    this.settleHostApproval(childSessionId, false);
+    this.live.get(childSessionId)?.controller.abort(reason);
+    await this.options
+      .cancelSession(childSessionId, reason)
+      .catch(() => undefined);
+    await finished;
   }
 
   private appendOutput(childSessionId: string, text: string): void {
@@ -1141,8 +1348,14 @@ export class WorkspaceBackgroundSupervisor {
         >
       >,
   ): Promise<void> {
-    if (isTerminal(this.records.get(childSessionId))) return;
+    const current = this.records.get(childSessionId);
+    if (isTerminal(current)) return;
     this.finalStatuses.delete(childSessionId);
+    const live = this.live.get(childSessionId);
+    if (live?.elapsedTimer) {
+      clearTimeout(live.elapsedTimer);
+      live.elapsedTimer = undefined;
+    }
     const steering = this.steering.get(childSessionId) ?? [];
     steering.length = 0;
     this.steering.set(childSessionId, steering);
@@ -1152,6 +1365,14 @@ export class WorkspaceBackgroundSupervisor {
       currentTool: undefined,
       steeringQueued: 0,
       completedAt: this.now(),
+      ...(current?.budgetUsage
+        ? {
+            budgetUsage: {
+              ...current.budgetUsage,
+              elapsedMs: this.elapsedSinceStart(current),
+            },
+          }
+        : {}),
     });
     await this.persist();
     this.notifyWaiters(childSessionId);

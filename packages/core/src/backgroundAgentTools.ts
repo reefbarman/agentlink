@@ -247,6 +247,200 @@ export const FORBIDDEN_PATHS_PROPERTY = {
   description: "Paths the delegated agent must not modify.",
 } as const;
 
+// --- Task classes, model tiers and budgets ----------------------------------
+
+const REVIEW_TASK_CLASS_PREFIX = "review_";
+
+/** Canonical rule key applied to any review task class without its own rule. */
+export const BASE_REVIEW_TASK_CLASS = "review_code";
+
+export function normalizeTaskClass(taskClass: string | undefined): string {
+  return taskClass?.trim().toLowerCase() ?? "";
+}
+
+/**
+ * Shared review predicate. Both the backend router and the model router must
+ * agree, otherwise a configured review target can be honored by one layer and
+ * silently skipped by the other.
+ */
+export function isReviewTaskClass(taskClass: string | undefined): boolean {
+  return normalizeTaskClass(taskClass).startsWith(REVIEW_TASK_CLASS_PREFIX);
+}
+
+const RESEARCH_TASK_CLASSES = new Set(["research", "readonly-research"]);
+
+export function isResearchTaskClass(taskClass: string | undefined): boolean {
+  return RESEARCH_TASK_CLASSES.has(normalizeTaskClass(taskClass));
+}
+
+/**
+ * Task classes whose usage counts toward a deliberately configured shared
+ * (subtree or goal) budget owned by another session.
+ *
+ * Background agents never receive an automatic budget: the foreground
+ * coordinator supervises progress through status and steering. Only budgets a
+ * caller explicitly requests are enforced.
+ */
+export function isSharedBudgetMemberTaskClass(
+  taskClass: string | undefined,
+): boolean {
+  return isReviewTaskClass(taskClass) || isResearchTaskClass(taskClass);
+}
+
+/**
+ * Review cost tier must be an explicit caller or routing-policy decision.
+ * Task wording is not a reliable reason to silently select a more expensive model.
+ */
+export function inferReviewTier(
+  request: Pick<SpawnBackgroundRequest, "taskClass">,
+): "balanced" | undefined {
+  return isReviewTaskClass(request.taskClass) ? "balanced" : undefined;
+}
+
+/** How far past an explicit budget a run may go before it is stopped. */
+export const DEFAULT_BUDGET_HARD_LIMIT_RATIO = 3;
+export const REVIEW_BUDGET_HARD_LIMIT_RATIO = 1.5;
+
+export function getBudgetHardLimitRatio(taskClass: string | undefined): number {
+  return isReviewTaskClass(taskClass)
+    ? REVIEW_BUDGET_HARD_LIMIT_RATIO
+    : DEFAULT_BUDGET_HARD_LIMIT_RATIO;
+}
+
+export function getEngineHardLimit(
+  limit: number | undefined,
+  taskClass: string | undefined,
+): number | undefined {
+  return limit === undefined
+    ? undefined
+    : Math.ceil(limit * getBudgetHardLimitRatio(taskClass));
+}
+
+/**
+ * Background agents only receive budgets their caller explicitly requested.
+ * There is no automatic budget for any task class or model tier.
+ */
+export function resolveBackgroundBudget(
+  taskClass: string,
+  requestedBudget: AgentBudget | undefined,
+): AgentBudget | undefined {
+  if (!requestedBudget) return undefined;
+  // Review input size is not a useful proxy for progress: a captured diff can
+  // consume a token cap before the agent has inspected surrounding code. Keep
+  // explicit review budgets to committed work units and wall-clock time.
+  const limitKeys: ReadonlyArray<keyof AgentBudget> = isReviewTaskClass(
+    taskClass,
+  )
+    ? ["maxToolCalls", "maxApiTurns", "maxElapsedMs"]
+    : [
+        "maxTokens",
+        "maxToolCalls",
+        "maxApiTurns",
+        "maxElapsedMs",
+        "maxEstimatedCostUsd",
+      ];
+  const budget: AgentBudget = {};
+  for (const key of limitKeys) {
+    const value = requestedBudget[key];
+    if (typeof value === "number") {
+      (budget as Record<string, unknown>)[key] = value;
+    }
+  }
+  // A budget without any limit (for example, only a default scope) is not a
+  // configured constraint.
+  if (Object.keys(budget).length === 0) return undefined;
+  if (
+    budget.maxEstimatedCostUsd !== undefined &&
+    requestedBudget.estimatedCostPerMillionTokens !== undefined
+  ) {
+    budget.estimatedCostPerMillionTokens =
+      requestedBudget.estimatedCostPerMillionTokens;
+  }
+  if (requestedBudget.scope !== undefined) budget.scope = requestedBudget.scope;
+  return budget;
+}
+
+/** VS Code's `budget` description for `spawn_background_agent`. */
+export const AGENT_BUDGET_DESCRIPTION =
+  "Optional deliberate limit; omit unless the user asked for one. Background agents have no automatic budget: supervise progress with status and steering. An explicit limit sends no wrap-up messages and stops the agent as failed at 1.5x the value for reviews, 3x otherwise. Review token/cost caps are ignored.";
+
+/** VS Code's `spawn_background_agent` `budget` property. */
+export const AGENT_BUDGET_PROPERTY = {
+  type: "object",
+  properties: {
+    maxTokens: {
+      description:
+        "Cap on uncached input + output tokens summed across all API turns. Ignored for review task classes.",
+      type: "number",
+    },
+    maxToolCalls: {
+      description:
+        "Cap on successfully committed tool invocations. Interrupted/provisional tool streams are not charged.",
+      type: "number",
+    },
+    maxApiTurns: {
+      description:
+        "Cap on successful model API turns. Provider retry attempts are not charged.",
+      type: "number",
+    },
+    maxElapsedMs: {
+      description: "Wall-clock cap in milliseconds.",
+      type: "number",
+    },
+    maxEstimatedCostUsd: {
+      description:
+        "Estimated-cost cap in USD; only enforced when estimatedCostPerMillionTokens is also set.",
+      type: "number",
+    },
+    estimatedCostPerMillionTokens: { type: "number" },
+    warningThresholdRatio: {
+      description: "Deprecated; ignored.",
+      type: "number",
+    },
+    scope: { type: "string", enum: ["session", "subtree", "goal"] },
+  },
+  additionalProperties: false,
+  description: AGENT_BUDGET_DESCRIPTION,
+} as const;
+
+/** VS Code's reading of a `spawn_background_agent` `modelTier` input. */
+export function parseModelTierInput(
+  value: unknown,
+): BackgroundModelTierRequest | undefined {
+  if (value === undefined || value === null) return undefined;
+  const tier = String(value);
+  return tier === "cheap" ||
+    tier === "balanced" ||
+    tier === "deep_reasoning" ||
+    tier === "foreground"
+    ? tier
+    : undefined;
+}
+
+/**
+ * VS Code's reading of a `spawn_background_agent` `budget` input: numeric
+ * limits (zero or non-numeric means none) and a scope defaulting to
+ * `session`.
+ */
+export function parseAgentBudgetInput(value: unknown): AgentBudget | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const budget = value as Record<string, unknown>;
+  return {
+    maxTokens: Number(budget.maxTokens) || undefined,
+    maxToolCalls: Number(budget.maxToolCalls) || undefined,
+    maxApiTurns: Number(budget.maxApiTurns) || undefined,
+    maxElapsedMs: Number(budget.maxElapsedMs) || undefined,
+    maxEstimatedCostUsd: Number(budget.maxEstimatedCostUsd) || undefined,
+    estimatedCostPerMillionTokens:
+      Number(budget.estimatedCostPerMillionTokens) || undefined,
+    warningThresholdRatio: Number(budget.warningThresholdRatio) || undefined,
+    scope:
+      budget.scope === "subtree" || budget.scope === "goal"
+        ? budget.scope
+        : "session",
+  };
+}
+
 // --- Review targets and structured results ----------------------------------
 
 /** VS Code's `reviewScope` property of `spawn_background_agent`. */

@@ -229,12 +229,17 @@ describe("parseAssistantServerConfig", () => {
         });
         value.modelRoles = {
           review: { providerId: "local", modelId: "fixture" },
+          // Background modelTier roles.
+          cheap: { providerId: "codex", modelId: "gpt-6.1-sol" },
+          deep_reasoning: { providerId: "local", modelId: "fixture" },
         };
       }),
       "/etc/agentlink",
     );
     expect(config.modelRoles).toEqual({
       review: { providerId: "local", modelId: "fixture" },
+      cheap: { providerId: "codex", modelId: "gpt-6.1-sol" },
+      deep_reasoning: { providerId: "local", modelId: "fixture" },
     });
     const models = configuredModels(config);
     expect(models).toHaveLength(2);

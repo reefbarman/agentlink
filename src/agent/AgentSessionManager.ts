@@ -20,6 +20,9 @@ import {
   type BackgroundResultsCompletedEntry,
   type BackgroundResultsPendingEntry,
   type BackgroundResultsWaitStatus,
+  getBudgetHardLimitRatio,
+  getEngineHardLimit,
+  resolveBackgroundBudget,
 } from "@agentlink/core/background-agent-tools";
 import { workHistoryRegistry } from "./WorkHistoryRegistry.js";
 import * as nodePath from "path";
@@ -531,15 +534,6 @@ When the configuration is ready, briefly summarize it and end with exactly one m
 
 Only task and prompt are required. Omit optional JSON properties to use AgentLink defaults. Do not emit the envelope until all necessary user questions have been answered. When asking a question, do not emit the envelope.`;
 
-/**
- * Hard-stop boundary for an explicitly requested budget, as a multiple of its
- * nominal value. Background agents never receive automatic budgets, and
- * reaching the nominal value does not ask the agent to wrap up: progress is
- * supervised by the foreground coordinator.
- */
-const DEFAULT_BUDGET_HARD_LIMIT_RATIO = 3;
-const REVIEW_BUDGET_HARD_LIMIT_RATIO = 1.5;
-
 interface PreparedTurnExecution {
   context: Readonly<ToolDispatchContext> | undefined;
   policy: Readonly<CoreResolvedWebAccessPolicy>;
@@ -612,65 +606,6 @@ function deepFreeze<T>(value: T): Readonly<T> {
     Object.freeze(value);
   }
   return value;
-}
-
-function getBudgetHardLimitRatio(taskClass: string | undefined): number {
-  return isReviewTaskClass(taskClass)
-    ? REVIEW_BUDGET_HARD_LIMIT_RATIO
-    : DEFAULT_BUDGET_HARD_LIMIT_RATIO;
-}
-
-function getEngineHardLimit(
-  limit: number | undefined,
-  taskClass: string | undefined,
-): number | undefined {
-  return limit === undefined
-    ? undefined
-    : Math.ceil(limit * getBudgetHardLimitRatio(taskClass));
-}
-
-/**
- * Background agents only receive budgets their caller explicitly requested.
- * There is no automatic budget for any task class or model tier.
- */
-function resolveBackgroundBudget(
-  taskClass: string,
-  requestedBudget: AgentBudget | undefined,
-): AgentBudget | undefined {
-  if (!requestedBudget) return undefined;
-  // Review input size is not a useful proxy for progress: a captured diff can
-  // consume a token cap before the agent has inspected surrounding code. Keep
-  // explicit review budgets to committed work units and wall-clock time.
-  const limitKeys: ReadonlyArray<keyof AgentBudget> = isReviewTaskClass(
-    taskClass,
-  )
-    ? ["maxToolCalls", "maxApiTurns", "maxElapsedMs"]
-    : [
-        "maxTokens",
-        "maxToolCalls",
-        "maxApiTurns",
-        "maxElapsedMs",
-        "maxEstimatedCostUsd",
-      ];
-  const budget: AgentBudget = {};
-  for (const key of limitKeys) {
-    const value = requestedBudget[key];
-    if (typeof value === "number") {
-      (budget as Record<string, unknown>)[key] = value;
-    }
-  }
-  // A budget without any limit (for example, only a default scope) is not a
-  // configured constraint.
-  if (Object.keys(budget).length === 0) return undefined;
-  if (
-    budget.maxEstimatedCostUsd !== undefined &&
-    requestedBudget.estimatedCostPerMillionTokens !== undefined
-  ) {
-    budget.estimatedCostPerMillionTokens =
-      requestedBudget.estimatedCostPerMillionTokens;
-  }
-  if (requestedBudget.scope !== undefined) budget.scope = requestedBudget.scope;
-  return budget;
 }
 
 export interface CheckpointRevertPreviewResult {

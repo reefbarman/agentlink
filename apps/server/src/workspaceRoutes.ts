@@ -54,7 +54,8 @@ const AGENTS_ROUTE_PATTERN =
   /^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/agents(?:\/([^/]+)\/(steer|stop|approval))?$/u;
 const MAX_STEERING_BYTES = 64 * 1024;
 const MAX_STOP_REASON_LENGTH = 4_096;
-const MODEL_ROLE_PATTERN = /^[a-z][a-z0-9-]{0,31}$/u;
+/** Role names such as `review` or the `deep_reasoning` model tier. */
+const MODEL_ROLE_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/u;
 
 /**
  * The workspace host operations the server uses. The host acts as its own

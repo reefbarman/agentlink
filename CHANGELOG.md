@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The CLI and Assistant now take VS Code's `taskClass`, `modelTier` and `budget` when starting a background agent. A review task class (`review_code`, `review_plan`) or research class runs a read-only child (in Review or Ask mode where modes exist) that runs only commands VS Code's read-only check clears and refuses the rest, and a review owes `review_findings` unless told otherwise. `modelTier` uses the Assistant's new `cheap`, `balanced` and `deep_reasoning` model roles, falling back to the parent's model (reported as `fallbackUsed`), and a review uses the `review` role. An explicit budget stops the child as `budget_exhausted` at VS Code's 1.5× (reviews) or 3× its API-turn or elapsed-time limit; other limits are reported as not enforced. Status and Assistant agent cards report the task class, tier, usage and budget.
+
 ## 1.70.0
 
 - The CLI and Assistant now take VS Code's `reviewScope` and `expectedResult` when starting a background agent. A review scope (working tree, files, commit range or explicit diff) is checked against the project before the child starts and handed over in VS Code's review brief. A child owing a `review_findings`, `patch` or `verification` result returns it through VS Code's background `set_task_status`, which refuses a malformed envelope with VS Code's diagnostics so the child can fix it; a child that ends without the envelope finishes as `incomplete_expected_result` with VS Code's explanation instead of passing its text off as the result. Assistant agent cards carry the validated result.

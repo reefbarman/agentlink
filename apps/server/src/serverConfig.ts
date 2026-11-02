@@ -192,7 +192,16 @@ export interface AssistantServerModelReference {
   readonly modelId: string;
 }
 
-export const ASSISTANT_SERVER_MODEL_ROLES = ["review"] as const;
+/**
+ * `review` for reviews, and one role per VS Code background `modelTier`
+ * that a background agent's `modelTier` maps onto.
+ */
+export const ASSISTANT_SERVER_MODEL_ROLES = [
+  "review",
+  "cheap",
+  "balanced",
+  "deep_reasoning",
+] as const;
 export type AssistantServerModelRole =
   (typeof ASSISTANT_SERVER_MODEL_ROLES)[number];
 

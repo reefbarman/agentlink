@@ -251,7 +251,10 @@ async function startHarness(
         },
       ],
       defaultModel: { providerId: "fixture", modelId: "fixture-model" },
-      roles: { review: { providerId: "claude", modelId: "claude-review" } },
+      roles: {
+        review: { providerId: "claude", modelId: "claude-review" },
+        deep_reasoning: { providerId: "claude", modelId: "claude-review" },
+      },
     },
     heartbeatMs: 100,
     streamStallTimeoutMs: options.streamStallTimeoutMs,
@@ -1092,7 +1095,11 @@ describe("assistant workspace routes", () => {
           },
         ],
         defaultModel: { providerId: "fixture", modelId: "fixture-model" },
-        roles: { review: { providerId: "claude", modelId: "claude-review" } },
+        roles: {
+          review: { providerId: "claude", modelId: "claude-review" },
+          // A background modelTier role, named like VS Code's tier.
+          deep_reasoning: { providerId: "claude", modelId: "claude-review" },
+        },
       },
     });
 
@@ -1670,6 +1677,62 @@ describe("assistant workspace routes", () => {
     );
     expect(brief).toContain("## Review goal");
     expect(brief).toContain("Paths: notes.md");
+  });
+
+  it("runs a review task class read-only on the review model with VS Code's review defaults", async () => {
+    const harness = await startHarness({ finalStatus: true });
+    const { owner, request } = harness;
+    harness.fetch.mockImplementation(async (_url, init) =>
+      hasToolResult(init)
+        ? completion("parent done")
+        : toolCall("spawn_background_agent", {
+            task: "Review notes.md",
+            message: "check notes",
+            taskClass: "review_code",
+            budget: { maxApiTurns: 4 },
+          }),
+    );
+    harness.claudeFetch.mockImplementation(async () => {
+      return toolCall("set_task_status", {
+        status: "completed",
+        result: {
+          type: "review_findings",
+          findings: [{ severity: "low", message: "typo", path: "notes.md" }],
+          emptyDiff: false,
+        },
+      });
+    });
+    const sessionId = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    await request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: owner,
+      body: { text: "get a review" },
+    });
+    await vi.waitFor(async () => {
+      await expect(
+        request({ path: `${base}/agents`, session: owner }),
+      ).resolves.toMatchObject({
+        body: {
+          agents: [
+            {
+              lifecycle: "completed",
+              model: { providerId: "claude" },
+              scopes: [{ path: ".", kind: "directory", access: "read" }],
+              taskClass: "review_code",
+              routingReason: "taskClass review_code: model_role review",
+              fallbackUsed: false,
+              expectedResult: "review_findings",
+              budget: { maxApiTurns: 4 },
+              budgetUsage: { apiTurns: 1, toolCalls: 1 },
+              // No expectedResult was given: a review owes findings.
+              structuredResult: { type: "review_findings", emptyDiff: false },
+            },
+          ],
+        },
+      });
+    }, CHILD_RUN_WAIT);
   });
 
   it("lets a child of an autonomous chat write without asking when children inherit its grant", async () => {

@@ -53,6 +53,7 @@ import {
   type WorkspaceArtifactRoot,
 } from "./artifactTools.js";
 import {
+  isReadOnlyBackgroundTaskClass,
   readWorkspaceBackgroundSessionIds,
   WorkspaceBackgroundSupervisor,
   type WorkspaceBackgroundChange,
@@ -760,6 +761,15 @@ export async function createWorkspaceHost(
             : {}),
           readOnlyCommands: async (request) => {
             // A background child follows its parent's policy.
+            // A review or research child runs only commands VS Code's
+            // read-only check clears and refuses the rest, as VS Code's
+            // review and research profiles do, whatever its parent allows.
+            const child = backgroundSupervisor?.getRecordForSession(
+              request.sessionId,
+            );
+            if (child && isReadOnlyBackgroundTaskClass(child.taskClass)) {
+              return "refuse";
+            }
             const hosted = options.commands?.readOnlyCommands?.(
               grantRequest(request),
             );
@@ -840,19 +850,24 @@ export async function createWorkspaceHost(
           const model = request.model ?? parent.record.selectedModel;
           const reasoningEffort =
             request.reasoningEffort ?? parent.record.reasoningEffort;
+          // A child works in its parent's mode, unless its task class has
+          // its own (Review for reviews, Ask for research).
+          const mode = options.modes
+            ? (request.mode ?? parent.record.mode)
+            : undefined;
           const created = await engine.sessions.create({
             principal,
             model,
             reasoningEffort,
-            // A child works within its parent's mode.
-            ...(options.modes && parent.record.mode !== undefined
-              ? { mode: parent.record.mode }
-              : {}),
+            ...(mode !== undefined ? { mode } : {}),
           });
           return {
             sessionId: created.record.sessionId,
             model,
             reasoningEffort,
+            ...(options.modes && request.mode !== undefined
+              ? { mode: request.mode }
+              : {}),
           };
         },
         validateScopes: async (request) => {
@@ -1707,8 +1722,8 @@ export async function createWorkspaceHost(
             ? "You are a one-level background child. Work only within your assigned file scopes. You cannot delegate. Commands, MCP calls, and writes may pause for foreground human approval."
             : `You may run up to ${backgroundSupervisor?.activeChildLimit ?? 2} one-level background children at once, each writing only inside its ownedPaths (none for a read-only reviewer) without overlapping another running child, then observe, steer, wait for, or stop them.${
                 options.background.modelRoles?.review
-                  ? ' For a review, spawn a read-only child with model_role "review".'
-                  : ""
+                  ? ' For a review, spawn a child with taskClass "review_code", which runs read-only on the "review" model role.'
+                  : ' For a review, spawn a child with taskClass "review_code", which runs read-only.'
               }`
           : "Background writers are not enabled.",
         artifactInstructions,

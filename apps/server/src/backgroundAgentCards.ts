@@ -30,7 +30,11 @@ export function toAgentCard(record: WorkspaceBackgroundRecord): BgSessionInfo {
     task: record.task,
     status: cardStatus(record),
     lifecycle:
-      record.lifecycle === "awaiting_approval" ? "running" : record.lifecycle,
+      record.lifecycle === "awaiting_approval"
+        ? "running"
+        : record.resultState === "budget_exhausted"
+          ? "budget_exhausted"
+          : record.lifecycle,
     phase: record.phase,
     resultState: record.resultState,
     parentSessionId: record.parentSessionId,
@@ -55,6 +59,23 @@ export function toAgentCard(record: WorkspaceBackgroundRecord): BgSessionInfo {
     ...(record.reasoningEffort
       ? { reasoningEffort: record.reasoningEffort }
       : {}),
+    ...(record.resolvedMode ? { resolvedMode: record.resolvedMode } : {}),
+    ...(record.taskClass ? { taskClass: record.taskClass } : {}),
+    ...(record.requestedModelTier
+      ? { requestedModelTier: record.requestedModelTier }
+      : {}),
+    ...(record.modelTier ? { modelTier: record.modelTier } : {}),
+    ...(record.routingReason ? { routingReason: record.routingReason } : {}),
+    ...(record.fallbackUsed !== undefined
+      ? { fallbackUsed: record.fallbackUsed }
+      : {}),
+    ...(record.budgetUsage
+      ? {
+          toolCalls: record.budgetUsage.toolCalls,
+          apiTurns: record.budgetUsage.apiTurns,
+        }
+      : {}),
+    ...(record.budget ? { budget: structuredClone(record.budget) } : {}),
     ...(record.terminalReason ? { terminalReason: record.terminalReason } : {}),
     ...(record.lifecycle === "failed" || record.lifecycle === "interrupted"
       ? {

@@ -9,11 +9,16 @@ import {
   type HostToolResolver,
 } from "@agentlink/core";
 import {
+  AGENT_BUDGET_PROPERTY,
   EXPECTED_RESULT_PROPERTY,
   FORBIDDEN_PATHS_PROPERTY,
   OWNED_PATHS_PROPERTY,
   REVIEW_SCOPE_PROPERTY,
+  isReviewTaskClass,
+  normalizeTaskClass,
+  parseAgentBudgetInput,
   parseExpectedResultInput,
+  parseModelTierInput,
   parseReviewScopeInput,
   GET_BACKGROUND_STATUS_TOOL,
   KILL_BACKGROUND_AGENT_TOOL,
@@ -34,6 +39,7 @@ import {
 import { MISSING_TEXT_RESULT_ISSUE } from "@agentlink/core/background-results";
 
 import {
+  ENFORCED_BACKGROUND_BUDGET_LIMITS,
   type SpawnWorkspaceBackgroundRequest,
   type WorkspaceBackgroundRecord,
   type WorkspaceBackgroundSupervisor,
@@ -109,6 +115,7 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
       roles.length > 0
         ? `Set model_role to run the child on a configured model (${roles.join(", ")}); use "review" for reviews when available.`
         : undefined,
+      "Set taskClass review_code or review_plan for a review: the child is read-only, defaults to expectedResult review_findings, and uses the review model when configured.",
     ]
       .filter(Boolean)
       .join(" "),
@@ -127,6 +134,22 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
           maxLength: 65_536,
           description:
             "Full instruction for the background agent. Be specific and self-contained. For writable work, include the files it owns, files to avoid, allowed commands/tests, and how to report conflicts. For review work, keep this to a concise intent/risk summary and use reviewScope for the live working tree, current files, or a commit range; use kind=diff only for small exact hunks that must remain immutable.",
+        },
+        taskClass: {
+          type: "string",
+          maxLength: 64,
+          description:
+            "Task class (e.g. review_code, review_plan, readonly-research, research, explore, debug, design, general; default general). Review classes run in Review mode and research classes in Ask mode, both read-only: no ownedPaths, and only commands the read-only check clears. Review classes default expectedResult to review_findings. Other classes keep this session's mode.",
+        },
+        modelTier: {
+          type: "string",
+          enum: ["cheap", "balanced", "deep_reasoning", "foreground"],
+          description:
+            "Optional routing tier. Uses the model configured for that tier's model role; without one (and for \"foreground\") the child uses this session's model, and the result reports fallbackUsed.",
+        },
+        budget: {
+          ...AGENT_BUDGET_PROPERTY,
+          description: `${AGENT_BUDGET_PROPERTY.description} Here only maxApiTurns and maxElapsedMs stop the agent (as budget_exhausted); other limits are reported, not enforced.`,
         },
         reviewScope: REVIEW_SCOPE_PROPERTY,
         expectedResult: EXPECTED_RESULT_PROPERTY,
@@ -177,20 +200,22 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
       if (role !== undefined && providerId !== undefined) {
         return toolError("model_role_conflicts_with_provider_id_and_model_id");
       }
-      const roleModel =
-        role !== undefined && Object.hasOwn(options.modelRoles ?? {}, role)
-          ? options.modelRoles![role]
-          : undefined;
+      const roleModel = configuredRole(options, role);
       if (role !== undefined && !roleModel) {
         return toolError("model_role_not_configured");
       }
-      const model = roleModel
-        ? { providerId: roleModel.providerId, modelId: roleModel.modelId }
-        : providerId && modelId
-          ? { providerId, modelId }
-          : undefined;
+      const taskClass = optionalString(input.taskClass);
+      const routing = routeChildModel(options, {
+        role,
+        roleModel,
+        explicit: providerId && modelId ? { providerId, modelId } : undefined,
+        requestedModelTier: parseModelTierInput(input.modelTier),
+        taskClass,
+      });
+      const model = routing.model;
       const reviewScope = parseReviewScopeInput(input.reviewScope);
       const expectedResult = parseExpectedResultInput(input.expectedResult);
+      const budget = parseAgentBudgetInput(input.budget);
       try {
         const record = await options.supervisor.spawn({
           callerSessionId: discovery.sessionId,
@@ -218,9 +243,22 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
                   input.reasoning_effort as SpawnWorkspaceBackgroundRequest["reasoningEffort"],
               }
             : {}),
+          ...(taskClass ? { taskClass } : {}),
+          routing: routing.report,
+          ...(budget ? { budget } : {}),
         });
+        const unenforced = record.budget
+          ? Object.keys(record.budget).filter(
+              (key) =>
+                key.startsWith("max") &&
+                !(
+                  ENFORCED_BACKGROUND_BUDGET_LIMITS as readonly string[]
+                ).includes(key),
+            )
+          : [];
         return toolResult({
           sessionId: record.childSessionId,
+          ...(record.resolvedMode ? { resolvedMode: record.resolvedMode } : {}),
           ...(record.model
             ? {
                 resolvedModel: record.model.modelId,
@@ -230,12 +268,18 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
           ...(record.reasoningEffort
             ? { reasoningEffort: record.reasoningEffort }
             : {}),
-          routingReason: roleModel
-            ? `model_role ${role}`
-            : model
-              ? "explicit provider_id and model_id"
-              : "parent session model",
-          fallbackUsed: false,
+          taskClass: record.taskClass,
+          ...(record.requestedModelTier
+            ? { requestedModelTier: record.requestedModelTier }
+            : {}),
+          ...(record.modelTier ? { modelTier: record.modelTier } : {}),
+          routingReason: routing.report.routingReason,
+          fallbackUsed: routing.report.fallbackUsed,
+          ...(record.expectedResult
+            ? { expectedResult: record.expectedResult }
+            : {}),
+          ...(record.budget ? { budget: record.budget } : {}),
+          ...(unenforced.length > 0 ? { budgetNotEnforced: unenforced } : {}),
           task: record.task,
           scopes: record.scopes,
           ...(record.forbidden
@@ -521,9 +565,31 @@ export function workspaceBackgroundStatus(
           ),
         }
       : {}),
+    resolvedMode: record.resolvedMode,
     resolvedModel: record.model?.modelId,
     resolvedProvider: record.model?.providerId,
     reasoningEffort: record.reasoningEffort,
+    taskClass: record.taskClass ?? DEFAULT_TASK_CLASS,
+    requestedModelTier: record.requestedModelTier,
+    modelTier: record.modelTier,
+    ...(record.budgetUsage
+      ? {
+          toolCalls: record.budgetUsage.toolCalls,
+          tokenUsage: record.budgetUsage.tokens,
+          apiTurns: record.budgetUsage.apiTurns,
+        }
+      : {}),
+    ...(record.budget
+      ? {
+          budget: record.budget,
+          budgetUsage: {
+            tokens: record.budgetUsage?.tokens ?? 0,
+            toolCalls: record.budgetUsage?.toolCalls ?? 0,
+            apiTurns: record.budgetUsage?.apiTurns ?? 0,
+            elapsedMs,
+          },
+        }
+      : {}),
     resultState: record.resultState,
     terminalReason: record.terminalReason,
     retrySafe: done ? true : undefined,
@@ -769,6 +835,109 @@ function withResultSessionIdAlias(
     },
   ];
   return copy as CoreModelJsonSchema;
+}
+
+const DEFAULT_TASK_CLASS = "general";
+
+function configuredRole(
+  options: CreateWorkspaceBackgroundToolsOptions,
+  role: string | undefined,
+): AgentModelReference | undefined {
+  const model =
+    role !== undefined && Object.hasOwn(options.modelRoles ?? {}, role)
+      ? options.modelRoles![role]
+      : undefined;
+  return model
+    ? { providerId: model.providerId, modelId: model.modelId }
+    : undefined;
+}
+
+/**
+ * Which model a child runs on. An explicit `model_role` or provider and
+ * model wins. Otherwise `modelTier` maps onto the model role of the same
+ * name (falling back to the parent's model when none is configured, or for
+ * `foreground`), and a review task class uses the `review` role when
+ * configured. Without any of these, the child uses its parent's model.
+ */
+function routeChildModel(
+  options: CreateWorkspaceBackgroundToolsOptions,
+  request: {
+    readonly role: string | undefined;
+    readonly roleModel: AgentModelReference | undefined;
+    readonly explicit: AgentModelReference | undefined;
+    readonly requestedModelTier: ReturnType<typeof parseModelTierInput>;
+    readonly taskClass: string | undefined;
+  },
+): {
+  readonly model?: AgentModelReference;
+  readonly report: NonNullable<SpawnWorkspaceBackgroundRequest["routing"]>;
+} {
+  const requested = request.requestedModelTier;
+  const base = requested ? { requestedModelTier: requested } : {};
+  if (request.roleModel) {
+    return {
+      model: request.roleModel,
+      report: {
+        ...base,
+        routingReason: `model_role ${request.role}`,
+        fallbackUsed: false,
+      },
+    };
+  }
+  if (request.explicit) {
+    return {
+      model: request.explicit,
+      report: {
+        ...base,
+        routingReason: "explicit provider_id and model_id",
+        fallbackUsed: false,
+      },
+    };
+  }
+  if (requested === "foreground") {
+    return {
+      report: {
+        ...base,
+        routingReason: "modelTier foreground: parent session model",
+        fallbackUsed: false,
+      },
+    };
+  }
+  if (requested) {
+    const tierModel = configuredRole(options, requested);
+    return tierModel
+      ? {
+          model: tierModel,
+          report: {
+            ...base,
+            modelTier: requested,
+            routingReason: `modelTier ${requested}: model_role ${requested}`,
+            fallbackUsed: false,
+          },
+        }
+      : {
+          report: {
+            ...base,
+            routingReason: `no model role is configured for modelTier ${requested}; parent session model`,
+            fallbackUsed: true,
+          },
+        };
+  }
+  const reviewModel = isReviewTaskClass(request.taskClass)
+    ? configuredRole(options, "review")
+    : undefined;
+  if (reviewModel) {
+    return {
+      model: reviewModel,
+      report: {
+        routingReason: `taskClass ${normalizeTaskClass(request.taskClass)}: model_role review`,
+        fallbackUsed: false,
+      },
+    };
+  }
+  return {
+    report: { routingReason: "parent session model", fallbackUsed: false },
+  };
 }
 
 function pathScopeArraySchema() {

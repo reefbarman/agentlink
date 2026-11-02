@@ -942,4 +942,385 @@ describe("workspace host background composition", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("gives a review task class VS Code's read-only review defaults", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "workspace-background-taskclass-"),
+    );
+    const projectRoot = path.join(root, "project");
+    await fs.mkdir(projectRoot);
+    await fs.writeFile(path.join(projectRoot, "math.js"), "export {};\n");
+    const parentResults: string[] = [];
+    const reviewer: { tools: string[]; results: string[] } = {
+      tools: [],
+      results: [],
+    };
+    const parentFetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+      const body = requestBody(init);
+      const results = body.toolResults;
+      parentResults.splice(0, Infinity, ...results);
+      if (body.firstUser.includes("owned review") && results.length === 0) {
+        return toolCall("spawn_background_agent", {
+          task: "Review",
+          message: "REVIEWER-TASK",
+          taskClass: "review_code",
+          ownedPaths: ["math.js"],
+        });
+      }
+      if (body.firstUser.includes("plain review") && results.length === 0) {
+        return toolCall("spawn_background_agent", {
+          task: "Review",
+          message: "REVIEWER-TASK",
+          taskClass: " Review_Code ",
+        });
+      }
+      return completion("parent done");
+    });
+    const reviewFetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+      const body = requestBody(init);
+      reviewer.tools = body.tools;
+      reviewer.results.splice(0, Infinity, ...body.toolResults);
+      if (body.toolResults.length === 0) {
+        return numberedToolCall("execute_command", {
+          command: "touch out.txt",
+        });
+      }
+      return numberedToolCall("set_task_status", {
+        status: "completed",
+        result: { type: "review_findings", findings: [], emptyDiff: false },
+      });
+    });
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(root, "data"),
+      ownerId: "background-taskclass",
+      providers: [
+        fixtureProvider("fixture", "fixture-model", parentFetch),
+        fixtureProvider("claude", "review-model", reviewFetch),
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      files: { enabled: true },
+      modes: { enabled: true },
+      sessionInteractions: { finalStatus: true },
+      commands: {
+        enabled: true,
+        shellExecutable: "/bin/sh",
+        resolveEnvironment: () => ({ PATH: process.env.PATH }),
+        // Allow everything: the review child's read-only policy must decide.
+        hasSessionGrant: () => true,
+      },
+      background: {
+        enabled: true,
+        inheritSessionGrants: true,
+        modelRoles: {
+          review: { providerId: "claude", modelId: "review-model" },
+        },
+      },
+    });
+    try {
+      // A review child is read-only: owned paths are refused.
+      const owned = await host.createSession();
+      await host.runTurn(owned.sessionId, "owned review");
+      expect(parentResults[0]).toContain("background_task_class_is_read_only");
+      expect(host.listBackgroundAgents(owned.sessionId)).toEqual([]);
+
+      const { sessionId } = await host.createSession();
+      await host.runTurn(sessionId, "plain review");
+      expect(JSON.parse(parentResults[0]!)).toMatchObject({
+        resolvedMode: "review",
+        resolvedModel: "review-model",
+        resolvedProvider: "claude",
+        taskClass: "review_code",
+        routingReason: "taskClass review_code: model_role review",
+        fallbackUsed: false,
+        expectedResult: "review_findings",
+      });
+      await vi.waitFor(() => {
+        expect(host.listBackgroundAgents(sessionId)[0]).toMatchObject({
+          lifecycle: "completed",
+          taskClass: "review_code",
+          resolvedMode: "review",
+          expectedResult: "review_findings",
+          structuredResult: { type: "review_findings", emptyDiff: false },
+        });
+      });
+      // Its command was not cleared by VS Code's read-only check, so it was
+      // refused outright, as VS Code's review profile does, despite the
+      // parent's grant: no approval card, and nothing ran.
+      expect(reviewer.tools).toContain("execute_command");
+      expect(reviewer.results[0]).toContain("readonly_policy_rejected");
+      expect(host.listBackgroundApprovals(sessionId)).toEqual([]);
+      await expect(
+        fs.stat(path.join(projectRoot, "out.txt")),
+      ).rejects.toThrow();
+    } finally {
+      await host.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("maps modelTier onto configured model roles, falling back to the parent's model", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "workspace-background-tier-"),
+    );
+    const projectRoot = path.join(root, "project");
+    await fs.mkdir(projectRoot);
+    const parentResults: string[] = [];
+    const parentFetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+      const body = requestBody(init);
+      if (body.firstUser.includes("CHILD")) return completion("child done");
+      parentResults.splice(0, Infinity, ...body.toolResults);
+      const spawn = body.rawTools.find(
+        (tool) => tool.function?.name === "spawn_background_agent",
+      );
+      expect(spawn?.function?.parameters?.properties).toMatchObject({
+        modelTier: {
+          enum: ["cheap", "balanced", "deep_reasoning", "foreground"],
+        },
+        budget: { type: "object" },
+        taskClass: { type: "string" },
+      });
+      const tier = body.firstUser.includes("balanced") ? "balanced" : "cheap";
+      if (body.toolResults.length === 0) {
+        return toolCall("spawn_background_agent", {
+          task: tier,
+          message: `CHILD ${tier}`,
+          modelTier: tier,
+        });
+      }
+      return completion("parent done");
+    });
+    const tierFetch = vi.fn<typeof globalThis.fetch>(async () =>
+      completion("tier child done"),
+    );
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(root, "data"),
+      ownerId: "background-tier",
+      providers: [
+        fixtureProvider("fixture", "fixture-model", parentFetch),
+        fixtureProvider("tier", "balanced-model", tierFetch),
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      files: { enabled: true },
+      background: {
+        enabled: true,
+        modelRoles: {
+          balanced: { providerId: "tier", modelId: "balanced-model" },
+        },
+      },
+    });
+    try {
+      const balanced = await host.createSession();
+      await host.runTurn(balanced.sessionId, "spawn balanced");
+      expect(JSON.parse(parentResults[0]!)).toMatchObject({
+        resolvedModel: "balanced-model",
+        requestedModelTier: "balanced",
+        modelTier: "balanced",
+        routingReason: "modelTier balanced: model_role balanced",
+        fallbackUsed: false,
+      });
+      const cheap = await host.createSession();
+      await host.runTurn(cheap.sessionId, "spawn cheap");
+      // The parent's model: here the host default, which is not reported.
+      expect(JSON.parse(parentResults[0]!)).not.toHaveProperty("resolvedModel");
+      expect(JSON.parse(parentResults[0]!)).toMatchObject({
+        requestedModelTier: "cheap",
+        routingReason:
+          "no model role is configured for modelTier cheap; parent session model",
+        fallbackUsed: true,
+      });
+      expect(JSON.parse(parentResults[0]!)).not.toHaveProperty("modelTier");
+      await vi.waitFor(() => {
+        expect(host.listBackgroundAgents(cheap.sessionId)[0]).toMatchObject({
+          lifecycle: "completed",
+          resultText: "child done",
+          taskClass: "general",
+          requestedModelTier: "cheap",
+          fallbackUsed: true,
+        });
+      });
+      await vi.waitFor(() => {
+        expect(host.listBackgroundAgents(balanced.sessionId)[0]).toMatchObject({
+          lifecycle: "completed",
+          resultText: "tier child done",
+        });
+      });
+      // Only the balanced child ran on the tier model.
+      expect(tierFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      await host.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("stops a child at VS Code's hard API-turn and elapsed-time budget limits", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "workspace-background-budget-"),
+    );
+    const projectRoot = path.join(root, "project");
+    await fs.mkdir(projectRoot);
+    await fs.writeFile(path.join(projectRoot, "notes.txt"), "notes\n");
+    const parentResults: string[] = [];
+    let turnsChildCalls = 0;
+    const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+      const body = requestBody(init);
+      if (body.firstUser.includes("LOOP")) {
+        turnsChildCalls += 1;
+        // Never finishes on its own.
+        return numberedToolCall("read_file", { path: "notes.txt" });
+      }
+      if (body.firstUser.includes("HANG")) {
+        // Waits until the run is stopped.
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          );
+        });
+      }
+      parentResults.splice(0, Infinity, ...body.toolResults);
+      if (body.toolResults.length > 0) return completion("parent done");
+      return body.firstUser.includes("turns")
+        ? toolCall("spawn_background_agent", {
+            task: "loop",
+            message: "LOOP",
+            budget: { maxApiTurns: 1, maxTokens: 10 },
+          })
+        : toolCall("spawn_background_agent", {
+            task: "hang",
+            message: "HANG",
+            taskClass: "review_code",
+            budget: { maxElapsedMs: 40 },
+          });
+    });
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(root, "data"),
+      ownerId: "background-budget",
+      providers: [fixtureProvider("fixture", "fixture-model", fetch)],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      files: { enabled: true },
+      background: { enabled: true },
+    });
+    try {
+      const turns = await host.createSession();
+      await host.runTurn(turns.sessionId, "spawn turns");
+      expect(JSON.parse(parentResults[0]!)).toMatchObject({
+        budget: { maxApiTurns: 1, maxTokens: 10, scope: "session" },
+        budgetNotEnforced: ["maxTokens"],
+      });
+      await vi.waitFor(() => {
+        expect(host.listBackgroundAgents(turns.sessionId)[0]).toMatchObject({
+          lifecycle: "failed",
+          resultState: "budget_exhausted",
+          terminalReason: "budget_exhausted:api_turns",
+          // ceil(1 × 3) successful model turns, then the next is refused.
+          budgetUsage: { apiTurns: 3, toolCalls: 3 },
+        });
+      });
+      expect(turnsChildCalls).toBeLessThanOrEqual(4);
+      const exhausted = host.listBackgroundAgents(turns.sessionId)[0]!;
+      expect(
+        JSON.parse(workspaceBackgroundOutcome(exhausted).result),
+      ).toMatchObject({
+        status: "budget_exhausted",
+        terminalReason: "budget_exhausted:api_turns",
+      });
+
+      const elapsed = await host.createSession();
+      await host.runTurn(elapsed.sessionId, "spawn elapsed");
+      // A review keeps only work-unit and time limits, at 1.5×.
+      expect(JSON.parse(parentResults[0]!)).toMatchObject({
+        taskClass: "review_code",
+        budget: { maxElapsedMs: 40 },
+      });
+      await vi.waitFor(() => {
+        expect(host.listBackgroundAgents(elapsed.sessionId)[0]).toMatchObject({
+          lifecycle: "failed",
+          resultState: "budget_exhausted",
+          terminalReason: "budget_exhausted:elapsed_time",
+        });
+      });
+      const timed = host.listBackgroundAgents(elapsed.sessionId)[0]!;
+      expect(timed.budgetUsage!.elapsedMs).toBeGreaterThanOrEqual(60);
+    } finally {
+      await host.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
+
+let numberedCalls = 0;
+
+/** A tool call with a fresh call ID, for children that call repeatedly. */
+function numberedToolCall(
+  name: string,
+  input: Record<string, unknown>,
+): Response {
+  numberedCalls += 1;
+  const response = toolCall(name, input);
+  return new Response(
+    response.body!.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              new TextDecoder()
+                .decode(chunk)
+                .replaceAll(`call-${name}`, `call-${name}-${numberedCalls}`),
+            ),
+          );
+        },
+      }),
+    ),
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+}
+
+function requestBody(init: RequestInit | undefined) {
+  const body = JSON.parse(String(init?.body)) as {
+    messages?: Array<{ role?: string; content?: unknown }>;
+    tools?: Array<{
+      function?: {
+        name?: string;
+        parameters?: { properties?: Record<string, unknown> };
+      };
+    }>;
+  };
+  const messages = body.messages ?? [];
+  const firstUser = messages.find((m) => m.role === "user")?.content;
+  return {
+    firstUser:
+      typeof firstUser === "string" ? firstUser : JSON.stringify(firstUser),
+    toolResults: messages
+      .filter((message) => message.role === "tool")
+      .map((message) => String(message.content)),
+    tools:
+      body.tools?.flatMap((tool) =>
+        tool.function?.name ? [tool.function.name] : [],
+      ) ?? [],
+    rawTools: body.tools ?? [],
+  };
+}
+
+function fixtureProvider(
+  id: string,
+  modelId: string,
+  fetch: typeof globalThis.fetch,
+) {
+  return {
+    type: "openai-compatible" as const,
+    id,
+    baseURL: `https://${id}.invalid/v1`,
+    noAuth: true as const,
+    models: [
+      {
+        id: modelId,
+        contextWindow: 32_768,
+        maxOutputTokens: 4_096,
+        supportsToolUse: true,
+      },
+    ],
+    fetch,
+  };
+}

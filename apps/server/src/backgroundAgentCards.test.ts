@@ -90,6 +90,37 @@ describe("toAgentCard", () => {
         .currentTool,
     ).toBeUndefined();
   });
+
+  it("carries VS Code's routing, usage and budget fields", () => {
+    expect(
+      toAgentCard(
+        record({
+          lifecycle: "failed",
+          resultState: "budget_exhausted",
+          terminalReason: "budget_exhausted:api_turns",
+          taskClass: "review_code",
+          resolvedMode: "review",
+          requestedModelTier: "cheap",
+          routingReason: "no model role is configured for modelTier cheap",
+          fallbackUsed: true,
+          budget: { maxApiTurns: 2, scope: "session" },
+          budgetUsage: { tokens: 10, toolCalls: 2, apiTurns: 3, elapsedMs: 5 },
+        }),
+      ),
+    ).toMatchObject({
+      status: "error",
+      lifecycle: "budget_exhausted",
+      resultState: "budget_exhausted",
+      terminalReason: "budget_exhausted:api_turns",
+      taskClass: "review_code",
+      resolvedMode: "review",
+      requestedModelTier: "cheap",
+      fallbackUsed: true,
+      toolCalls: 2,
+      apiTurns: 3,
+      budget: { maxApiTurns: 2, scope: "session" },
+    });
+  });
 });
 
 describe("agent approvals", () => {
