@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.40.0 — 2026-11-02
+
 - `SystemPromptCapabilities` adds `backgroundAgentImages` and `backgroundAgentModeRouting`. `deriveSystemPromptCapabilities` leaves both off, so a host whose `spawn_background_agent` lacks image handoff or explicit `mode`/`permissionProfile` gets VS Code's background agent guidance without them. With every capability on, the prompt is unchanged.
 
 ## 0.39.0 — 2026-11-02

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "90741b587fdbd211d28aa58b443f958a573a0a3a",
-  "createdAt": "2026-11-02T02:17:53.506Z",
+  "sourceSha": "8865bc802b417ab3b5e5d918dc2b592b4b844b9e",
+  "createdAt": "2026-11-02T04:16:35.586Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,148 +10,285 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.70.0",
-      "baselineRef": "v1.70.0",
-      "reserved": "1.70.0",
+      "published": "1.71.0",
+      "baselineRef": "v1.71.0",
+      "reserved": "1.71.0",
       "commits": [
-        "c726851fc64e4b7b185d5eb06334ce7e1158d2a3",
-        "90741b587fdbd211d28aa58b443f958a573a0a3a"
+        "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
+        "68d636961febf02af5c99c4e28bf4a3c0dd88a6f",
+        "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
+        "0e1b8feab12ac3fef54aebe58e0d834759119cf3",
+        "8865bc802b417ab3b5e5d918dc2b592b4b844b9e"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.71.0",
+      "version": "1.72.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.71.0",
+      "tag": "v1.72.0",
       "notes": [
         {
-          "sha": "c726851fc64e4b7b185d5eb06334ce7e1158d2a3",
-          "subject": "docs: add Best of Agent Harnesses badge to README",
-          "summary": "Adds a Best of Agent Harnesses badge to the README, a documentation-only change with no effect on shipped behaviour.",
+          "sha": "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
+          "subject": "feat(workspace-host): give the CLI and Assistant VS Code's background agent guidance",
+          "summary": "CLI and Assistant foreground sessions with background tools now get VS Code's background agent guidance, and core gains prompt capabilities to omit image handoff and explicit mode routing.",
           "breaking": false
         },
         {
-          "sha": "90741b587fdbd211d28aa58b443f958a573a0a3a",
-          "subject": "feat(workspace-host): add VS Code taskClass, modelTier and budget to background agents",
-          "summary": "CLI and Assistant background agents now accept taskClass, modelTier and budget with read-only review and research children, tier model roles and budget_exhausted stops; core exports the shared policy, and VS Code behaviour is unchanged.",
+          "sha": "68d636961febf02af5c99c4e28bf4a3c0dd88a6f",
+          "subject": "fix(ask-agent): publish answered question card before resuming the model turn",
+          "summary": "Answering an ask_user question in the browser Ask Agent tab now publishes the answered card right away instead of leaving the stale question on screen.",
+          "breaking": false
+        },
+        {
+          "sha": "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
+          "subject": "fix(codex): move default and Ask Agent fallback models to GPT-6.x",
+          "summary": "The default Codex model moves to gpt-6.1-sol, and the browser Ask Agent fallback models become GPT-6 Luna, GPT-6.1 Terra and GPT-6.1 Sol.",
+          "breaking": false
+        },
+        {
+          "sha": "0e1b8feab12ac3fef54aebe58e0d834759119cf3",
+          "subject": "fix(ask-agent): show the working state while a turn resumes after an ask_user answer",
+          "summary": "The Ask Agent tab now shows the working state while a turn resumes after an ask_user answer instead of looking idle.",
+          "breaking": false
+        },
+        {
+          "sha": "8865bc802b417ab3b5e5d918dc2b592b4b844b9e",
+          "subject": "fix(tools): surface dropped review findings and predict more git chains",
+          "summary": "Clean background review results now show the reviewer's prose and an optional limitations list under Not verified, and Git metadata preflight recognises more read-only inspection commands in commit and fetch chains.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.70.0",
-      "baselineRef": "desktop-v0.70.0",
-      "reserved": "0.70.0",
-      "commits": ["90741b587fdbd211d28aa58b443f958a573a0a3a"],
+      "published": "0.71.0",
+      "baselineRef": "desktop-v0.71.0",
+      "reserved": "0.71.0",
+      "commits": [
+        "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
+        "68d636961febf02af5c99c4e28bf4a3c0dd88a6f",
+        "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
+        "0e1b8feab12ac3fef54aebe58e0d834759119cf3",
+        "8865bc802b417ab3b5e5d918dc2b592b4b844b9e"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.71.0",
+      "version": "0.72.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.71.0",
+      "tag": "desktop-v0.72.0",
       "notes": [
         {
-          "sha": "90741b587fdbd211d28aa58b443f958a573a0a3a",
-          "subject": "feat(workspace-host): add VS Code taskClass, modelTier and budget to background agents",
-          "summary": "CLI and Assistant background agents now accept taskClass, modelTier and budget with read-only review and research children, tier model roles and budget_exhausted stops; core exports the shared policy, and VS Code behaviour is unchanged.",
+          "sha": "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
+          "subject": "feat(workspace-host): give the CLI and Assistant VS Code's background agent guidance",
+          "summary": "CLI and Assistant foreground sessions with background tools now get VS Code's background agent guidance, and core gains prompt capabilities to omit image handoff and explicit mode routing.",
+          "breaking": false
+        },
+        {
+          "sha": "68d636961febf02af5c99c4e28bf4a3c0dd88a6f",
+          "subject": "fix(ask-agent): publish answered question card before resuming the model turn",
+          "summary": "Answering an ask_user question in the browser Ask Agent tab now publishes the answered card right away instead of leaving the stale question on screen.",
+          "breaking": false
+        },
+        {
+          "sha": "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
+          "subject": "fix(codex): move default and Ask Agent fallback models to GPT-6.x",
+          "summary": "The default Codex model moves to gpt-6.1-sol, and the browser Ask Agent fallback models become GPT-6 Luna, GPT-6.1 Terra and GPT-6.1 Sol.",
+          "breaking": false
+        },
+        {
+          "sha": "0e1b8feab12ac3fef54aebe58e0d834759119cf3",
+          "subject": "fix(ask-agent): show the working state while a turn resumes after an ask_user answer",
+          "summary": "The Ask Agent tab now shows the working state while a turn resumes after an ask_user answer instead of looking idle.",
+          "breaking": false
+        },
+        {
+          "sha": "8865bc802b417ab3b5e5d918dc2b592b4b844b9e",
+          "subject": "fix(tools): surface dropped review findings and predict more git chains",
+          "summary": "Clean background review results now show the reviewer's prose and an optional limitations list under Not verified, and Git metadata preflight recognises more read-only inspection commands in commit and fetch chains.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.48.0",
-      "baselineRef": "cli-v0.48.0",
-      "reserved": "0.48.0",
-      "commits": ["90741b587fdbd211d28aa58b443f958a573a0a3a"],
+      "published": "0.49.0",
+      "baselineRef": "cli-v0.49.0",
+      "reserved": "0.49.0",
+      "commits": [
+        "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
+        "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
+        "8865bc802b417ab3b5e5d918dc2b592b4b844b9e"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.49.0",
+      "version": "0.50.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.49.0",
+      "tag": "cli-v0.50.0",
       "notes": [
         {
-          "sha": "90741b587fdbd211d28aa58b443f958a573a0a3a",
-          "subject": "feat(workspace-host): add VS Code taskClass, modelTier and budget to background agents",
-          "summary": "CLI and Assistant background agents now accept taskClass, modelTier and budget with read-only review and research children, tier model roles and budget_exhausted stops; core exports the shared policy, and VS Code behaviour is unchanged.",
+          "sha": "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
+          "subject": "feat(workspace-host): give the CLI and Assistant VS Code's background agent guidance",
+          "summary": "CLI and Assistant foreground sessions with background tools now get VS Code's background agent guidance, and core gains prompt capabilities to omit image handoff and explicit mode routing.",
+          "breaking": false
+        },
+        {
+          "sha": "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
+          "subject": "fix(codex): move default and Ask Agent fallback models to GPT-6.x",
+          "summary": "The default Codex model moves to gpt-6.1-sol, and the browser Ask Agent fallback models become GPT-6 Luna, GPT-6.1 Terra and GPT-6.1 Sol.",
+          "breaking": false
+        },
+        {
+          "sha": "8865bc802b417ab3b5e5d918dc2b592b4b844b9e",
+          "subject": "fix(tools): surface dropped review findings and predict more git chains",
+          "summary": "Clean background review results now show the reviewer's prose and an optional limitations list under Not verified, and Git metadata preflight recognises more read-only inspection commands in commit and fetch chains.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.38.0",
-      "baselineRef": "sdk-v0.38.0",
-      "reserved": "0.38.0",
-      "commits": ["90741b587fdbd211d28aa58b443f958a573a0a3a"],
+      "published": "0.39.0",
+      "baselineRef": "sdk-v0.39.0",
+      "reserved": "0.39.0",
+      "commits": [
+        "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
+        "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
+        "8865bc802b417ab3b5e5d918dc2b592b4b844b9e"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.39.0",
+      "version": "0.40.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.39.0",
+      "tag": "sdk-v0.40.0",
       "notes": [
         {
-          "sha": "90741b587fdbd211d28aa58b443f958a573a0a3a",
-          "subject": "feat(workspace-host): add VS Code taskClass, modelTier and budget to background agents",
-          "summary": "CLI and Assistant background agents now accept taskClass, modelTier and budget with read-only review and research children, tier model roles and budget_exhausted stops; core exports the shared policy, and VS Code behaviour is unchanged.",
+          "sha": "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
+          "subject": "feat(workspace-host): give the CLI and Assistant VS Code's background agent guidance",
+          "summary": "CLI and Assistant foreground sessions with background tools now get VS Code's background agent guidance, and core gains prompt capabilities to omit image handoff and explicit mode routing.",
+          "breaking": false
+        },
+        {
+          "sha": "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
+          "subject": "fix(codex): move default and Ask Agent fallback models to GPT-6.x",
+          "summary": "The default Codex model moves to gpt-6.1-sol, and the browser Ask Agent fallback models become GPT-6 Luna, GPT-6.1 Terra and GPT-6.1 Sol.",
+          "breaking": false
+        },
+        {
+          "sha": "8865bc802b417ab3b5e5d918dc2b592b4b844b9e",
+          "subject": "fix(tools): surface dropped review findings and predict more git chains",
+          "summary": "Clean background review results now show the reviewer's prose and an optional limitations list under Not verified, and Git metadata preflight recognises more read-only inspection commands in commit and fetch chains.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.42.0",
-      "baselineRef": "assistant-v0.42.0",
-      "reserved": "0.42.0",
-      "commits": ["90741b587fdbd211d28aa58b443f958a573a0a3a"],
+      "published": "0.43.0",
+      "baselineRef": "assistant-v0.43.0",
+      "reserved": "0.43.0",
+      "commits": [
+        "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
+        "68d636961febf02af5c99c4e28bf4a3c0dd88a6f",
+        "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
+        "0e1b8feab12ac3fef54aebe58e0d834759119cf3",
+        "8865bc802b417ab3b5e5d918dc2b592b4b844b9e"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.43.0",
+      "version": "0.44.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.43.0",
+      "tag": "assistant-v0.44.0",
       "notes": [
         {
-          "sha": "90741b587fdbd211d28aa58b443f958a573a0a3a",
-          "subject": "feat(workspace-host): add VS Code taskClass, modelTier and budget to background agents",
-          "summary": "CLI and Assistant background agents now accept taskClass, modelTier and budget with read-only review and research children, tier model roles and budget_exhausted stops; core exports the shared policy, and VS Code behaviour is unchanged.",
+          "sha": "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
+          "subject": "feat(workspace-host): give the CLI and Assistant VS Code's background agent guidance",
+          "summary": "CLI and Assistant foreground sessions with background tools now get VS Code's background agent guidance, and core gains prompt capabilities to omit image handoff and explicit mode routing.",
+          "breaking": false
+        },
+        {
+          "sha": "68d636961febf02af5c99c4e28bf4a3c0dd88a6f",
+          "subject": "fix(ask-agent): publish answered question card before resuming the model turn",
+          "summary": "Answering an ask_user question in the browser Ask Agent tab now publishes the answered card right away instead of leaving the stale question on screen.",
+          "breaking": false
+        },
+        {
+          "sha": "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
+          "subject": "fix(codex): move default and Ask Agent fallback models to GPT-6.x",
+          "summary": "The default Codex model moves to gpt-6.1-sol, and the browser Ask Agent fallback models become GPT-6 Luna, GPT-6.1 Terra and GPT-6.1 Sol.",
+          "breaking": false
+        },
+        {
+          "sha": "0e1b8feab12ac3fef54aebe58e0d834759119cf3",
+          "subject": "fix(ask-agent): show the working state while a turn resumes after an ask_user answer",
+          "summary": "The Ask Agent tab now shows the working state while a turn resumes after an ask_user answer instead of looking idle.",
+          "breaking": false
+        },
+        {
+          "sha": "8865bc802b417ab3b5e5d918dc2b592b4b844b9e",
+          "subject": "fix(tools): surface dropped review findings and predict more git chains",
+          "summary": "Clean background review results now show the reviewer's prose and an optional limitations list under Not verified, and Git metadata preflight recognises more read-only inspection commands in commit and fetch chains.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "c726851fc64e4b7b185d5eb06334ce7e1158d2a3": {
-      "bump": "none",
+    "b1783603497cc8da2bff6bf054cf37b6fd78aceb": {
+      "bump": "minor",
       "breakingUnits": [],
-      "summary": "Adds a Best of Agent Harnesses badge to the README, a documentation-only change with no effect on shipped behaviour.",
+      "summary": "CLI and Assistant foreground sessions with background tools now get VS Code's background agent guidance, and core gains prompt capabilities to omit image handoff and explicit mode routing.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "90741b587fdbd211d28aa58b443f958a573a0a3a": {
+    "68d636961febf02af5c99c4e28bf4a3c0dd88a6f": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Answering an ask_user question in the browser Ask Agent tab now publishes the answered card right away instead of leaving the stale question on screen.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "31470c9a73995d1859bed1d8240c01ad5fc20bf3": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The default Codex model moves to gpt-6.1-sol, and the browser Ask Agent fallback models become GPT-6 Luna, GPT-6.1 Terra and GPT-6.1 Sol.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "0e1b8feab12ac3fef54aebe58e0d834759119cf3": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The Ask Agent tab now shows the working state while a turn resumes after an ask_user answer instead of looking idle.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "8865bc802b417ab3b5e5d918dc2b592b4b844b9e": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "CLI and Assistant background agents now accept taskClass, modelTier and budget with read-only review and research children, tier model roles and budget_exhausted stops; core exports the shared policy, and VS Code behaviour is unchanged.",
+      "summary": "Clean background review results now show the reviewer's prose and an optional limitations list under Not verified, and Git metadata preflight recognises more read-only inspection commands in commit and fetch chains.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
