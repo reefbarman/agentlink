@@ -4770,18 +4770,12 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(
       screen.getByRole("button", { name: "Open browser settings" }),
     ).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: "Work", exact: true }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Work" })).toBeNull();
     const chat = document.querySelector(".browser-main");
-    fireEvent.click(
-      screen.getByRole("button", { name: "VS Code", exact: true }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
     const frame = screen.getByTitle("VS Code workspaces");
     expect(frame.getAttribute("src")).toBe("/?browserWorkspace=1");
-    fireEvent.click(
-      screen.getByRole("button", { name: "Ask AgentLink", exact: true }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Ask AgentLink" }));
     expect(screen.getByTitle("VS Code workspaces")).toBe(frame);
     expect(frame.hasAttribute("hidden")).toBe(true);
     expect(document.querySelector(".browser-main")).toBe(chat);
@@ -4855,9 +4849,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       );
       await screen.findByRole("heading", { name: "What can I help you with?" });
       fireEvent.click(screen.getByRole("button", { name: "Show sidebar" }));
-      fireEvent.click(
-        screen.getByRole("button", { name: "VS Code", exact: true }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
       expect(screen.getByRole("button", { name: "Show sidebar" })).toBeTruthy();
       expect(
         screen.getByTitle("VS Code workspaces").hasAttribute("hidden"),
@@ -4913,17 +4905,13 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       );
       await screen.findByRole("heading", { name: "What can I help you with?" });
       const composer = document.querySelector(".browser-main");
-      fireEvent.click(
-        screen.getByRole("button", { name: "VS Code", exact: true }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
       await screen.findByRole("heading", { name: "Your VS Code workspaces" });
       expect(setRemoteLayout).toHaveBeenCalledWith(
         expect.objectContaining({ mode: "vscode" }),
       );
       expect(document.querySelector(".browser-main")).toBe(composer);
-      fireEvent.click(
-        screen.getByRole("button", { name: "Ask AgentLink", exact: true }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: "Ask AgentLink" }));
       expect(document.querySelector(".browser-main")).toBe(composer);
       expect((composer as HTMLElement).style.display).not.toBe("none");
     } finally {
@@ -4971,9 +4959,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       const composer = document.querySelector(".browser-main") as HTMLElement;
       // The desktop embeds the Assistant; it does not link out to it.
       expect(screen.queryByRole("link", { name: /Assistant/u })).toBeNull();
-      fireEvent.click(
-        screen.getByRole("button", { name: "Assistant", exact: true }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: "Assistant" }));
       expect(setRemoteLayout).toHaveBeenCalledWith(
         expect.objectContaining({ mode: "assistant" }),
       );
@@ -4993,9 +4979,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       expect(retryAssistant).toHaveBeenCalled();
       fireEvent.click(screen.getByRole("button", { name: "Settings" }));
       expect(openSettings).toHaveBeenCalled();
-      fireEvent.click(
-        screen.getByRole("button", { name: "Ask AgentLink", exact: true }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: "Ask AgentLink" }));
       expect(composer.style.display).not.toBe("none");
     } finally {
       cleanup();
@@ -5045,9 +5029,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       const shell = document.querySelector(".browser-shell") as HTMLElement;
       const composer = document.querySelector(".browser-main") as HTMLElement;
       expect(shell.classList.contains("assistant-product")).toBe(false);
-      fireEvent.click(
-        screen.getByRole("button", { name: "Assistant", exact: true }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: "Assistant" }));
       expect(shell.classList.contains("assistant-product")).toBe(true);
       expect(document.querySelector(".browser-title")?.textContent).toBe(
         "AgentLink Assistant",
@@ -5115,16 +5097,13 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       expect(shell.classList.contains("desktop-embedded")).toBe(true);
       const assistantView = screen.getByRole("button", {
         name: "Assistant",
-        exact: true,
       });
       expect(assistantView.getAttribute("aria-current")).toBe("page");
       expect(screen.getByRole("button", { name: "New chat" })).toBeTruthy();
       expect(
         document.querySelector(".desktop-sidebar-resize-handle"),
       ).toBeNull();
-      fireEvent.click(
-        screen.getByRole("button", { name: "VS Code", exact: true }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
       expect(showView).toHaveBeenCalledExactlyOnceWith("vscode");
       fireEvent.click(assistantView);
       expect(showView).toHaveBeenCalledOnce();

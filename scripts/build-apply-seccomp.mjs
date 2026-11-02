@@ -7,9 +7,9 @@
 // binary nor its source, so this reproduces upstream's vendor/seccomp/build.ts
 // from the release tarball pinned below.
 //
-// Linux only. Needs gcc and libseccomp-dev (static libseccomp) for the host
-// architecture, plus a cross gcc for the other one:
-//   sudo apt-get install -y gcc libseccomp-dev gcc-aarch64-linux-gnu
+// Linux only. Needs gcc and libseccomp-dev (static libseccomp). Build on the
+// target architecture: cross builds need a cross gcc and libseccomp 2.6.1+.
+//   sudo apt-get install -y gcc libseccomp-dev
 // Usage: node scripts/build-apply-seccomp.mjs [--target linux-x64|linux-arm64]
 
 import {
@@ -34,16 +34,21 @@ const REPO_ROOT = path.resolve(
 
 /** Upstream source for the runtime version AgentLink depends on. */
 export const APPLY_SECCOMP_SOURCE = Object.freeze({
-  runtimeVersion: "0.0.79",
-  url: "https://codeload.github.com/anthropics/sandbox-runtime/tar.gz/refs/tags/v0.0.79",
-  sha256: "9396273452badf14042ad1f79f00675fc77271838bd1db5a9e1a30866d2fe1b5",
-  directory: "sandbox-runtime-0.0.79",
+  runtimeVersion: "0.0.81",
+  url: "https://codeload.github.com/anthropics/sandbox-runtime/tar.gz/refs/tags/v0.0.81",
+  sha256: "36cd4426995b660482a70ae70a61ad32a9ce5965fc81dc59c817916bee0e58f3",
+  directory: "sandbox-runtime-0.0.81",
 });
 
 export const APPLY_SECCOMP_TARGETS = Object.freeze({
-  "linux-x64": Object.freeze({ arch: "x64", crossPrefix: "x86_64-linux-gnu-" }),
+  "linux-x64": Object.freeze({
+    arch: "x64",
+    filterArch: "x86_64",
+    crossPrefix: "x86_64-linux-gnu-",
+  }),
   "linux-arm64": Object.freeze({
     arch: "arm64",
+    filterArch: "aarch64",
     crossPrefix: "aarch64-linux-gnu-",
   }),
 });
@@ -179,24 +184,29 @@ export async function buildApplySeccomp({
       path.join(source, "seccomp-unix-block.c"),
       "-lseccomp",
     ]);
+    // apply-seccomp stacks two filters: `unix` (no unix/vsock sockets or
+    // io_uring) and `namespaces` (no new or joined namespaces, no mount
+    // changes). Generated for the target architecture only, as upstream does:
+    // a cross-architecture `namespaces` filter needs libseccomp 2.6.1+, and the
+    // generator fails rather than drop a rule it cannot name.
+    const filterArch = APPLY_SECCOMP_TARGETS[target].filterArch;
     const filters = {};
-    for (const architecture of ["x86_64", "aarch64"]) {
-      const output = path.join(work, `${architecture}.bpf`);
-      run(generator, [output, architecture]);
-      filters[architecture] = await readFile(output);
+    for (const rules of ["unix", "namespaces"]) {
+      const output = path.join(work, `${filterArch}.${rules}.bpf`);
+      run(generator, [output, filterArch, rules]);
+      filters[rules] = await readFile(output);
     }
     await writeFile(
       path.join(work, "unix-block-bpf.h"),
-      "#if defined(__x86_64__)\n" +
+      `#if defined(__${filterArch}__)\n` +
         "static const unsigned char unix_block_bpf[] = {\n" +
-        toCArray(filters.x86_64) +
+        toCArray(filters.unix) +
         "\n};\n" +
-        "#elif defined(__aarch64__)\n" +
-        "static const unsigned char unix_block_bpf[] = {\n" +
-        toCArray(filters.aarch64) +
+        "static const unsigned char namespace_block_bpf[] = {\n" +
+        toCArray(filters.namespaces) +
         "\n};\n" +
         "#else\n" +
-        '#error "unsupported architecture for unix-block BPF filter"\n' +
+        '#error "these filters were generated for another architecture"\n' +
         "#endif\n",
     );
 

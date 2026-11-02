@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
 import { PathCard } from "./PathCard.js";
-import { createRef } from "preact";
 
 afterEach(cleanup);
 
@@ -24,7 +23,7 @@ describe("PathCard", () => {
       <PathCard
         request={request}
         submit={vi.fn<(data: Omit<DecisionMessage, "type">) => void>()}
-        followUpRef={createRef<string>()}
+        followUpRef={{ current: "" }}
       />,
     );
 
