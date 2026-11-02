@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "caf4979b659163b32f22019909ee4bc25cdb4300",
-  "createdAt": "2026-11-02T05:33:23.222Z",
+  "sourceSha": "8f2820a8bff4b7c158d7697d1114e2addf53aec3",
+  "createdAt": "2026-11-02T21:59:08.716Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,131 +10,148 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.72.0",
-      "baselineRef": "v1.72.0",
-      "reserved": "1.72.0",
-      "commits": ["caf4979b659163b32f22019909ee4bc25cdb4300"],
+      "published": "1.73.0",
+      "baselineRef": "v1.73.0",
+      "reserved": "1.73.0",
+      "commits": ["cd9dc5d436e5200876680879a2dd559a2c5bb803"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.73.0",
-      "effectiveBump": "minor",
+      "version": "1.73.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.73.0",
+      "tag": "v1.73.1",
       "notes": [
         {
-          "sha": "caf4979b659163b32f22019909ee4bc25cdb4300",
-          "subject": "feat(auto-continue): tell the model when a continue turn is automated",
-          "summary": "Auto Continue prompts and the hidden TODO continuation now reach the model labelled as automated AgentLink messages, not user approval, while the transcript still shows the plain prompt, and the default continuation no longer mentions approval.",
+          "sha": "cd9dc5d436e5200876680879a2dd559a2c5bb803",
+          "subject": "chore(deps): bump the minor-and-patch group across 1 directory with 18 updates",
+          "summary": "Updates 18 minor and patch dependencies (MCP SDK, openai, undici, unpdf, preact, react, keyring, electron-builder and others) across all shipped components.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.72.0",
-      "baselineRef": "desktop-v0.72.0",
-      "reserved": "0.72.0",
-      "commits": ["caf4979b659163b32f22019909ee4bc25cdb4300"],
+      "published": "0.73.0",
+      "baselineRef": "desktop-v0.73.0",
+      "reserved": "0.73.0",
+      "commits": ["cd9dc5d436e5200876680879a2dd559a2c5bb803"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.73.0",
-      "effectiveBump": "minor",
+      "version": "0.73.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.73.0",
+      "tag": "desktop-v0.73.1",
       "notes": [
         {
-          "sha": "caf4979b659163b32f22019909ee4bc25cdb4300",
-          "subject": "feat(auto-continue): tell the model when a continue turn is automated",
-          "summary": "Auto Continue prompts and the hidden TODO continuation now reach the model labelled as automated AgentLink messages, not user approval, while the transcript still shows the plain prompt, and the default continuation no longer mentions approval.",
+          "sha": "cd9dc5d436e5200876680879a2dd559a2c5bb803",
+          "subject": "chore(deps): bump the minor-and-patch group across 1 directory with 18 updates",
+          "summary": "Updates 18 minor and patch dependencies (MCP SDK, openai, undici, unpdf, preact, react, keyring, electron-builder and others) across all shipped components.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.50.0",
-      "baselineRef": "cli-v0.50.0",
-      "reserved": "0.50.0",
-      "commits": ["caf4979b659163b32f22019909ee4bc25cdb4300"],
+      "published": "0.51.0",
+      "baselineRef": "cli-v0.51.0",
+      "reserved": "0.51.0",
+      "commits": [
+        "cd9dc5d436e5200876680879a2dd559a2c5bb803",
+        "dd8da93485258593176a92145be243cd49d79516"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.51.0",
-      "effectiveBump": "minor",
+      "version": "0.51.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.51.0",
+      "tag": "cli-v0.51.1",
       "notes": [
         {
-          "sha": "caf4979b659163b32f22019909ee4bc25cdb4300",
-          "subject": "feat(auto-continue): tell the model when a continue turn is automated",
-          "summary": "Auto Continue prompts and the hidden TODO continuation now reach the model labelled as automated AgentLink messages, not user approval, while the transcript still shows the plain prompt, and the default continuation no longer mentions approval.",
+          "sha": "cd9dc5d436e5200876680879a2dd559a2c5bb803",
+          "subject": "chore(deps): bump the minor-and-patch group across 1 directory with 18 updates",
+          "summary": "Updates 18 minor and patch dependencies (MCP SDK, openai, undici, unpdf, preact, react, keyring, electron-builder and others) across all shipped components.",
+          "breaking": false
+        },
+        {
+          "sha": "dd8da93485258593176a92145be243cd49d79516",
+          "subject": "fix(deps): adapt to sandbox-runtime 0.0.81 and testing-library dom v10",
+          "summary": "Pins the apply-seccomp build to sandbox-runtime 0.0.81, fixes tests for testing-library dom v10, and regenerates CLI third-party notices for updated dependencies.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.40.0",
-      "baselineRef": "sdk-v0.40.0",
-      "reserved": "0.40.0",
-      "commits": ["caf4979b659163b32f22019909ee4bc25cdb4300"],
+      "published": "0.41.0",
+      "baselineRef": "sdk-v0.41.0",
+      "reserved": "0.41.0",
+      "commits": ["cd9dc5d436e5200876680879a2dd559a2c5bb803"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.41.0",
-      "effectiveBump": "minor",
+      "version": "0.41.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.41.0",
+      "tag": "sdk-v0.41.1",
       "notes": [
         {
-          "sha": "caf4979b659163b32f22019909ee4bc25cdb4300",
-          "subject": "feat(auto-continue): tell the model when a continue turn is automated",
-          "summary": "Auto Continue prompts and the hidden TODO continuation now reach the model labelled as automated AgentLink messages, not user approval, while the transcript still shows the plain prompt, and the default continuation no longer mentions approval.",
+          "sha": "cd9dc5d436e5200876680879a2dd559a2c5bb803",
+          "subject": "chore(deps): bump the minor-and-patch group across 1 directory with 18 updates",
+          "summary": "Updates 18 minor and patch dependencies (MCP SDK, openai, undici, unpdf, preact, react, keyring, electron-builder and others) across all shipped components.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.44.0",
-      "baselineRef": "assistant-v0.44.0",
-      "reserved": "0.44.0",
-      "commits": ["caf4979b659163b32f22019909ee4bc25cdb4300"],
+      "published": "0.45.0",
+      "baselineRef": "assistant-v0.45.0",
+      "reserved": "0.45.0",
+      "commits": ["cd9dc5d436e5200876680879a2dd559a2c5bb803"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.45.0",
-      "effectiveBump": "minor",
+      "version": "0.45.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.45.0",
+      "tag": "assistant-v0.45.1",
       "notes": [
         {
-          "sha": "caf4979b659163b32f22019909ee4bc25cdb4300",
-          "subject": "feat(auto-continue): tell the model when a continue turn is automated",
-          "summary": "Auto Continue prompts and the hidden TODO continuation now reach the model labelled as automated AgentLink messages, not user approval, while the transcript still shows the plain prompt, and the default continuation no longer mentions approval.",
+          "sha": "cd9dc5d436e5200876680879a2dd559a2c5bb803",
+          "subject": "chore(deps): bump the minor-and-patch group across 1 directory with 18 updates",
+          "summary": "Updates 18 minor and patch dependencies (MCP SDK, openai, undici, unpdf, preact, react, keyring, electron-builder and others) across all shipped components.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "caf4979b659163b32f22019909ee4bc25cdb4300": {
+    "cd9dc5d436e5200876680879a2dd559a2c5bb803": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Auto Continue prompts and the hidden TODO continuation now reach the model labelled as automated AgentLink messages, not user approval, while the transcript still shows the plain prompt, and the default continuation no longer mentions approval.",
+      "summary": "Updates 18 minor and patch dependencies (MCP SDK, openai, undici, unpdf, preact, react, keyring, electron-builder and others) across all shipped components.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "dd8da93485258593176a92145be243cd49d79516": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Pins the apply-seccomp build to sandbox-runtime 0.0.81, fixes tests for testing-library dom v10, and regenerates CLI third-party notices for updated dependencies.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
