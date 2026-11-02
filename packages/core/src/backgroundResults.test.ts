@@ -9,7 +9,9 @@ import {
   backgroundSetTaskStatusTool,
   checkBackgroundTaskStatusResult,
   describeExpectedResultIssue,
+  formatFleetResultEnvelope,
   parseFleetResultEnvelopeDetailed,
+  withFleetResultInstruction,
 } from "./backgroundResults.js";
 import { describe, expect, it } from "vitest";
 
@@ -99,6 +101,70 @@ describe("background results", () => {
     ).toBe(
       'Expected a "patch" envelope; the final message parsed as plain text without a valid envelope. No patch envelope candidate was found in the final output. The raw final output is preserved in partialOutput.',
     );
+  });
+
+  it("asks reviewers to list every identified issue and blocked check", () => {
+    for (const text of [
+      backgroundSetTaskStatusTool("review_findings").description,
+      withFleetResultInstruction("review_findings", "Review it."),
+    ]) {
+      expect(text).toContain("must be a findings entry");
+      expect(text).toContain("limitations");
+    }
+    expect(backgroundSetTaskStatusTool("patch").description).not.toContain(
+      "limitations",
+    );
+  });
+
+  it("keeps reviewer prose and blocked validation visible beside a clean review", () => {
+    // Reported: the prose named a confirmed finding the envelope omitted.
+    const text = [
+      "Static review has one confirmed inconsistency in the plan: it still says 13 roots.",
+      "Policy blocked `make check-triangle`.",
+      "```json",
+      '{"type":"review_findings","findings":[],"limitations":["make check-triangle blocked by policy"],"emptyDiff":false}',
+      "```",
+    ].join("\n");
+    const parsed = parseFleetResultEnvelopeDetailed("review_findings", text);
+    expect(parsed.envelope).toMatchObject({
+      type: "review_findings",
+      findings: [],
+      limitations: ["make check-triangle blocked by policy"],
+    });
+    expect(parsed.outsideText).toBe(
+      "Static review has one confirmed inconsistency in the plan: it still says 13 roots.\nPolicy blocked `make check-triangle`.",
+    );
+    const formatted = formatFleetResultEnvelope(parsed.envelope, {
+      reviewerNotes: parsed.outsideText,
+    });
+    expect(formatted).not.toContain("**Review found no issues.**");
+    expect(formatted).toContain("some checks did not run");
+    expect(formatted).toContain(
+      "**Not verified**\n- make check-triangle blocked by policy",
+    );
+    expect(formatted).toContain("one confirmed inconsistency");
+
+    // A bare envelope has no surrounding prose to show.
+    const bare = parseFleetResultEnvelopeDetailed(
+      "review_findings",
+      '{"type":"review_findings","findings":[],"emptyDiff":false}',
+    );
+    expect(bare.outsideText).toBeUndefined();
+    // Notes are only added to a clean verdict, where a missed finding hides.
+    const withFinding = formatFleetResultEnvelope(
+      {
+        type: "review_findings",
+        findings: [{ severity: "low", message: "nit" }],
+      },
+      { reviewerNotes: "prose" },
+    );
+    expect(withFinding).not.toContain("Reviewer notes");
+    expect(
+      formatFleetResultEnvelope(
+        { type: "review_findings", findings: [] },
+        { reviewerNotes: "x".repeat(5_000) },
+      ).length,
+    ).toBeLessThan(2_200);
   });
 
   it("reads VS Code's spawn_background_agent reviewScope and expectedResult inputs", () => {

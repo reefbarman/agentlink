@@ -140,6 +140,7 @@ function parseArguments(
   args: readonly string[],
   booleanOptions: ReadonlySet<string>,
   valueOptions: ReadonlySet<string>,
+  allowInterleavedOptions = false,
 ): ParsedArguments | null {
   const options = new Map<string, string[]>();
   const operands: string[] = [];
@@ -165,7 +166,7 @@ function parseArguments(
       argument !== "-" &&
       separatorIndex === undefined
     ) {
-      if (operandsStarted) return null;
+      if (operandsStarted && !allowInterleavedOptions) return null;
       const equals = argument.indexOf("=");
       const name = equals < 0 ? argument : argument.slice(0, equals);
       if (booleanOptions.has(name)) {
@@ -912,6 +913,68 @@ function isReadOnlyChecksumVerification(command: string): boolean {
   ].some((form) => sink === form || sink === `${form} -`);
 }
 
+const GIT_CONFIG_KEY = /^[a-z][a-z0-9-]*(?:\.[a-z0-9._-]+)+$/i;
+
+/** A single-key config read such as `git config user.email`. */
+function isGitConfigRead(args: readonly string[]): boolean {
+  const parsed = parseArguments(
+    args,
+    new Set(["--get", "--local", "--global", "--show-origin", "--show-scope"]),
+    new Set(),
+  );
+  return Boolean(
+    parsed &&
+    parsed.separatorIndex === undefined &&
+    parsed.operands.length === 1 &&
+    GIT_CONFIG_KEY.test(parsed.operands[0]),
+  );
+}
+
+function isGitRevisionInspection(
+  subcommand: "rev-parse" | "rev-list",
+  args: readonly string[],
+): boolean {
+  const parsed = parseArguments(
+    args,
+    subcommand === "rev-parse"
+      ? new Set([
+          "--abbrev-ref",
+          "--short",
+          "--verify",
+          "--symbolic-full-name",
+          "--show-toplevel",
+          "--show-prefix",
+          "--git-dir",
+          "--git-common-dir",
+          "--absolute-git-dir",
+          "--is-inside-work-tree",
+          "-q",
+          "--quiet",
+        ])
+      : new Set(["--count", "--left-right", "--first-parent", "--no-merges"]),
+    subcommand === "rev-list" ? new Set(["-n", "--max-count"]) : new Set(),
+  );
+  if (!parsed || parsed.separatorIndex !== undefined) return false;
+  if (
+    ![
+      ...(parsed.options.get("-n") ?? []),
+      ...(parsed.options.get("--max-count") ?? []),
+    ].every((value) => /^\d+$/.test(value))
+  )
+    return false;
+  return subcommand === "rev-parse"
+    ? parsed.options.size > 0 || parsed.operands.length > 0
+    : parsed.operands.length > 0;
+}
+
+/**
+ * `--format`/`--pretty` placeholders `%G…` and `--show-signature` invoke GPG;
+ * every other pretty format only renders commit data.
+ */
+function isSafeLogFormat(value: string): boolean {
+  return !/%G/.test(value);
+}
+
 function isDirectGitInspection(command: string): boolean {
   if (isDirectGitStatusFollowup(command)) return true;
   if (isReadOnlyGitSubstitutionTest(command)) return true;
@@ -923,6 +986,20 @@ function isDirectGitInspection(command: string): boolean {
   const args = scan.words.slice(2).map(({ raw }) => decodeWord(raw));
   if (args.some((arg) => arg === null)) return false;
   if (subcommand === "apply") return classifyApply(args as string[], true);
+  if (subcommand === "config") return isGitConfigRead(args as string[]);
+  if (subcommand === "rev-parse" || subcommand === "rev-list")
+    return isGitRevisionInspection(subcommand, args as string[]);
+  if (subcommand === "branch")
+    return args.length === 1 && args[0] === "--show-current";
+  if (subcommand === "remote" && args[0] === "get-url") {
+    const rest = (args as string[]).slice(1);
+    const names = rest.filter((arg) => arg !== "--push");
+    return (
+      names.length === 1 &&
+      rest.length - names.length <= 1 &&
+      /^[a-z0-9][a-z0-9._-]*$/i.test(names[0])
+    );
+  }
   if (subcommand === "remote") return args.length === 1 && args[0] === "-v";
   if (subcommand === "var") {
     return (
@@ -974,14 +1051,31 @@ function isDirectGitInspection(command: string): boolean {
     subcommand === "diff"
       ? new Set(["--diff-filter"])
       : isLog
-        ? new Set(["-n", "--max-count"])
+        ? new Set([
+            "-n",
+            "--max-count",
+            "--format",
+            "--pretty",
+            "--date",
+            "--since",
+            "--until",
+            "--after",
+            "--before",
+            "--author",
+          ])
         : new Set();
-  const parsed = parseArguments(inspectionArgs, flags, valueOptions);
+  // `git log origin/main --since=...` places revisions before options.
+  const parsed = parseArguments(inspectionArgs, flags, valueOptions, isLog);
   if (!parsed) return false;
   if (
     !(parsed.options.get("--diff-filter") ?? []).every((value) =>
       /^[ACDMRTUXB*]+$/i.test(value),
     ) ||
+    ![
+      ...(parsed.options.get("--format") ?? []),
+      ...(parsed.options.get("--pretty") ?? []),
+      ...(parsed.options.get("--date") ?? []),
+    ].every(isSafeLogFormat) ||
     ![
       ...(parsed.options.get("-n") ?? []),
       ...(parsed.options.get("--max-count") ?? []),

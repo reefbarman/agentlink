@@ -13915,7 +13915,9 @@ ${instruction}`
           session.fleetMetadata.delegation.reviewScopeSummary;
       }
       return {
-        resultText: formatFleetResultEnvelope(markerResult),
+        resultText: formatFleetResultEnvelope(markerResult, {
+          reviewerNotes: marker.summary ?? session.getLastAssistantText(),
+        }),
         structuredResult: markerResult,
         resultState: "completed",
         retrySafe: true,
@@ -14043,7 +14045,9 @@ ${instruction}`
         resultText:
           structuredResult.type === "text"
             ? structuredResult.text
-            : formatFleetResultEnvelope(structuredResult),
+            : formatFleetResultEnvelope(structuredResult, {
+                reviewerNotes: parsedEnvelope.outsideText,
+              }),
         structuredResult,
         resultState,
         retrySafe: true,

@@ -57,7 +57,9 @@ export function resolveWorkspaceBackgroundCompletion(args: {
     return {
       lifecycle: "completed",
       resultState: "completed",
-      resultText: formatFleetResultEnvelope(structuredResult),
+      resultText: formatFleetResultEnvelope(structuredResult, {
+        reviewerNotes: marker.summary ?? args.text,
+      }),
       structuredResult,
     };
   }
@@ -108,7 +110,9 @@ export function resolveWorkspaceBackgroundCompletion(args: {
       resultText:
         structuredResult.type === "text"
           ? structuredResult.text
-          : formatFleetResultEnvelope(structuredResult),
+          : formatFleetResultEnvelope(structuredResult, {
+              reviewerNotes: parsed.outsideText,
+            }),
       structuredResult,
     };
   }

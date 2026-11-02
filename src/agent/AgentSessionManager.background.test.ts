@@ -2663,6 +2663,74 @@ describe("AgentSessionManager background agents", () => {
     expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
   });
 
+  it("shows reviewer prose outside an empty printed review envelope", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      reviewAgent: "acp:claude",
+      acpAgents: [
+        { id: "claude", provider: "anthropic", command: "claude-agent-acp" },
+      ],
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: [
+                "Static review has one confirmed inconsistency: the plan still says 13 roots.",
+                "```json",
+                JSON.stringify({
+                  type: "review_findings",
+                  findings: [],
+                  limitations: ["make check-triangle blocked by policy"],
+                  emptyDiff: false,
+                }),
+                "```",
+              ].join("\n"),
+            },
+          },
+        });
+        request.onEvent({
+          type: "stop",
+          response: { stopReason: "end_turn" },
+        });
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      { ...config, model: "gpt-5.6-sol" },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    const parent = await mgr.createSession("code");
+    parent.providerId = "codex";
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground(
+      {
+        task: "adversarial review",
+        message: "review this",
+        taskClass: "review_code",
+        reviewScope: { kind: "working_tree", paths: ["src/review.ts"] },
+      },
+      parent.id,
+    );
+    const result = await mgr.waitForBackground(spawned.sessionId);
+
+    expect(result).not.toContain("**Review found no issues.**");
+    expect(result).toContain("some checks did not run");
+    expect(result).toContain("make check-triangle blocked by policy");
+    expect(result).toContain(
+      "Static review has one confirmed inconsistency: the plan still says 13 roots.",
+    );
+  });
+
   it("routes only opposite-provider review tasks through the configured ACP reviewer", async () => {
     configHost.getBackgroundAgentSettings.mockReturnValue({
       reviewAgent: "acp:claude",

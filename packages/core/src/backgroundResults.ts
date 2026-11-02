@@ -61,6 +61,12 @@ export const fleetResultSchemas = {
           "Optional short notes on what you checked and the evidence (file:line), including items that were fine",
         )
         .optional(),
+      limitations: z
+        .array(z.string())
+        .describe(
+          "Checks you could not run or scope you could not cover, such as a command blocked by policy",
+        )
+        .optional(),
       emptyDiff: emptyDiff.optional(),
     })
     .passthrough(),
@@ -124,6 +130,10 @@ export function isFleetResultEnvelope(
   return validateFleetResult(value).length === 0;
 }
 
+/** Keeps prose-only findings and blocked validation out of a clean verdict. */
+const REVIEW_FINDINGS_COMPLETENESS_GUIDANCE =
+  "Every issue you identify, including ones you mention in prose, must be a findings entry; an empty findings list means you found nothing. List checks or commands you could not run (for example blocked by policy) in limitations.";
+
 // --- Background set_task_status ---------------------------------------------
 
 /**
@@ -137,7 +147,7 @@ export function backgroundSetTaskStatusTool(
     getFleetResultSchema(expectedResult),
   );
   const resultGuidance = expectedResult
-    ? `This background task expects a structured ${expectedResult} result; include it in the result field when completing the task instead of printing serialized JSON in assistant text.`
+    ? `This background task expects a structured ${expectedResult} result; include it in the result field when completing the task instead of printing serialized JSON in assistant text.${expectedResult === "review_findings" ? ` ${REVIEW_FINDINGS_COMPLETENESS_GUIDANCE}` : ""}`
     : "For coordinator-facing information or summaries, you may return a structured result instead of serializing data into assistant text.";
   return {
     ...SET_TASK_STATUS_TOOL,
@@ -372,6 +382,7 @@ function interpretReviewFindingsCandidate(
           ? false
           : undefined;
   const checked = normalizeReviewChecked(value.checked);
+  const limitations = normalizeReviewChecked(value.limitations);
   return {
     ok: true,
     envelope: {
@@ -381,6 +392,7 @@ function interpretReviewFindingsCandidate(
         ? { reviewedScope: value.reviewedScope }
         : {}),
       ...(checked.length > 0 ? { checked } : {}),
+      ...(limitations.length > 0 ? { limitations } : {}),
       ...(emptyDiff !== undefined ? { emptyDiff } : {}),
     },
   };
@@ -390,8 +402,8 @@ export const MAX_REVIEW_CHECKED_ITEMS = 40;
 export const MAX_REVIEW_CHECKED_ITEM_CHARS = 600;
 
 /**
- * Keep the reviewer's coverage notes bounded. Accepts strings, or objects
- * with an item/check plus evidence/note, and drops anything else.
+ * Keep the reviewer's coverage or limitation notes bounded. Accepts strings,
+ * or objects with an item/check plus evidence/note, and drops anything else.
  */
 function normalizeReviewChecked(value: unknown): string[] {
   const raw = Array.isArray(value)
@@ -583,6 +595,26 @@ export interface FleetEnvelopeParseResult {
   envelope: FleetResultEnvelope;
   /** Why no candidate was accepted, when the expected envelope is missing. */
   issue?: string;
+  /** The agent's prose outside the accepted envelope, when there was any. */
+  outsideText?: string;
+}
+
+/** Remove the accepted envelope (and its now-empty fence) from the final text. */
+function textOutsideEnvelope(text: string, candidate: string): string {
+  const index = text.lastIndexOf(candidate);
+  if (index < 0) return "";
+  return (text.slice(0, index) + text.slice(index + candidate.length))
+    .replace(/^ {0,3}(`{3,}|~{3,})[^\r\n`~]*?\s*\1[ \t]*$/gm, "")
+    .trim();
+}
+
+function acceptedEnvelope(
+  text: string,
+  candidate: string,
+  envelope: FleetResultEnvelope,
+): FleetEnvelopeParseResult {
+  const outsideText = textOutsideEnvelope(text, candidate);
+  return { envelope, ...(outsideText ? { outsideText } : {}) };
 }
 
 export function parseFleetResultEnvelopeDetailed(
@@ -609,13 +641,14 @@ export function parseFleetResultEnvelopeDetailed(
   if (!fenced.overflowed) {
     // Prefer the last valid candidate: when an agent repeats or revises the
     // envelope, the final occurrence is its answer.
-    let lastValid: FleetResultEnvelope | undefined;
+    let lastValid: { envelope: FleetResultEnvelope; body: string } | undefined;
     for (const body of fenced.bodies) {
       const outcome = parseExpectedFleetResult(expected, body.trim(), options);
-      if (outcome?.ok) lastValid = outcome.envelope;
+      if (outcome?.ok) lastValid = { envelope: outcome.envelope, body };
       else record(outcome);
     }
-    if (lastValid) return { envelope: lastValid };
+    if (lastValid)
+      return acceptedEnvelope(text, lastValid.body, lastValid.envelope);
   }
 
   // Last resort, only when no json-labeled fence produced a candidate at all:
@@ -631,7 +664,8 @@ export function parseFleetResultEnvelopeDetailed(
       const candidate = extractBalancedJsonObject(text, start);
       if (!candidate) continue;
       const outcome = parseExpectedFleetResult(expected, candidate, options);
-      if (outcome?.ok) return { envelope: outcome.envelope };
+      if (outcome?.ok)
+        return acceptedEnvelope(text, candidate, outcome.envelope);
       record(outcome);
     }
   }
@@ -660,7 +694,15 @@ export interface FleetResultFormatOptions {
    * Empty review findings then mean "not finished", never "no issues".
    */
   incomplete?: boolean;
+  /**
+   * The reviewer's own prose outside the structured result (its summary or
+   * surrounding text). Shown with a clean review so a finding stated only in
+   * prose is not hidden behind "no issues".
+   */
+  reviewerNotes?: string;
 }
+
+export const MAX_REVIEWER_NOTES_CHARS = 2_000;
 
 /** Convert a validated background result into readable coordinator/UI text. */
 export function formatFleetResultEnvelope(
@@ -711,7 +753,11 @@ export function formatFleetResultEnvelope(
         : `**Review did not complete; ${result.findings.length} issue${result.findings.length === 1 ? "" : "s"} found before it stopped.**`,
     );
   } else if (result.findings.length === 0) {
-    lines.push("**Review found no issues.**");
+    lines.push(
+      result.limitations?.length
+        ? "**Review found no issues in what it could verify; some checks did not run.**"
+        : "**Review found no issues.**",
+    );
   } else {
     lines.push(
       `**Review found ${result.findings.length} issue${result.findings.length === 1 ? "" : "s"}.**`,
@@ -734,6 +780,23 @@ export function formatFleetResultEnvelope(
   if (result.checked?.length) {
     lines.push("", "**Checked**", ...result.checked.map((item) => `- ${item}`));
   }
+  if (result.limitations?.length) {
+    lines.push(
+      "",
+      "**Not verified**",
+      ...result.limitations.map((item) => `- ${item}`),
+    );
+  }
+  const notes = options.reviewerNotes?.trim();
+  if (notes && result.findings.length === 0 && !result.emptyDiff) {
+    lines.push(
+      "",
+      "**Reviewer notes outside the structured result** (check these for issues not listed as findings)",
+      notes.length > MAX_REVIEWER_NOTES_CHARS
+        ? `${notes.slice(0, MAX_REVIEWER_NOTES_CHARS - 1)}…`
+        : notes,
+    );
+  }
   return lines.join("\n");
 }
 
@@ -748,7 +811,7 @@ export function withFleetResultInstruction(
   if (!expected || expected === "text") return message;
   const shapes = {
     review_findings:
-      '{"type":"review_findings","findings":[{"severity":"critical|high|medium|low","message":"...","path":"optional","line":1}],"checked":["what you verified and the evidence (file:line)"],"emptyDiff":false}',
+      '{"type":"review_findings","findings":[{"severity":"critical|high|medium|low","message":"...","path":"optional","line":1}],"checked":["what you verified and the evidence (file:line)"],"limitations":["checks you could not run, if any"],"emptyDiff":false}',
     patch:
       '{"type":"patch","summary":"...","files":["..."],"verification":"optional"}',
     verification:
@@ -756,7 +819,7 @@ export function withFleetResultInstruction(
   } as const;
   const guidance =
     expected === "review_findings"
-      ? " List the main things you checked in checked (short notes with file:line evidence, including areas that were fine) so a clean result shows its coverage. Set emptyDiff=true only when the requested live diff or range is empty or unavailable. The runtime already knows the target, so include reviewedScope only if you materially reviewed something different."
+      ? ` List the main things you checked in checked (short notes with file:line evidence, including areas that were fine) so a clean result shows its coverage. ${REVIEW_FINDINGS_COMPLETENESS_GUIDANCE} Set emptyDiff=true only when the requested live diff or range is empty or unavailable. The runtime already knows the target, so include reviewedScope only if you materially reviewed something different.`
       : "";
   return `${message}\n\nEnd with one JSON object matching this result envelope: ${shapes[expected]}${guidance} Do not repeat it or add prose after it.`;
 }

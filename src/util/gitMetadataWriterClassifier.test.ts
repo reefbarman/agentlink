@@ -222,8 +222,19 @@ const negatives = [
   "GIT_DIR=.git git ls-files -z plans | xargs -0 git add -- && git commit -m fix",
   "git log --oneline",
   "git show --stat",
-  "git add . && git log --format=fuller",
-  "git add . && git show --pretty=raw",
+  "git add . && git log --show-signature -1",
+  "git add . && git log -1 --format='%h %G?'",
+  "git add . && git show --pretty='format:%GS'",
+
+  "git add . && git config --unset user.email",
+  "git add . && git config user.email other@example.com",
+  "git add . && git config --get-regexp user",
+  "git add . && git rev-parse --git-path hooks",
+  "git add . && git rev-parse --parseopt",
+  "git add . && git rev-list --all",
+  "git add . && git remote get-url --all origin",
+  "git add . && git remote get-url",
+  "git add . && git branch --show-current extra",
   "git config --local --get user.email",
   "git config --global user.email example@example.com",
   "git config --local --file alternate user.email example@example.com",
@@ -416,6 +427,29 @@ describe("classifyPredictableGitMetadataWriter", () => {
     [
       "git add a.ts && git diff --cached --name-only --diff-filter=A -- plans && git commit -q -m fix && git log -1 --oneline && git log -n 2 --stat",
       ["add", "commit"],
+    ],
+    // Reported: read-only identity/ref checks ahead of a commit.
+    [
+      "git rev-parse HEAD origin/main && git config user.email && git add a.ts b.ts && git diff --cached --name-only && git commit -q -F '/tmp/agentlink-cmd-x/msg' && git log -1 --format='%h %an <%ae> %s'",
+      ["add", "commit"],
+    ],
+    [
+      "git config user.email && git remote get-url origin && git add CHANGELOG.md src/a.ts && git commit -q -m fix",
+      ["add", "commit"],
+    ],
+    [
+      "git branch --show-current && git rev-parse --abbrev-ref HEAD && git config --get user.name && git commit -m fix",
+      ["commit"],
+    ],
+    ["git add . && git log --format=fuller && git show --pretty=raw", ["add"]],
+    // Reported: fetch followed by a formatted, date-filtered log.
+    [
+      "git fetch --quiet origin main && git log origin/main --since=2026-10-31 --format='%h %ad %s' --date=iso && git status --short",
+      ["fetch"],
+    ],
+    [
+      "git fetch origin && git rev-list --left-right --count HEAD...origin/main && git log --oneline HEAD..origin/main",
+      ["fetch"],
     ],
   ] as const)("classifies writer chain: %s", (command, subcommands) => {
     expect(classify(command)).toEqual({

@@ -3,6 +3,8 @@
 ## Unreleased
 
 - The CLI's and Assistant's system prompts now include the VS Code agent's background agent guidance (when to delegate, how to supervise and collect results, and the self-review and parallel-lane sections of each mode), for sessions that can start background agents. It leaves out image handoff and explicit mode routing, which their `spawn_background_agent` doesn't take. VS Code's prompt is unchanged.
+- Background reviews no longer hide a finding the reviewer only stated in prose behind "Review found no issues." When a `review_findings` result has no findings, the result now also shows the reviewer's own words from outside the envelope (up to 2,000 characters), and reviewers are told every issue they identify must be a finding. A new optional `limitations` list reports checks the reviewer could not run, such as a command blocked by policy, under **Not verified**, and changes the heading to say some checks did not run.
+- `execute_command` now offers protected Git guidance before launch for commit and fetch workflows that include common read-only checks, instead of launching them in the sandbox and failing on `.git/index.lock` or `.git/FETCH_HEAD`. It recognises `git config user.email` and other single-key config reads, `git rev-parse`, `git rev-list --count`, `git branch --show-current`, `git remote get-url`, and `git log`/`git show` with `--format`, `--date`, `--since` or `--author` and revisions before options. Signature placeholders such as `%G?` and `--show-signature`, which run GPG, are still excluded.
 
 ## 1.71.0
 

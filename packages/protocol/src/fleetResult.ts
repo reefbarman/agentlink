@@ -12,6 +12,8 @@ export type FleetResultEnvelope =
       reviewedScope?: string;
       /** Bounded notes on what the reviewer checked and its evidence, so a clean result shows its coverage. */
       checked?: string[];
+      /** Checks the reviewer could not run or scope it could not cover (for example a command blocked by policy). */
+      limitations?: string[];
       /** True when the requested diff was empty or missing, so an empty findings list is not a clean review. */
       emptyDiff?: boolean;
     }
