@@ -205,9 +205,15 @@ describe("McpElicitationFormControls", () => {
       "Email address must be valid.",
     );
 
-    for (const control of screen.getAllByRole(
-      /textbox|spinbutton|checkbox|combobox|listbox/,
-    )) {
+    const controls = [
+      "textbox",
+      "spinbutton",
+      "checkbox",
+      "combobox",
+      "listbox",
+    ].flatMap((role) => screen.queryAllByRole(role));
+    expect(controls.length).toBeGreaterThan(0);
+    for (const control of controls) {
       expect((control as HTMLInputElement | HTMLSelectElement).disabled).toBe(
         true,
       );

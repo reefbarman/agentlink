@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
 import { WriteCard } from "./WriteCard.js";
-import { createRef } from "preact";
 
 afterEach(cleanup);
 
@@ -27,7 +26,7 @@ describe("WriteCard", () => {
       <WriteCard
         request={request}
         submit={submit}
-        followUpRef={createRef<string>()}
+        followUpRef={{ current: "" }}
         onRevealDiff={onRevealDiff}
       />,
     );
@@ -53,7 +52,7 @@ describe("WriteCard", () => {
       <WriteCard
         request={request}
         submit={vi.fn()}
-        followUpRef={createRef<string>()}
+        followUpRef={{ current: "" }}
       />,
     );
 
@@ -88,7 +87,7 @@ describe("WriteCard", () => {
       <WriteCard
         request={request}
         submit={submit}
-        followUpRef={createRef<string>()}
+        followUpRef={{ current: "" }}
       />,
     );
     fireEvent.click(
@@ -134,7 +133,7 @@ describe("WriteCard", () => {
       <WriteCard
         request={request}
         submit={submit}
-        followUpRef={createRef<string>()}
+        followUpRef={{ current: "" }}
       />,
     );
 

@@ -34,10 +34,10 @@ const REPO_ROOT = path.resolve(
 
 /** Upstream source for the runtime version AgentLink depends on. */
 export const APPLY_SECCOMP_SOURCE = Object.freeze({
-  runtimeVersion: "0.0.79",
-  url: "https://codeload.github.com/anthropics/sandbox-runtime/tar.gz/refs/tags/v0.0.79",
-  sha256: "9396273452badf14042ad1f79f00675fc77271838bd1db5a9e1a30866d2fe1b5",
-  directory: "sandbox-runtime-0.0.79",
+  runtimeVersion: "0.0.81",
+  url: "https://codeload.github.com/anthropics/sandbox-runtime/tar.gz/refs/tags/v0.0.81",
+  sha256: "36cd4426995b660482a70ae70a61ad32a9ce5965fc81dc59c817916bee0e58f3",
+  directory: "sandbox-runtime-0.0.81",
 });
 
 export const APPLY_SECCOMP_TARGETS = Object.freeze({
