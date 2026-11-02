@@ -2890,6 +2890,12 @@ export class BrowserGatewayHelper {
       let sendOutcome = "model_success";
       activeTurn = this.beginAskAgentTurn(answerResult.messageId);
       if (!activeTurn) throw new Error("ask_agent_turn_in_progress");
+      // The turn continues in the same reply, so mark it streaming again; only
+      // starting a new reply would otherwise turn the working state on.
+      this.askAgentSessionStore.resumeAssistantMessage(
+        answerResult.messageId,
+        now,
+      );
       // Publish the answered card and resumed streaming state before the model
       // turn starts, as send and retry do; otherwise the browser keeps the
       // stale question until the first model delta or the turn finishes.

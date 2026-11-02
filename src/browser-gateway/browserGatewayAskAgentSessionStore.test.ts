@@ -189,6 +189,37 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(streaming()).toBe(false);
   });
 
+  it("resumes streaming only for an assistant reply in the open chat", () => {
+    const store = createStore();
+    const streaming = () =>
+      store.getOrCreate({
+        now: 300,
+        theme,
+        modelCredentialStatus: { state: "not_required", providerId: "test" },
+      }).snapshot.session.foreground.streaming;
+    store.createSession(100);
+    const user = store.appendUserMessage({ text: "ask me", now: 110 });
+    const reply = store.startAssistantMessage({ now: 120 });
+    store.finishAssistantMessage(reply.id, "question");
+    expect(streaming()).toBe(false);
+
+    expect(store.resumeAssistantMessage(user.id, 130)).toBe(false);
+    expect(store.resumeAssistantMessage("missing", 130)).toBe(false);
+    expect(streaming()).toBe(false);
+
+    expect(store.resumeAssistantMessage(reply.id, 130)).toBe(true);
+    expect(streaming()).toBe(true);
+    expect(store.getTranscriptMessages()).toHaveLength(2);
+    store.finishAssistantMessage(reply.id);
+    expect(streaming()).toBe(false);
+
+    // A reply that belongs to another chat does not mark this one streaming.
+    store.createSession(200);
+    store.appendUserMessage({ text: "other", now: 210 });
+    expect(store.resumeAssistantMessage(reply.id, 220)).toBe(false);
+    expect(streaming()).toBe(false);
+  });
+
   it("upserts a host-projected session without switching chats", () => {
     const store = createStore();
     store.createSession(100);

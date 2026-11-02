@@ -1426,6 +1426,25 @@ export class BrowserGatewayAskAgentSessionStore {
     return message;
   }
 
+  /**
+   * Mark an existing assistant message as streaming again, for a turn that
+   * resumes in the same reply (for example after an ask_user answer). Only a
+   * message in the open chat sets the streaming state.
+   */
+  resumeAssistantMessage(messageId: string, now = Date.now()): boolean {
+    const session = this.sessions.find(
+      (candidate) => candidate.id === this.activeSessionId,
+    );
+    const message = session?.messages.find(
+      (candidate) =>
+        candidate.id === messageId && candidate.role === "assistant",
+    );
+    if (!session || !message) return false;
+    session.lastActiveAt = now;
+    this.streaming = true;
+    return true;
+  }
+
   /** Whether the given session's transcript holds this message. */
   sessionHasMessage(sessionId: string, messageId: string): boolean {
     return (

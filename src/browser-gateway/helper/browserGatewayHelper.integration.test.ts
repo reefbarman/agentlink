@@ -6173,6 +6173,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
           ({ revision, snapshot }) =>
             revision > beforeAnswerRevision &&
             snapshot.ui.question === null &&
+            snapshot.session.foreground.streaming === true &&
             snapshot.session.foreground.projectedMessages.some((message) =>
               message.blocks?.some((block) => block.type === "question_answer"),
             ),
@@ -6184,6 +6185,10 @@ describe("BrowserGatewayHelper proxy routing", () => {
     }
     const answer = await answerPromise;
     expect(answer.ok).toBe(true);
+    const answerBody = (await answer.json()) as {
+      snapshot: { session: { foreground: { streaming: boolean } } };
+    };
+    expect(answerBody.snapshot.session.foreground.streaming).toBe(false);
   });
 
   it("surfaces safe Ask Agent ask_user tool calls and resumes after submitted answers", async () => {
