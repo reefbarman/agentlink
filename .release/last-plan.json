@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "8865bc802b417ab3b5e5d918dc2b592b4b844b9e",
-  "createdAt": "2026-11-02T04:16:35.586Z",
+  "sourceSha": "caf4979b659163b32f22019909ee4bc25cdb4300",
+  "createdAt": "2026-11-02T05:33:23.222Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,285 +10,131 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.71.0",
-      "baselineRef": "v1.71.0",
-      "reserved": "1.71.0",
-      "commits": [
-        "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
-        "68d636961febf02af5c99c4e28bf4a3c0dd88a6f",
-        "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
-        "0e1b8feab12ac3fef54aebe58e0d834759119cf3",
-        "8865bc802b417ab3b5e5d918dc2b592b4b844b9e"
-      ],
+      "published": "1.72.0",
+      "baselineRef": "v1.72.0",
+      "reserved": "1.72.0",
+      "commits": ["caf4979b659163b32f22019909ee4bc25cdb4300"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.72.0",
+      "version": "1.73.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.72.0",
+      "tag": "v1.73.0",
       "notes": [
         {
-          "sha": "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
-          "subject": "feat(workspace-host): give the CLI and Assistant VS Code's background agent guidance",
-          "summary": "CLI and Assistant foreground sessions with background tools now get VS Code's background agent guidance, and core gains prompt capabilities to omit image handoff and explicit mode routing.",
-          "breaking": false
-        },
-        {
-          "sha": "68d636961febf02af5c99c4e28bf4a3c0dd88a6f",
-          "subject": "fix(ask-agent): publish answered question card before resuming the model turn",
-          "summary": "Answering an ask_user question in the browser Ask Agent tab now publishes the answered card right away instead of leaving the stale question on screen.",
-          "breaking": false
-        },
-        {
-          "sha": "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
-          "subject": "fix(codex): move default and Ask Agent fallback models to GPT-6.x",
-          "summary": "The default Codex model moves to gpt-6.1-sol, and the browser Ask Agent fallback models become GPT-6 Luna, GPT-6.1 Terra and GPT-6.1 Sol.",
-          "breaking": false
-        },
-        {
-          "sha": "0e1b8feab12ac3fef54aebe58e0d834759119cf3",
-          "subject": "fix(ask-agent): show the working state while a turn resumes after an ask_user answer",
-          "summary": "The Ask Agent tab now shows the working state while a turn resumes after an ask_user answer instead of looking idle.",
-          "breaking": false
-        },
-        {
-          "sha": "8865bc802b417ab3b5e5d918dc2b592b4b844b9e",
-          "subject": "fix(tools): surface dropped review findings and predict more git chains",
-          "summary": "Clean background review results now show the reviewer's prose and an optional limitations list under Not verified, and Git metadata preflight recognises more read-only inspection commands in commit and fetch chains.",
+          "sha": "caf4979b659163b32f22019909ee4bc25cdb4300",
+          "subject": "feat(auto-continue): tell the model when a continue turn is automated",
+          "summary": "Auto Continue prompts and the hidden TODO continuation now reach the model labelled as automated AgentLink messages, not user approval, while the transcript still shows the plain prompt, and the default continuation no longer mentions approval.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.71.0",
-      "baselineRef": "desktop-v0.71.0",
-      "reserved": "0.71.0",
-      "commits": [
-        "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
-        "68d636961febf02af5c99c4e28bf4a3c0dd88a6f",
-        "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
-        "0e1b8feab12ac3fef54aebe58e0d834759119cf3",
-        "8865bc802b417ab3b5e5d918dc2b592b4b844b9e"
-      ],
+      "published": "0.72.0",
+      "baselineRef": "desktop-v0.72.0",
+      "reserved": "0.72.0",
+      "commits": ["caf4979b659163b32f22019909ee4bc25cdb4300"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.72.0",
+      "version": "0.73.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.72.0",
+      "tag": "desktop-v0.73.0",
       "notes": [
         {
-          "sha": "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
-          "subject": "feat(workspace-host): give the CLI and Assistant VS Code's background agent guidance",
-          "summary": "CLI and Assistant foreground sessions with background tools now get VS Code's background agent guidance, and core gains prompt capabilities to omit image handoff and explicit mode routing.",
-          "breaking": false
-        },
-        {
-          "sha": "68d636961febf02af5c99c4e28bf4a3c0dd88a6f",
-          "subject": "fix(ask-agent): publish answered question card before resuming the model turn",
-          "summary": "Answering an ask_user question in the browser Ask Agent tab now publishes the answered card right away instead of leaving the stale question on screen.",
-          "breaking": false
-        },
-        {
-          "sha": "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
-          "subject": "fix(codex): move default and Ask Agent fallback models to GPT-6.x",
-          "summary": "The default Codex model moves to gpt-6.1-sol, and the browser Ask Agent fallback models become GPT-6 Luna, GPT-6.1 Terra and GPT-6.1 Sol.",
-          "breaking": false
-        },
-        {
-          "sha": "0e1b8feab12ac3fef54aebe58e0d834759119cf3",
-          "subject": "fix(ask-agent): show the working state while a turn resumes after an ask_user answer",
-          "summary": "The Ask Agent tab now shows the working state while a turn resumes after an ask_user answer instead of looking idle.",
-          "breaking": false
-        },
-        {
-          "sha": "8865bc802b417ab3b5e5d918dc2b592b4b844b9e",
-          "subject": "fix(tools): surface dropped review findings and predict more git chains",
-          "summary": "Clean background review results now show the reviewer's prose and an optional limitations list under Not verified, and Git metadata preflight recognises more read-only inspection commands in commit and fetch chains.",
+          "sha": "caf4979b659163b32f22019909ee4bc25cdb4300",
+          "subject": "feat(auto-continue): tell the model when a continue turn is automated",
+          "summary": "Auto Continue prompts and the hidden TODO continuation now reach the model labelled as automated AgentLink messages, not user approval, while the transcript still shows the plain prompt, and the default continuation no longer mentions approval.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.49.0",
-      "baselineRef": "cli-v0.49.0",
-      "reserved": "0.49.0",
-      "commits": [
-        "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
-        "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
-        "8865bc802b417ab3b5e5d918dc2b592b4b844b9e"
-      ],
+      "published": "0.50.0",
+      "baselineRef": "cli-v0.50.0",
+      "reserved": "0.50.0",
+      "commits": ["caf4979b659163b32f22019909ee4bc25cdb4300"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.50.0",
+      "version": "0.51.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.50.0",
+      "tag": "cli-v0.51.0",
       "notes": [
         {
-          "sha": "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
-          "subject": "feat(workspace-host): give the CLI and Assistant VS Code's background agent guidance",
-          "summary": "CLI and Assistant foreground sessions with background tools now get VS Code's background agent guidance, and core gains prompt capabilities to omit image handoff and explicit mode routing.",
-          "breaking": false
-        },
-        {
-          "sha": "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
-          "subject": "fix(codex): move default and Ask Agent fallback models to GPT-6.x",
-          "summary": "The default Codex model moves to gpt-6.1-sol, and the browser Ask Agent fallback models become GPT-6 Luna, GPT-6.1 Terra and GPT-6.1 Sol.",
-          "breaking": false
-        },
-        {
-          "sha": "8865bc802b417ab3b5e5d918dc2b592b4b844b9e",
-          "subject": "fix(tools): surface dropped review findings and predict more git chains",
-          "summary": "Clean background review results now show the reviewer's prose and an optional limitations list under Not verified, and Git metadata preflight recognises more read-only inspection commands in commit and fetch chains.",
+          "sha": "caf4979b659163b32f22019909ee4bc25cdb4300",
+          "subject": "feat(auto-continue): tell the model when a continue turn is automated",
+          "summary": "Auto Continue prompts and the hidden TODO continuation now reach the model labelled as automated AgentLink messages, not user approval, while the transcript still shows the plain prompt, and the default continuation no longer mentions approval.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.39.0",
-      "baselineRef": "sdk-v0.39.0",
-      "reserved": "0.39.0",
-      "commits": [
-        "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
-        "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
-        "8865bc802b417ab3b5e5d918dc2b592b4b844b9e"
-      ],
+      "published": "0.40.0",
+      "baselineRef": "sdk-v0.40.0",
+      "reserved": "0.40.0",
+      "commits": ["caf4979b659163b32f22019909ee4bc25cdb4300"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.40.0",
+      "version": "0.41.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.40.0",
+      "tag": "sdk-v0.41.0",
       "notes": [
         {
-          "sha": "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
-          "subject": "feat(workspace-host): give the CLI and Assistant VS Code's background agent guidance",
-          "summary": "CLI and Assistant foreground sessions with background tools now get VS Code's background agent guidance, and core gains prompt capabilities to omit image handoff and explicit mode routing.",
-          "breaking": false
-        },
-        {
-          "sha": "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
-          "subject": "fix(codex): move default and Ask Agent fallback models to GPT-6.x",
-          "summary": "The default Codex model moves to gpt-6.1-sol, and the browser Ask Agent fallback models become GPT-6 Luna, GPT-6.1 Terra and GPT-6.1 Sol.",
-          "breaking": false
-        },
-        {
-          "sha": "8865bc802b417ab3b5e5d918dc2b592b4b844b9e",
-          "subject": "fix(tools): surface dropped review findings and predict more git chains",
-          "summary": "Clean background review results now show the reviewer's prose and an optional limitations list under Not verified, and Git metadata preflight recognises more read-only inspection commands in commit and fetch chains.",
+          "sha": "caf4979b659163b32f22019909ee4bc25cdb4300",
+          "subject": "feat(auto-continue): tell the model when a continue turn is automated",
+          "summary": "Auto Continue prompts and the hidden TODO continuation now reach the model labelled as automated AgentLink messages, not user approval, while the transcript still shows the plain prompt, and the default continuation no longer mentions approval.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.43.0",
-      "baselineRef": "assistant-v0.43.0",
-      "reserved": "0.43.0",
-      "commits": [
-        "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
-        "68d636961febf02af5c99c4e28bf4a3c0dd88a6f",
-        "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
-        "0e1b8feab12ac3fef54aebe58e0d834759119cf3",
-        "8865bc802b417ab3b5e5d918dc2b592b4b844b9e"
-      ],
+      "published": "0.44.0",
+      "baselineRef": "assistant-v0.44.0",
+      "reserved": "0.44.0",
+      "commits": ["caf4979b659163b32f22019909ee4bc25cdb4300"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.44.0",
+      "version": "0.45.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.44.0",
+      "tag": "assistant-v0.45.0",
       "notes": [
         {
-          "sha": "b1783603497cc8da2bff6bf054cf37b6fd78aceb",
-          "subject": "feat(workspace-host): give the CLI and Assistant VS Code's background agent guidance",
-          "summary": "CLI and Assistant foreground sessions with background tools now get VS Code's background agent guidance, and core gains prompt capabilities to omit image handoff and explicit mode routing.",
-          "breaking": false
-        },
-        {
-          "sha": "68d636961febf02af5c99c4e28bf4a3c0dd88a6f",
-          "subject": "fix(ask-agent): publish answered question card before resuming the model turn",
-          "summary": "Answering an ask_user question in the browser Ask Agent tab now publishes the answered card right away instead of leaving the stale question on screen.",
-          "breaking": false
-        },
-        {
-          "sha": "31470c9a73995d1859bed1d8240c01ad5fc20bf3",
-          "subject": "fix(codex): move default and Ask Agent fallback models to GPT-6.x",
-          "summary": "The default Codex model moves to gpt-6.1-sol, and the browser Ask Agent fallback models become GPT-6 Luna, GPT-6.1 Terra and GPT-6.1 Sol.",
-          "breaking": false
-        },
-        {
-          "sha": "0e1b8feab12ac3fef54aebe58e0d834759119cf3",
-          "subject": "fix(ask-agent): show the working state while a turn resumes after an ask_user answer",
-          "summary": "The Ask Agent tab now shows the working state while a turn resumes after an ask_user answer instead of looking idle.",
-          "breaking": false
-        },
-        {
-          "sha": "8865bc802b417ab3b5e5d918dc2b592b4b844b9e",
-          "subject": "fix(tools): surface dropped review findings and predict more git chains",
-          "summary": "Clean background review results now show the reviewer's prose and an optional limitations list under Not verified, and Git metadata preflight recognises more read-only inspection commands in commit and fetch chains.",
+          "sha": "caf4979b659163b32f22019909ee4bc25cdb4300",
+          "subject": "feat(auto-continue): tell the model when a continue turn is automated",
+          "summary": "Auto Continue prompts and the hidden TODO continuation now reach the model labelled as automated AgentLink messages, not user approval, while the transcript still shows the plain prompt, and the default continuation no longer mentions approval.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "b1783603497cc8da2bff6bf054cf37b6fd78aceb": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "CLI and Assistant foreground sessions with background tools now get VS Code's background agent guidance, and core gains prompt capabilities to omit image handoff and explicit mode routing.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "68d636961febf02af5c99c4e28bf4a3c0dd88a6f": {
+    "caf4979b659163b32f22019909ee4bc25cdb4300": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Answering an ask_user question in the browser Ask Agent tab now publishes the answered card right away instead of leaving the stale question on screen.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "31470c9a73995d1859bed1d8240c01ad5fc20bf3": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The default Codex model moves to gpt-6.1-sol, and the browser Ask Agent fallback models become GPT-6 Luna, GPT-6.1 Terra and GPT-6.1 Sol.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "0e1b8feab12ac3fef54aebe58e0d834759119cf3": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The Ask Agent tab now shows the working state while a turn resumes after an ask_user answer instead of looking idle.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "8865bc802b417ab3b5e5d918dc2b592b4b844b9e": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Clean background review results now show the reviewer's prose and an optional limitations list under Not verified, and Git metadata preflight recognises more read-only inspection commands in commit and fetch chains.",
+      "summary": "Auto Continue prompts and the hidden TODO continuation now reach the model labelled as automated AgentLink messages, not user approval, while the transcript still shows the plain prompt, and the default continuation no longer mentions approval.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

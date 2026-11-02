@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.41.0 — 2026-11-02
+
+- Auto Continue prompts and the hidden TODO continuation now reach the model labelled as automated AgentLink messages, not user approval, while the transcript still shows the plain prompt, and the default continuation no longer mentions approval.
+
 ## 0.40.0 — 2026-11-02
 
 - `SystemPromptCapabilities` adds `backgroundAgentImages` and `backgroundAgentModeRouting`. `deriveSystemPromptCapabilities` leaves both off, so a host whose `spawn_background_agent` lacks image handoff or explicit `mode`/`permissionProfile` gets VS Code's background agent guidance without them. With every capability on, the prompt is unchanged.

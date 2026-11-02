@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.73.0
+
 - In VS Code, Auto Continue messages now tell the model they were sent automatically by AgentLink, not typed by you. Before, a continue prompt arrived as an ordinary user message, so a next step the agent had written for itself came back sounding like your instruction, and the default continuation said "user-approved scope", which agents echoed as "what you approved". The model now receives the prompt inside an `<auto-continue-notice>` explaining that Auto Continue lets it keep working within your original request but does not approve new scope or risky actions, and that a proposed next step is its own earlier plan to revise if the evidence disagrees. The hidden continuation sent for unfinished todos is labelled the same way. The default continuation no longer mentions approval, and agents are told to write `continuePrompt` as a neutral next step. The transcript still shows only the prompt.
 
 ## 1.72.0
