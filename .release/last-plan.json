@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "dff7370ba05c7dd965e6fa1ebf0721bfaf74c78c",
-  "createdAt": "2026-11-02T00:18:56.051Z",
+  "sourceSha": "6513bf69d3c9e7bfd80d459ad358326ed1f8094a",
+  "createdAt": "2026-11-02T01:34:21.160Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,402 +10,132 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.68.27",
-      "baselineRef": "v1.68.27",
-      "reserved": "1.68.35",
-      "commits": [
-        "b7481d961b4d03e4e6667f5710d544af45de94ee",
-        "e1fe7ed50df3334e3d1b04ef5bbb1a3d03754db1",
-        "cae5f1c211c34988eacaa9f18bf19275f18dfbe9",
-        "d18e4de909a7dc48e7e75f87271304c1a737504b",
-        "1857907f3894d3a2068029937583d37574837527",
-        "3cef45882b84f779a7ac27850af99bf6ebaf137d",
-        "92b2dc71226fe119dec0e0193fd82bb877e58f8a",
-        "6e942b6ed3ffe61e53589dd946a309ff8c9aa23d",
-        "452dede9b564799ae6012b189874b85d6b23d58a"
-      ],
+      "published": "1.69.0",
+      "baselineRef": "v1.69.0",
+      "reserved": "1.69.0",
+      "commits": ["6513bf69d3c9e7bfd80d459ad358326ed1f8094a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.69.0",
+      "version": "1.70.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.69.0",
+      "tag": "v1.70.0",
       "notes": [
         {
-          "sha": "b7481d961b4d03e4e6667f5710d544af45de94ee",
-          "subject": "fix(tools): close triaged feedback on reviews, compose, telemetry and write_file",
-          "summary": "write_file accepts an optional expected_content_hash that refuses stale rewrites; incomplete background reviews no longer say \"no issues\"; compose recovery lists children in call order; telemetry context log streams.",
-          "breaking": false
-        },
-        {
-          "sha": "e1fe7ed50df3334e3d1b04ef5bbb1a3d03754db1",
-          "subject": "feat(diagnostics): opt-in heap pressure profiler for extension host OOM crashes",
-          "summary": "Adds an opt-in agentlink.diagnostics.heapProfiling setting that writes heap profiles and top-allocator summaries as extension host heap use rises, to diagnose out-of-memory crashes.",
-          "breaking": false
-        },
-        {
-          "sha": "cae5f1c211c34988eacaa9f18bf19275f18dfbe9",
-          "subject": "fix(retrieval): stop chunk search text retaining whole source metadata (ext host OOM)",
-          "summary": "Fixes an extension host out-of-memory crash by stopping chunk search text from retaining whole source metadata.",
-          "breaking": false
-        },
-        {
-          "sha": "d18e4de909a7dc48e7e75f87271304c1a737504b",
-          "subject": "fix(retrieval): cut session-history index memory and explain non-retryable background failures",
-          "summary": "Reduces session-history indexing memory use and delays the history backfill; get_background_result failure JSON now includes a recovery explanation when a run is not retryable.",
-          "breaking": false
-        },
-        {
-          "sha": "1857907f3894d3a2068029937583d37574837527",
-          "subject": "fix(auto-continue): continue an already-completed turn when enabled",
-          "summary": "Auto Continue now continues an already-completed turn when enabled, pauses with a reason if the continue prompt cannot be sent, and editor panes show the current state.",
-          "breaking": false
-        },
-        {
-          "sha": "3cef45882b84f779a7ac27850af99bf6ebaf137d",
-          "subject": "fix(execute_command): recognise more commit workflows before sandbox launch",
-          "summary": "Protected Git preflight recognises more commit workflows (checksum guards, commit --only and -F, diff --diff-filter, log -n), so they offer reviewed native execution instead of failing in the sandbox.",
-          "breaking": false
-        },
-        {
-          "sha": "92b2dc71226fe119dec0e0193fd82bb877e58f8a",
-          "subject": "fix(tools): background network review, failed-proposal buffers, large reads",
-          "summary": "Fixes network review for background commands, lets edits replace a leftover failed agent proposal in an editor buffer, and read_file now streams windows from text files above 32 MB.",
-          "breaking": false
-        },
-        {
-          "sha": "6e942b6ed3ffe61e53589dd946a309ff8c9aa23d",
-          "subject": "feat(fleet): keep reviewer coverage notes in review_findings results",
-          "summary": "review_findings results accept an optional bounded checked list of coverage notes, which is requested from reviewers and shown under Checked in results and cards.",
-          "breaking": false
-        },
-        {
-          "sha": "452dede9b564799ae6012b189874b85d6b23d58a",
-          "subject": "fix: send documents to OpenAI-compatible models instead of failing",
-          "summary": "Documents attached to chats on OpenAI-compatible models no longer fail: text documents are inlined, and PDFs are sent as file parts when the new supportsDocuments option is set, otherwise replaced by a note.",
+          "sha": "6513bf69d3c9e7bfd80d459ad358326ed1f8094a",
+          "subject": "feat(workspace-host): give background agents VS Code's expectedResult and reviewScope",
+          "summary": "CLI and Assistant background agents now accept VS Code's reviewScope and expectedResult, returning validated structured results, and the SDK adds @agentlink/core/background-results and review-scope subpaths.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.68.1",
-      "baselineRef": "desktop-v0.68.1",
-      "reserved": "0.68.1",
-      "commits": [
-        "b7481d961b4d03e4e6667f5710d544af45de94ee",
-        "e1fe7ed50df3334e3d1b04ef5bbb1a3d03754db1",
-        "cae5f1c211c34988eacaa9f18bf19275f18dfbe9",
-        "d18e4de909a7dc48e7e75f87271304c1a737504b",
-        "1857907f3894d3a2068029937583d37574837527",
-        "3cef45882b84f779a7ac27850af99bf6ebaf137d",
-        "92b2dc71226fe119dec0e0193fd82bb877e58f8a",
-        "6e942b6ed3ffe61e53589dd946a309ff8c9aa23d",
-        "452dede9b564799ae6012b189874b85d6b23d58a"
-      ],
+      "published": "0.69.0",
+      "baselineRef": "desktop-v0.69.0",
+      "reserved": "0.69.0",
+      "commits": ["6513bf69d3c9e7bfd80d459ad358326ed1f8094a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.69.0",
+      "version": "0.70.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.69.0",
+      "tag": "desktop-v0.70.0",
       "notes": [
         {
-          "sha": "b7481d961b4d03e4e6667f5710d544af45de94ee",
-          "subject": "fix(tools): close triaged feedback on reviews, compose, telemetry and write_file",
-          "summary": "write_file accepts an optional expected_content_hash that refuses stale rewrites; incomplete background reviews no longer say \"no issues\"; compose recovery lists children in call order; telemetry context log streams.",
-          "breaking": false
-        },
-        {
-          "sha": "e1fe7ed50df3334e3d1b04ef5bbb1a3d03754db1",
-          "subject": "feat(diagnostics): opt-in heap pressure profiler for extension host OOM crashes",
-          "summary": "Adds an opt-in agentlink.diagnostics.heapProfiling setting that writes heap profiles and top-allocator summaries as extension host heap use rises, to diagnose out-of-memory crashes.",
-          "breaking": false
-        },
-        {
-          "sha": "cae5f1c211c34988eacaa9f18bf19275f18dfbe9",
-          "subject": "fix(retrieval): stop chunk search text retaining whole source metadata (ext host OOM)",
-          "summary": "Fixes an extension host out-of-memory crash by stopping chunk search text from retaining whole source metadata.",
-          "breaking": false
-        },
-        {
-          "sha": "d18e4de909a7dc48e7e75f87271304c1a737504b",
-          "subject": "fix(retrieval): cut session-history index memory and explain non-retryable background failures",
-          "summary": "Reduces session-history indexing memory use and delays the history backfill; get_background_result failure JSON now includes a recovery explanation when a run is not retryable.",
-          "breaking": false
-        },
-        {
-          "sha": "1857907f3894d3a2068029937583d37574837527",
-          "subject": "fix(auto-continue): continue an already-completed turn when enabled",
-          "summary": "Auto Continue now continues an already-completed turn when enabled, pauses with a reason if the continue prompt cannot be sent, and editor panes show the current state.",
-          "breaking": false
-        },
-        {
-          "sha": "3cef45882b84f779a7ac27850af99bf6ebaf137d",
-          "subject": "fix(execute_command): recognise more commit workflows before sandbox launch",
-          "summary": "Protected Git preflight recognises more commit workflows (checksum guards, commit --only and -F, diff --diff-filter, log -n), so they offer reviewed native execution instead of failing in the sandbox.",
-          "breaking": false
-        },
-        {
-          "sha": "92b2dc71226fe119dec0e0193fd82bb877e58f8a",
-          "subject": "fix(tools): background network review, failed-proposal buffers, large reads",
-          "summary": "Fixes network review for background commands, lets edits replace a leftover failed agent proposal in an editor buffer, and read_file now streams windows from text files above 32 MB.",
-          "breaking": false
-        },
-        {
-          "sha": "6e942b6ed3ffe61e53589dd946a309ff8c9aa23d",
-          "subject": "feat(fleet): keep reviewer coverage notes in review_findings results",
-          "summary": "review_findings results accept an optional bounded checked list of coverage notes, which is requested from reviewers and shown under Checked in results and cards.",
-          "breaking": false
-        },
-        {
-          "sha": "452dede9b564799ae6012b189874b85d6b23d58a",
-          "subject": "fix: send documents to OpenAI-compatible models instead of failing",
-          "summary": "Documents attached to chats on OpenAI-compatible models no longer fail: text documents are inlined, and PDFs are sent as file parts when the new supportsDocuments option is set, otherwise replaced by a note.",
+          "sha": "6513bf69d3c9e7bfd80d459ad358326ed1f8094a",
+          "subject": "feat(workspace-host): give background agents VS Code's expectedResult and reviewScope",
+          "summary": "CLI and Assistant background agents now accept VS Code's reviewScope and expectedResult, returning validated structured results, and the SDK adds @agentlink/core/background-results and review-scope subpaths.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.46.1",
-      "baselineRef": "cli-v0.46.1",
-      "reserved": "0.46.1",
-      "commits": [
-        "e1fe7ed50df3334e3d1b04ef5bbb1a3d03754db1",
-        "d18e4de909a7dc48e7e75f87271304c1a737504b",
-        "6e942b6ed3ffe61e53589dd946a309ff8c9aa23d",
-        "452dede9b564799ae6012b189874b85d6b23d58a"
-      ],
+      "published": "0.47.0",
+      "baselineRef": "cli-v0.47.0",
+      "reserved": "0.47.0",
+      "commits": ["6513bf69d3c9e7bfd80d459ad358326ed1f8094a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.47.0",
+      "version": "0.48.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.47.0",
+      "tag": "cli-v0.48.0",
       "notes": [
         {
-          "sha": "e1fe7ed50df3334e3d1b04ef5bbb1a3d03754db1",
-          "subject": "feat(diagnostics): opt-in heap pressure profiler for extension host OOM crashes",
-          "summary": "Adds an opt-in agentlink.diagnostics.heapProfiling setting that writes heap profiles and top-allocator summaries as extension host heap use rises, to diagnose out-of-memory crashes.",
-          "breaking": false
-        },
-        {
-          "sha": "d18e4de909a7dc48e7e75f87271304c1a737504b",
-          "subject": "fix(retrieval): cut session-history index memory and explain non-retryable background failures",
-          "summary": "Reduces session-history indexing memory use and delays the history backfill; get_background_result failure JSON now includes a recovery explanation when a run is not retryable.",
-          "breaking": false
-        },
-        {
-          "sha": "6e942b6ed3ffe61e53589dd946a309ff8c9aa23d",
-          "subject": "feat(fleet): keep reviewer coverage notes in review_findings results",
-          "summary": "review_findings results accept an optional bounded checked list of coverage notes, which is requested from reviewers and shown under Checked in results and cards.",
-          "breaking": false
-        },
-        {
-          "sha": "452dede9b564799ae6012b189874b85d6b23d58a",
-          "subject": "fix: send documents to OpenAI-compatible models instead of failing",
-          "summary": "Documents attached to chats on OpenAI-compatible models no longer fail: text documents are inlined, and PDFs are sent as file parts when the new supportsDocuments option is set, otherwise replaced by a note.",
+          "sha": "6513bf69d3c9e7bfd80d459ad358326ed1f8094a",
+          "subject": "feat(workspace-host): give background agents VS Code's expectedResult and reviewScope",
+          "summary": "CLI and Assistant background agents now accept VS Code's reviewScope and expectedResult, returning validated structured results, and the SDK adds @agentlink/core/background-results and review-scope subpaths.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.36.1",
-      "baselineRef": "sdk-v0.36.1",
-      "reserved": "0.36.1",
-      "commits": [
-        "d18e4de909a7dc48e7e75f87271304c1a737504b",
-        "6e942b6ed3ffe61e53589dd946a309ff8c9aa23d",
-        "452dede9b564799ae6012b189874b85d6b23d58a"
-      ],
+      "published": "0.37.0",
+      "baselineRef": "sdk-v0.37.0",
+      "reserved": "0.37.0",
+      "commits": ["6513bf69d3c9e7bfd80d459ad358326ed1f8094a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.37.0",
+      "version": "0.38.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.37.0",
+      "tag": "sdk-v0.38.0",
       "notes": [
         {
-          "sha": "d18e4de909a7dc48e7e75f87271304c1a737504b",
-          "subject": "fix(retrieval): cut session-history index memory and explain non-retryable background failures",
-          "summary": "Reduces session-history indexing memory use and delays the history backfill; get_background_result failure JSON now includes a recovery explanation when a run is not retryable.",
-          "breaking": false
-        },
-        {
-          "sha": "6e942b6ed3ffe61e53589dd946a309ff8c9aa23d",
-          "subject": "feat(fleet): keep reviewer coverage notes in review_findings results",
-          "summary": "review_findings results accept an optional bounded checked list of coverage notes, which is requested from reviewers and shown under Checked in results and cards.",
-          "breaking": false
-        },
-        {
-          "sha": "452dede9b564799ae6012b189874b85d6b23d58a",
-          "subject": "fix: send documents to OpenAI-compatible models instead of failing",
-          "summary": "Documents attached to chats on OpenAI-compatible models no longer fail: text documents are inlined, and PDFs are sent as file parts when the new supportsDocuments option is set, otherwise replaced by a note.",
+          "sha": "6513bf69d3c9e7bfd80d459ad358326ed1f8094a",
+          "subject": "feat(workspace-host): give background agents VS Code's expectedResult and reviewScope",
+          "summary": "CLI and Assistant background agents now accept VS Code's reviewScope and expectedResult, returning validated structured results, and the SDK adds @agentlink/core/background-results and review-scope subpaths.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.40.1",
-      "baselineRef": "assistant-v0.40.1",
-      "reserved": "0.40.1",
-      "commits": [
-        "b7481d961b4d03e4e6667f5710d544af45de94ee",
-        "e1fe7ed50df3334e3d1b04ef5bbb1a3d03754db1",
-        "d18e4de909a7dc48e7e75f87271304c1a737504b",
-        "1857907f3894d3a2068029937583d37574837527",
-        "3cef45882b84f779a7ac27850af99bf6ebaf137d",
-        "92b2dc71226fe119dec0e0193fd82bb877e58f8a",
-        "6e942b6ed3ffe61e53589dd946a309ff8c9aa23d",
-        "452dede9b564799ae6012b189874b85d6b23d58a"
-      ],
+      "published": "0.41.0",
+      "baselineRef": "assistant-v0.41.0",
+      "reserved": "0.41.0",
+      "commits": ["6513bf69d3c9e7bfd80d459ad358326ed1f8094a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.41.0",
+      "version": "0.42.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.41.0",
+      "tag": "assistant-v0.42.0",
       "notes": [
         {
-          "sha": "b7481d961b4d03e4e6667f5710d544af45de94ee",
-          "subject": "fix(tools): close triaged feedback on reviews, compose, telemetry and write_file",
-          "summary": "write_file accepts an optional expected_content_hash that refuses stale rewrites; incomplete background reviews no longer say \"no issues\"; compose recovery lists children in call order; telemetry context log streams.",
-          "breaking": false
-        },
-        {
-          "sha": "e1fe7ed50df3334e3d1b04ef5bbb1a3d03754db1",
-          "subject": "feat(diagnostics): opt-in heap pressure profiler for extension host OOM crashes",
-          "summary": "Adds an opt-in agentlink.diagnostics.heapProfiling setting that writes heap profiles and top-allocator summaries as extension host heap use rises, to diagnose out-of-memory crashes.",
-          "breaking": false
-        },
-        {
-          "sha": "d18e4de909a7dc48e7e75f87271304c1a737504b",
-          "subject": "fix(retrieval): cut session-history index memory and explain non-retryable background failures",
-          "summary": "Reduces session-history indexing memory use and delays the history backfill; get_background_result failure JSON now includes a recovery explanation when a run is not retryable.",
-          "breaking": false
-        },
-        {
-          "sha": "1857907f3894d3a2068029937583d37574837527",
-          "subject": "fix(auto-continue): continue an already-completed turn when enabled",
-          "summary": "Auto Continue now continues an already-completed turn when enabled, pauses with a reason if the continue prompt cannot be sent, and editor panes show the current state.",
-          "breaking": false
-        },
-        {
-          "sha": "3cef45882b84f779a7ac27850af99bf6ebaf137d",
-          "subject": "fix(execute_command): recognise more commit workflows before sandbox launch",
-          "summary": "Protected Git preflight recognises more commit workflows (checksum guards, commit --only and -F, diff --diff-filter, log -n), so they offer reviewed native execution instead of failing in the sandbox.",
-          "breaking": false
-        },
-        {
-          "sha": "92b2dc71226fe119dec0e0193fd82bb877e58f8a",
-          "subject": "fix(tools): background network review, failed-proposal buffers, large reads",
-          "summary": "Fixes network review for background commands, lets edits replace a leftover failed agent proposal in an editor buffer, and read_file now streams windows from text files above 32 MB.",
-          "breaking": false
-        },
-        {
-          "sha": "6e942b6ed3ffe61e53589dd946a309ff8c9aa23d",
-          "subject": "feat(fleet): keep reviewer coverage notes in review_findings results",
-          "summary": "review_findings results accept an optional bounded checked list of coverage notes, which is requested from reviewers and shown under Checked in results and cards.",
-          "breaking": false
-        },
-        {
-          "sha": "452dede9b564799ae6012b189874b85d6b23d58a",
-          "subject": "fix: send documents to OpenAI-compatible models instead of failing",
-          "summary": "Documents attached to chats on OpenAI-compatible models no longer fail: text documents are inlined, and PDFs are sent as file parts when the new supportsDocuments option is set, otherwise replaced by a note.",
+          "sha": "6513bf69d3c9e7bfd80d459ad358326ed1f8094a",
+          "subject": "feat(workspace-host): give background agents VS Code's expectedResult and reviewScope",
+          "summary": "CLI and Assistant background agents now accept VS Code's reviewScope and expectedResult, returning validated structured results, and the SDK adds @agentlink/core/background-results and review-scope subpaths.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "b7481d961b4d03e4e6667f5710d544af45de94ee": {
+    "6513bf69d3c9e7bfd80d459ad358326ed1f8094a": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "write_file accepts an optional expected_content_hash that refuses stale rewrites; incomplete background reviews no longer say \"no issues\"; compose recovery lists children in call order; telemetry context log streams.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "e1fe7ed50df3334e3d1b04ef5bbb1a3d03754db1": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Adds an opt-in agentlink.diagnostics.heapProfiling setting that writes heap profiles and top-allocator summaries as extension host heap use rises, to diagnose out-of-memory crashes.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "cae5f1c211c34988eacaa9f18bf19275f18dfbe9": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Fixes an extension host out-of-memory crash by stopping chunk search text from retaining whole source metadata.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "d18e4de909a7dc48e7e75f87271304c1a737504b": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Reduces session-history indexing memory use and delays the history backfill; get_background_result failure JSON now includes a recovery explanation when a run is not retryable.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "1857907f3894d3a2068029937583d37574837527": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Auto Continue now continues an already-completed turn when enabled, pauses with a reason if the continue prompt cannot be sent, and editor panes show the current state.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "3cef45882b84f779a7ac27850af99bf6ebaf137d": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Protected Git preflight recognises more commit workflows (checksum guards, commit --only and -F, diff --diff-filter, log -n), so they offer reviewed native execution instead of failing in the sandbox.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "92b2dc71226fe119dec0e0193fd82bb877e58f8a": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Fixes network review for background commands, lets edits replace a leftover failed agent proposal in an editor buffer, and read_file now streams windows from text files above 32 MB.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "6e942b6ed3ffe61e53589dd946a309ff8c9aa23d": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "review_findings results accept an optional bounded checked list of coverage notes, which is requested from reviewers and shown under Checked in results and cards.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "452dede9b564799ae6012b189874b85d6b23d58a": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Documents attached to chats on OpenAI-compatible models no longer fail: text documents are inlined, and PDFs are sent as file parts when the new supportsDocuments option is set, otherwise replaced by a note.",
-      "coverage": "full",
+      "summary": "CLI and Assistant background agents now accept VS Code's reviewScope and expectedResult, returning validated structured results, and the SDK adds @agentlink/core/background-results and review-scope subpaths.",
+      "coverage": "partial",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     }

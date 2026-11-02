@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.70.0
+
 - The CLI and Assistant now take VS Code's `reviewScope` and `expectedResult` when starting a background agent. A review scope (working tree, files, commit range or explicit diff) is checked against the project before the child starts and handed over in VS Code's review brief. A child owing a `review_findings`, `patch` or `verification` result returns it through VS Code's background `set_task_status`, which refuses a malformed envelope with VS Code's diagnostics so the child can fix it; a child that ends without the envelope finishes as `incomplete_expected_result` with VS Code's explanation instead of passing its text off as the result. Assistant agent cards carry the validated result.
 
 ## 1.69.0
