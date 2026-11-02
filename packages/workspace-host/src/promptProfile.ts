@@ -63,8 +63,8 @@ const SHARED_REASONING_IDENTITY =
 
 /**
  * VS Code's shared guidance for the tools this session registers, led by the
- * identity line. Mode and provider sections are not included yet: they name
- * VS Code-only tools (`switch_mode`, `get_repo_map`, terminal reuse).
+ * identity line. Provider sections are not included yet: they name VS
+ * Code-only behaviour (terminal reuse).
  */
 export function composeSharedWorkspaceGuidance(options: {
   readonly model: CoreResolvedModel;
@@ -75,13 +75,10 @@ export function composeSharedWorkspaceGuidance(options: {
   readonly codingAssistant?: boolean;
 }): string {
   const profile = resolveWorkspacePromptProfile(options.model);
-  const capabilities = {
-    ...deriveSystemPromptCapabilities(options.toolNames),
-    // workspace-host's background tools do not take VS Code's taskClass,
-    // ownedPaths or image handoff yet (parity gap 7); the host describes
-    // its own delegation rules instead.
-    backgroundAgents: false,
-  };
+  // VS Code's delegation guidance follows the background tools the session
+  // has (foreground sessions only), without image handoff or explicit mode
+  // routing, which this host's spawn does not take.
+  const capabilities = deriveSystemPromptCapabilities(options.toolNames);
   const identity = options.identity
     ? composeWorkspaceIdentity(options.identity)
     : profile === "reasoning"

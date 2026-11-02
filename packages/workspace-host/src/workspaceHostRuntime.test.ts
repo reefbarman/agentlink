@@ -2417,7 +2417,12 @@ describe("createWorkspaceHost", () => {
       await fs.mkdir(projectRoot);
       const requests: Array<{
         messages: Array<{ role: string; content: string }>;
-        tools?: Array<{ function: { name: string } }>;
+        tools?: Array<{
+          function: {
+            name: string;
+            parameters?: { properties?: Record<string, unknown> };
+          };
+        }>;
       }> = [];
       const fetch = vi
         .fn<typeof globalThis.fetch>()
@@ -2462,6 +2467,12 @@ describe("createWorkspaceHost", () => {
           tools: new Set(
             (request.tools ?? []).map((tool) => tool.function.name),
           ),
+          // Parameter names guidance may name, such as `wait_seconds`.
+          parameters: new Set(
+            (request.tools ?? []).flatMap((tool) =>
+              Object.keys(tool.function.parameters?.properties ?? {}),
+            ),
+          ),
         }));
         expect(compatibility!.prompt).toMatch(
           /^You are AgentLink, a highly skilled software engineer/u,
@@ -2484,16 +2495,33 @@ describe("createWorkspaceHost", () => {
         expect(
           compatibility!.prompt.includes("Create or edit file *contents*"),
         ).toBe(withCommands);
-        for (const { prompt, tools } of [compatibility!, reasoning!]) {
+        // VS Code's delegation guidance, with the background tools only,
+        // and without the spawn inputs this host does not take.
+        expect(
+          compatibility!.prompt.includes(
+            "## Background Agent Tools — Usage Guidance",
+          ),
+        ).toBe(withCommands);
+        expect(
+          compatibility!.prompt.includes("## Background Agent Results"),
+        ).toBe(withCommands);
+        for (const absent of ["useRecentImages", "imageIds", "explicit mode"]) {
+          expect(compatibility!.prompt, absent).not.toContain(absent);
+        }
+        for (const { prompt, tools, parameters } of [
+          compatibility!,
+          reasoning!,
+        ]) {
           expect(prompt).not.toContain("The canonical project root is");
           const named = [...prompt.matchAll(/`([a-z]+(?:_[a-z]+)+)`/gu)]
             .map((match) => match[1]!)
             .filter((name) => !GUIDANCE_VALUE_NAMES.has(name));
           expect(named.length).toBeGreaterThan(0);
           for (const name of new Set(named)) {
-            expect(tools.has(name), `${name} is named but not advertised`).toBe(
-              true,
-            );
+            expect(
+              tools.has(name) || parameters.has(name),
+              `${name} is named but not advertised`,
+            ).toBe(true);
           }
         }
       } finally {

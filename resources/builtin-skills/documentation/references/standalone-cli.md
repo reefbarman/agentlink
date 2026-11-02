@@ -273,10 +273,10 @@ Skills are discovered from the same global and project skill folders as VS Code 
 
 ### System prompt
 
-The CLI's system prompt starts with the VS Code agent's guidance, from the same shared code, for both prompt profiles. It covers communication, judgement, file edits, `ask_user`, `todo_write`, `set_task_status` and session recall. Guidance is included only for tools the session actually has: without commands, for example, the file-edit rules are left out, and recall guidance appears once a session has an earlier turn to search. Limits compared with VS Code:
+The CLI's system prompt starts with the VS Code agent's guidance, from the same shared code, for both prompt profiles. It covers communication, judgement, file edits, `ask_user`, `todo_write`, `set_task_status`, background agents and session recall. Guidance is included only for tools the session actually has: without commands, for example, the file-edit rules are left out, and recall guidance appears once a session has an earlier turn to search. Limits compared with VS Code:
 
 - There are no provider-specific sections yet, and no Approve for Me or Auto Continue guidance.
-- Background agent guidance stays a short CLI-specific description, because the CLI's `spawn_background_agent` doesn't take VS Code's task classes or owned paths.
+- Background agent guidance is VS Code's (when to delegate, how to supervise and collect results, and the self-review and parallel-lane sections of Code, Architect, Ask and Debug modes) without the image handoff (`useRecentImages`, `imageIds`) and explicit `mode`/permission-profile routing the CLI's `spawn_background_agent` doesn't take. Children, which cannot delegate, don't get it. Orchestrate mode is still not offered.
 
 ### Modes
 

@@ -143,17 +143,14 @@ export const WORKSPACE_BUILT_IN_MODE_SLUGS: readonly string[] =
   );
 
 /**
- * Prompt capabilities for mode instructions here: `switch_mode` only when
- * the session has it, no VS Code background agent contract, no rich
+ * Prompt capabilities for mode instructions here: `switch_mode` and the
+ * background agent lanes only when the session has those tools, no rich
  * rendering, no temporary-file writes in Review mode.
  */
 export function workspaceModePromptCapabilities(
   toolNames: Iterable<string>,
 ): SystemPromptCapabilities {
-  return {
-    ...deriveSystemPromptCapabilities(toolNames),
-    backgroundAgents: false,
-  };
+  return deriveSystemPromptCapabilities(toolNames);
 }
 
 const MODE_BLOCK_PREFIX =

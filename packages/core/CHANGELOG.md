@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `SystemPromptCapabilities` adds `backgroundAgentImages` and `backgroundAgentModeRouting`. `deriveSystemPromptCapabilities` leaves both off, so a host whose `spawn_background_agent` lacks image handoff or explicit `mode`/`permissionProfile` gets VS Code's background agent guidance without them. With every capability on, the prompt is unchanged.
+
 ## 0.39.0 — 2026-11-02
 
 - `@agentlink/core/background-agent-tools` adds VS Code's task-class and budget policy: `normalizeTaskClass`, `isReviewTaskClass`, `BASE_REVIEW_TASK_CLASS`, `isResearchTaskClass`, `isSharedBudgetMemberTaskClass`, `inferReviewTier`, `getBudgetHardLimitRatio`, `getEngineHardLimit`, `resolveBackgroundBudget`, the `AGENT_BUDGET_PROPERTY` schema and `AGENT_BUDGET_DESCRIPTION`, and the `parseModelTierInput` and `parseAgentBudgetInput` readers. VS Code delegates to them unchanged.

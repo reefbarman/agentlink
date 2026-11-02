@@ -32,6 +32,13 @@ export interface SystemPromptCapabilities {
   readonly approvalFollowUp: boolean;
   /** `spawn_background_agent` and its status/result/kill tools. */
   readonly backgroundAgents: boolean;
+  /** `spawn_background_agent` copies session images (`useRecentImages`, `imageIds`). */
+  readonly backgroundAgentImages: boolean;
+  /**
+   * `spawn_background_agent` takes an explicit `mode` and `permissionProfile`,
+   * and VS Code's Debug/Code mode defaults for `debug` tasks.
+   */
+  readonly backgroundAgentModeRouting: boolean;
   /**
    * Completed final cards always offer a Continue action, and Auto Continue
    * may resume a turn with unfinished todos.
@@ -57,6 +64,8 @@ export const FULL_SYSTEM_PROMPT_CAPABILITIES: SystemPromptCapabilities =
     finalStatus: true,
     approvalFollowUp: true,
     backgroundAgents: true,
+    backgroundAgentImages: true,
+    backgroundAgentModeRouting: true,
     autoContinue: true,
     sessionHistoryRecall: true,
     workspaceSessionRecall: true,
@@ -91,6 +100,9 @@ export function deriveSystemPromptCapabilities(
       "get_background_result",
       "kill_background_agent",
     ),
+    // Spawn inputs, not tools: a host whose spawn takes them spreads them in.
+    backgroundAgentImages: false,
+    backgroundAgentModeRouting: false,
     autoContinue: false,
     sessionHistoryRecall: all("search_session_history", "read_session_excerpt"),
     workspaceSessionRecall: all(
@@ -383,6 +395,36 @@ Do NOT delegate when: you already know which files to read or edit; the task is 
 
 Background agents cost real wall-clock time and tokens — review-classed agents receive automatic session budgets, and each spawn must earn its overhead. When in doubt, do the work directly.`;
 
+const BACKGROUND_AGENT_MODE_ROUTING_GUIDANCE =
+  ' Use `taskClass: "readonly-research"` for pure read-only lookup/exploration; use `general` or explicit mode `code` for non-conflicting writable lanes. Native `debug` tasks from a Code-mode parent with non-empty `ownedPaths` default to Code unless an explicit mode or review-only permission profile says otherwise; debugging without a writable scope stays in Debug. Mode defaults never override profile, skill, ownership or approval restrictions.';
+
+const BACKGROUND_AGENT_TASK_CLASS_GUIDANCE =
+  ' Use `taskClass: "readonly-research"` for pure read-only lookup/exploration and `general` for non-conflicting writable lanes. Task-class defaults never override ownership or approval restrictions.';
+
+const BACKGROUND_AGENT_IMAGES_GUIDANCE =
+  "\n- For visual/UI review, pass `useRecentImages: true` (or a count) to copy recent user attachments and screenshot/image tool results into a native background agent's first message. Use `imageIds` when specific session images matter.";
+
+/**
+ * VS Code's background agent tool guidance. With every capability it is
+ * exactly VS Code's text; a host whose spawn lacks image handoff or explicit
+ * mode routing gets the guidance without those inputs.
+ */
+function buildBackgroundAgentToolsSection(
+  capabilities: SystemPromptCapabilities,
+): string {
+  let section = BACKGROUND_AGENT_TOOLS_SECTION;
+  if (!capabilities.backgroundAgentModeRouting) {
+    section = section.replace(
+      BACKGROUND_AGENT_MODE_ROUTING_GUIDANCE,
+      BACKGROUND_AGENT_TASK_CLASS_GUIDANCE,
+    );
+  }
+  if (!capabilities.backgroundAgentImages) {
+    section = section.replace(BACKGROUND_AGENT_IMAGES_GUIDANCE, "");
+  }
+  return section;
+}
+
 /**
  * Base system prompt for the compatibility profile: identity, general
  * behaviour, and the guidance for each exposed capability.
@@ -414,7 +456,10 @@ export function buildCompatibilityBasePrompt(
     },
     { text: TOOL_RESULT_INSTRUCTIONS_SECTION, requires: "approvalFollowUp" },
     { text: BACKGROUND_AGENT_RESULTS_SECTION, requires: "backgroundAgents" },
-    { text: BACKGROUND_AGENT_TOOLS_SECTION, requires: "backgroundAgents" },
+    {
+      text: buildBackgroundAgentToolsSection(capabilities),
+      requires: "backgroundAgents",
+    },
   ];
   return [options.identity, ...selectParts(sections, capabilities)].join(
     "\n\n",

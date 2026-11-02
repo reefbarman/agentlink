@@ -26,6 +26,8 @@ const NO_CAPABILITIES: SystemPromptCapabilities = {
   finalStatus: false,
   approvalFollowUp: false,
   backgroundAgents: false,
+  backgroundAgentImages: false,
+  backgroundAgentModeRouting: false,
   autoContinue: false,
   sessionHistoryRecall: false,
   workspaceSessionRecall: false,
@@ -110,6 +112,49 @@ describe("system prompt sections", () => {
     expect(prompt).toContain("## Questions & Clarification");
     expect(prompt).toContain("Use the most appropriate question type");
     expect(prompt).not.toContain("modeSwitch");
+  });
+
+  it("drops VS Code-only spawn inputs from the background guidance", () => {
+    const full = buildBasePrompt("compatibility", {
+      identity: "You are AgentLink, a test agent.",
+      cwd: "/repo",
+    });
+    expect(full).toContain("useRecentImages");
+    expect(full).toContain("explicit mode `code`");
+    const derived = buildBasePrompt("compatibility", {
+      identity: "You are AgentLink, a test agent.",
+      cwd: "/repo",
+      capabilities: deriveSystemPromptCapabilities([
+        "spawn_background_agent",
+        "get_background_status",
+        "get_background_result",
+        "kill_background_agent",
+      ]),
+    });
+    expect(derived).toContain("## Background Agent Tools — Usage Guidance");
+    expect(derived).toContain(
+      'Use `taskClass: "readonly-research"` for pure read-only lookup/exploration and `general` for non-conflicting writable lanes.',
+    );
+    for (const absent of [
+      "useRecentImages",
+      "imageIds",
+      "explicit mode",
+      "permission profile",
+    ]) {
+      expect(derived, absent).not.toContain(absent);
+    }
+    // Only the two VS Code-only passages differ.
+    expect(
+      buildBasePrompt("compatibility", {
+        identity: "You are AgentLink, a test agent.",
+        cwd: "/repo",
+        capabilities: {
+          ...FULL_SYSTEM_PROMPT_CAPABILITIES,
+          backgroundAgentImages: false,
+          backgroundAgentModeRouting: false,
+        },
+      }).length,
+    ).toBeLessThan(full.length);
   });
 
   it("derives tool capabilities from registered names only", () => {

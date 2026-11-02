@@ -1010,7 +1010,12 @@ describe("assistant service system prompt", () => {
       });
       const requests: Array<{
         messages: Array<{ role: string; content?: unknown }>;
-        tools?: Array<{ function: { name: string } }>;
+        tools?: Array<{
+          function: {
+            name: string;
+            parameters?: { properties?: Record<string, unknown> };
+          };
+        }>;
       }> = [];
       const model = http.createServer((request, response) => {
         let raw = "";
@@ -1116,6 +1121,12 @@ describe("assistant service system prompt", () => {
       const tools = new Set(
         (first.tools ?? []).map((tool) => tool.function.name),
       );
+      // Parameter names guidance may name, such as `wait_seconds`.
+      const parameters = new Set(
+        (first.tools ?? []).flatMap((tool) =>
+          Object.keys(tool.function.parameters?.properties ?? {}),
+        ),
+      );
 
       // The Meridian identity line, then VS Code's guidance, then the persona.
       expect(prompt).toMatch(/^You are AgentLink, a personal assistant\.\n/u);
@@ -1145,10 +1156,19 @@ describe("assistant service system prompt", () => {
         .filter((name) => !VALUE_NAMES.has(name));
       expect(named).toContain("set_task_status");
       for (const name of new Set(named)) {
-        expect(tools.has(name), `${name} is named but not advertised`).toBe(
-          true,
-        );
+        expect(
+          tools.has(name) || parameters.has(name),
+          `${name} is named but not advertised`,
+        ).toBe(true);
       }
+      // VS Code's delegation guidance follows the Assistant's background
+      // tools, without the spawn inputs it does not take.
+      expect(tools.has("spawn_background_agent")).toBe(true);
+      if (profile === "compatibility") {
+        expect(prompt).toContain("## Background Agent Tools — Usage Guidance");
+      }
+      expect(prompt).not.toContain("useRecentImages");
+      expect(prompt).not.toContain("explicit mode");
     },
     40_000,
   );
