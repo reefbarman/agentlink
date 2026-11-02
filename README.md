@@ -10,6 +10,8 @@ Run frontier coding agents with the editor's intelligence, visible execution, re
 
 [Get started](#get-started) · [Documentation](resources/builtin-skills/documentation/README.md) · [Why AgentLink](why-agentlink.md) · [Releases](https://github.com/reefbarman/agentlink/releases)
 
+[![Best of Agent Harnesses](https://img.shields.io/badge/%F0%9F%8F%86_Best_of-Agent_Harnesses-5ac4bf)](https://github.com/RyanAlberts/best-of-Agent-Harnesses)
+
 ![AgentLink in VS Code: the agent proposes an Overdue invoice badge in a Next.js app, shown in a native side-by-side diff with an Accept/Reject card in the chat panel](docs/assets/screenshots/vscode-diff-review.png)
 
 ## Why AgentLink
