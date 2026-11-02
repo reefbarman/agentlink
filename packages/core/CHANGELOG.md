@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.37.0 — 2026-11-02
+
+- Reduces session-history indexing memory use and delays the history backfill; get_background_result failure JSON now includes a recovery explanation when a run is not retryable.
+- review_findings results accept an optional bounded checked list of coverage notes, which is requested from reviewers and shown under Checked in results and cards.
+- Documents attached to chats on OpenAI-compatible models no longer fail: text documents are inlined, and PDFs are sent as file parts when the new supportsDocuments option is set, otherwise replaced by a note.
+
 ## 0.36.1 — 2026-11-01
 
 - set_task_status now rejects continuation fields with waiting_for_user, failed calls no longer end the turn or show as final-status cards, legacy waiting cards hide next-step actions, and prompts steer the agent to finish safe work before waiting.
