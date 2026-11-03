@@ -1,6 +1,6 @@
 {
   "name": "@agentlink/cli",
-  "version": "0.52.0",
+  "version": "0.52.1",
   "private": true,
   "description": "Standalone local AgentLink coding CLI",
   "license": "MIT",
@@ -30,10 +30,10 @@
     "@napi-rs/keyring": "2.1.2"
   },
   "devDependencies": {
-    "@agentlink/core": "0.42.0",
-    "@agentlink/node-host": "0.42.0",
-    "@agentlink/protocol": "0.42.0",
-    "@agentlink/workspace-host": "0.42.0",
+    "@agentlink/core": "0.42.1",
+    "@agentlink/node-host": "0.42.1",
+    "@agentlink/protocol": "0.42.1",
+    "@agentlink/workspace-host": "0.42.1",
     "@types/react": "^19.2.14",
     "commander": "15.0.0",
     "ink": "8.0.0",

@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink: AI Coding Agent",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
-  "version": "1.74.0",
+  "version": "1.74.1",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -1288,11 +1288,11 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.8.0",
-    "@agentlink/core": "0.42.0",
-    "@agentlink/node-host": "0.42.0",
-    "@agentlink/protocol": "0.42.0",
-    "@agentlink/sandbox": "0.42.0",
-    "@agentlink/workspace-host": "0.42.0",
+    "@agentlink/core": "0.42.1",
+    "@agentlink/node-host": "0.42.1",
+    "@agentlink/protocol": "0.42.1",
+    "@agentlink/sandbox": "0.42.1",
+    "@agentlink/workspace-host": "0.42.1",
     "@iarna/toml": "^3.0.0",
     "@jitl/quickjs-wasmfile-release-asyncify": "0.32.0",
     "@lancedb/lancedb": "0.40.0",
@@ -1340,9 +1340,9 @@
     "uuid": "^14.0.0"
   },
   "devDependencies": {
-    "@agentlink/cli": "0.52.0",
-    "@agentlink/desktop": "0.74.0",
-    "@agentlink/server": "0.46.0",
+    "@agentlink/cli": "0.52.1",
+    "@agentlink/desktop": "0.74.1",
+    "@agentlink/server": "0.46.1",
     "@anthropic-ai/sandbox-runtime": "0.0.81",
     "@electron/osx-sign": "2.7.2",
     "@testing-library/preact": "^3.2.6",

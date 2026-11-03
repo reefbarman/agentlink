@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.74.1
+
 - AgentLink's MCP client now runs on version 2 of the official MCP TypeScript SDK (`@modelcontextprotocol/client` and `@modelcontextprotocol/core` 2.4.0) in VS Code, Desktop, the CLI and the Assistant. Connections still negotiate the same protocol versions as before, so servers, tools and saved sign-ins keep working without signing in again. MCP sign-in is stricter in two ways the new SDK enforces: AgentLink now passes the authorization server's `iss` from the sign-in callback so a response from a different server is rejected (RFC 9207), and token endpoints must use HTTPS unless they are on `localhost`. Each sign-in also remembers which authorization server it started with and checks it on the callback.
 
 ## 1.74.0

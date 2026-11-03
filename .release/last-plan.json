@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "b55a675df54d861e31bbc6209ab97e82af2f34b9",
-  "createdAt": "2026-11-03T03:26:20.599Z",
+  "sourceSha": "58da5d352c96f695ab996c199b6051438390d718",
+  "createdAt": "2026-11-03T04:22:40.798Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,131 +10,131 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.73.1",
-      "baselineRef": "v1.73.1",
-      "reserved": "1.73.1",
-      "commits": ["b55a675df54d861e31bbc6209ab97e82af2f34b9"],
+      "published": "1.74.0",
+      "baselineRef": "v1.74.0",
+      "reserved": "1.74.0",
+      "commits": ["58da5d352c96f695ab996c199b6051438390d718"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.74.0",
-      "effectiveBump": "minor",
+      "version": "1.74.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.74.0",
+      "tag": "v1.74.1",
       "notes": [
         {
-          "sha": "b55a675df54d861e31bbc6209ab97e82af2f34b9",
-          "subject": "feat(mcp): show live MCP tool progress in tool rows",
-          "summary": "MCP tool calls now show live progress (bar, percentage and server message) under the running tool row in VS Code and the browser view, with SDK support for progress callbacks and a new data-plane feature.}",
+          "sha": "58da5d352c96f695ab996c199b6051438390d718",
+          "subject": "refactor(mcp): move the MCP client to SDK v2 packages",
+          "summary": "MCP client moved to the v2 SDK packages with the same protocol negotiation, adding RFC 9207 issuer checks on OAuth sign-in callbacks and preserving catalog page limits and auth-recovery behaviour.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.73.1",
-      "baselineRef": "desktop-v0.73.1",
-      "reserved": "0.73.1",
-      "commits": ["b55a675df54d861e31bbc6209ab97e82af2f34b9"],
+      "published": "0.74.0",
+      "baselineRef": "desktop-v0.74.0",
+      "reserved": "0.74.0",
+      "commits": ["58da5d352c96f695ab996c199b6051438390d718"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.74.0",
-      "effectiveBump": "minor",
+      "version": "0.74.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.74.0",
+      "tag": "desktop-v0.74.1",
       "notes": [
         {
-          "sha": "b55a675df54d861e31bbc6209ab97e82af2f34b9",
-          "subject": "feat(mcp): show live MCP tool progress in tool rows",
-          "summary": "MCP tool calls now show live progress (bar, percentage and server message) under the running tool row in VS Code and the browser view, with SDK support for progress callbacks and a new data-plane feature.}",
+          "sha": "58da5d352c96f695ab996c199b6051438390d718",
+          "subject": "refactor(mcp): move the MCP client to SDK v2 packages",
+          "summary": "MCP client moved to the v2 SDK packages with the same protocol negotiation, adding RFC 9207 issuer checks on OAuth sign-in callbacks and preserving catalog page limits and auth-recovery behaviour.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.51.1",
-      "baselineRef": "cli-v0.51.1",
-      "reserved": "0.51.1",
-      "commits": ["b55a675df54d861e31bbc6209ab97e82af2f34b9"],
+      "published": "0.52.0",
+      "baselineRef": "cli-v0.52.0",
+      "reserved": "0.52.0",
+      "commits": ["58da5d352c96f695ab996c199b6051438390d718"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.52.0",
-      "effectiveBump": "minor",
+      "version": "0.52.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.52.0",
+      "tag": "cli-v0.52.1",
       "notes": [
         {
-          "sha": "b55a675df54d861e31bbc6209ab97e82af2f34b9",
-          "subject": "feat(mcp): show live MCP tool progress in tool rows",
-          "summary": "MCP tool calls now show live progress (bar, percentage and server message) under the running tool row in VS Code and the browser view, with SDK support for progress callbacks and a new data-plane feature.}",
+          "sha": "58da5d352c96f695ab996c199b6051438390d718",
+          "subject": "refactor(mcp): move the MCP client to SDK v2 packages",
+          "summary": "MCP client moved to the v2 SDK packages with the same protocol negotiation, adding RFC 9207 issuer checks on OAuth sign-in callbacks and preserving catalog page limits and auth-recovery behaviour.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.41.1",
-      "baselineRef": "sdk-v0.41.1",
-      "reserved": "0.41.1",
-      "commits": ["b55a675df54d861e31bbc6209ab97e82af2f34b9"],
+      "published": "0.42.0",
+      "baselineRef": "sdk-v0.42.0",
+      "reserved": "0.42.0",
+      "commits": ["58da5d352c96f695ab996c199b6051438390d718"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.42.0",
-      "effectiveBump": "minor",
+      "version": "0.42.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.42.0",
+      "tag": "sdk-v0.42.1",
       "notes": [
         {
-          "sha": "b55a675df54d861e31bbc6209ab97e82af2f34b9",
-          "subject": "feat(mcp): show live MCP tool progress in tool rows",
-          "summary": "MCP tool calls now show live progress (bar, percentage and server message) under the running tool row in VS Code and the browser view, with SDK support for progress callbacks and a new data-plane feature.}",
+          "sha": "58da5d352c96f695ab996c199b6051438390d718",
+          "subject": "refactor(mcp): move the MCP client to SDK v2 packages",
+          "summary": "MCP client moved to the v2 SDK packages with the same protocol negotiation, adding RFC 9207 issuer checks on OAuth sign-in callbacks and preserving catalog page limits and auth-recovery behaviour.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.45.1",
-      "baselineRef": "assistant-v0.45.1",
-      "reserved": "0.45.1",
-      "commits": ["b55a675df54d861e31bbc6209ab97e82af2f34b9"],
+      "published": "0.46.0",
+      "baselineRef": "assistant-v0.46.0",
+      "reserved": "0.46.0",
+      "commits": ["58da5d352c96f695ab996c199b6051438390d718"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.46.0",
-      "effectiveBump": "minor",
+      "version": "0.46.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.46.0",
+      "tag": "assistant-v0.46.1",
       "notes": [
         {
-          "sha": "b55a675df54d861e31bbc6209ab97e82af2f34b9",
-          "subject": "feat(mcp): show live MCP tool progress in tool rows",
-          "summary": "MCP tool calls now show live progress (bar, percentage and server message) under the running tool row in VS Code and the browser view, with SDK support for progress callbacks and a new data-plane feature.}",
+          "sha": "58da5d352c96f695ab996c199b6051438390d718",
+          "subject": "refactor(mcp): move the MCP client to SDK v2 packages",
+          "summary": "MCP client moved to the v2 SDK packages with the same protocol negotiation, adding RFC 9207 issuer checks on OAuth sign-in callbacks and preserving catalog page limits and auth-recovery behaviour.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "b55a675df54d861e31bbc6209ab97e82af2f34b9": {
-      "bump": "minor",
+    "58da5d352c96f695ab996c199b6051438390d718": {
+      "bump": "patch",
       "breakingUnits": [],
-      "summary": "MCP tool calls now show live progress (bar, percentage and server message) under the running tool row in VS Code and the browser view, with SDK support for progress callbacks and a new data-plane feature.}",
+      "summary": "MCP client moved to the v2 SDK packages with the same protocol negotiation, adding RFC 9207 issuer checks on OAuth sign-in callbacks and preserving catalog page limits and auth-recovery behaviour.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.42.1 — 2026-11-03
+
+- MCP client moved to the v2 SDK packages with the same protocol negotiation, adding RFC 9207 issuer checks on OAuth sign-in callbacks and preserving catalog page limits and auth-recovery behaviour.
+
 ## 0.42.0 — 2026-11-03
 
 - MCP tool calls now show live progress (bar, percentage and server message) under the running tool row in VS Code and the browser view, with SDK support for progress callbacks and a new data-plane feature.}
