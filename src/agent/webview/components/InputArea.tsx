@@ -1652,10 +1652,13 @@ export function InputArea({
 
   // Drag & drop file handling
   const [dragOver, setDragOver] = useState(false);
+  // Surfaces without workspace file attachments (Browser Ask Agent) still
+  // accept dropped images and documents as media.
+  const acceptsDrop = allowAttachments || allowMediaPaste;
 
   const handleDragOver = useCallback(
     (e: DragEvent) => {
-      if (!allowAttachments) return;
+      if (!acceptsDrop) return;
       e.preventDefault();
       e.stopPropagation();
       if (e.dataTransfer) {
@@ -1663,26 +1666,36 @@ export function InputArea({
         setDragOver(true);
       }
     },
-    [allowAttachments],
+    [acceptsDrop],
   );
 
   const handleDragLeave = useCallback(
     (e: DragEvent) => {
-      if (!allowAttachments) return;
+      if (!acceptsDrop) return;
       e.preventDefault();
       setDragOver(false);
     },
-    [allowAttachments],
+    [acceptsDrop],
   );
 
   const handleDrop = useCallback(
     (e: DragEvent) => {
-      if (!allowAttachments) return;
+      if (!acceptsDrop) return;
       e.preventDefault();
       e.stopPropagation();
       setDragOver(false);
 
       if (!e.dataTransfer) return;
+
+      if (!allowAttachments) {
+        // Media-only: dropped File objects become media; paths and URIs have
+        // nowhere to resolve to, so ignore them.
+        const droppedFiles = Array.from(e.dataTransfer.files ?? []);
+        if (addMediaFiles(droppedFiles, "dropped") > 0) {
+          textareaRef.current?.focus();
+        }
+        return;
+      }
 
       // Try text/uri-list first (standard), then VS Code's custom types, then plain text
       let uriList = e.dataTransfer.getData("text/uri-list");
@@ -1745,7 +1758,7 @@ export function InputArea({
         paths,
       });
     },
-    [addMediaFiles, allowAttachments, allowMediaPaste, vscodeApi],
+    [acceptsDrop, addMediaFiles, allowAttachments, allowMediaPaste, vscodeApi],
   );
 
   // Listen for resolved dropped file paths

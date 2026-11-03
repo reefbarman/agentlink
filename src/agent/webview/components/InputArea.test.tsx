@@ -866,6 +866,56 @@ describe("InputArea slash popup", () => {
     });
   });
 
+  it("accepts dropped media when workspace attachments are disabled", async () => {
+    const postMessage = vi.fn();
+    const { container } = renderInputArea([], {
+      vscodeApi: { postMessage },
+      allowAttachments: false,
+      allowMediaPaste: true,
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    const image = new File(["image-bytes"], "dropped.png", {
+      type: "image/png",
+    });
+    const pdf = new File(["%PDF-1.7"], "report.pdf", {
+      type: "application/pdf",
+    });
+
+    const dragOver = new Event("dragover", { bubbles: true, cancelable: true });
+    Object.assign(dragOver, { dataTransfer: { dropEffect: "none" } });
+    input.dispatchEvent(dragOver);
+    expect(dragOver.defaultPrevented).toBe(true);
+
+    fireEvent.drop(input, {
+      dataTransfer: {
+        files: [image, pdf],
+        getData: (type: string) =>
+          type === "text/uri-list" ? "file:///workspace/ignored.png" : "",
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector(".image-attachment-chip")).toBeTruthy();
+      expect(
+        container.querySelector(".document-attachment-chip")?.textContent,
+      ).toContain("report.pdf");
+    });
+    expect(postMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ command: "agentResolveDroppedFiles" }),
+    );
+  });
+
+  it("ignores drops when neither attachments nor media are allowed", () => {
+    const { container } = renderInputArea([], {
+      allowAttachments: false,
+      allowMediaPaste: false,
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    const dragOver = new Event("dragover", { bubbles: true, cancelable: true });
+    input.dispatchEvent(dragOver);
+    expect(dragOver.defaultPrevented).toBe(false);
+  });
+
   it("attaches pasted images exposed only through clipboard files", async () => {
     const { container } = renderInputArea([]);
     const input = container.querySelector(".chat-input") as HTMLTextAreaElement;

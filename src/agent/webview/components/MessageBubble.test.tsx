@@ -581,6 +581,51 @@ describe("MessageBubble slash-command rendering", () => {
     expect(onOpenFile).toHaveBeenCalledWith("README.md");
   });
 
+  it("renders named chips for attached documents without a text marker", () => {
+    const message: ChatMessage = {
+      id: "user-document",
+      role: "user",
+      content: "Summarise this report",
+      timestamp: Date.now(),
+      blocks: [],
+      displayMedia: {
+        images: [],
+        documents: [{ name: "report.pdf", mimeType: "application/pdf" }],
+      },
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+
+    const chip = container.querySelector(".user-attachment-document");
+    expect(chip?.textContent).toContain("report.pdf");
+    expect(chip?.getAttribute("title")).toBe("application/pdf");
+    expect(screen.getByText("Summarise this report")).toBeTruthy();
+  });
+
+  it("replaces the generic file marker with named document chips", () => {
+    const message: ChatMessage = {
+      id: "user-document-marker",
+      role: "user",
+      content: "[1 file attached]\nSummarise this report",
+      timestamp: Date.now(),
+      blocks: [],
+      displayMedia: {
+        images: [],
+        documents: [{ name: "report.pdf", mimeType: "application/pdf" }],
+      },
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+
+    expect(screen.getByText("report.pdf")).toBeTruthy();
+    expect(screen.queryByText("1 file attached")).toBeNull();
+    expect(container.querySelector(".user-attachment-media")).toBeNull();
+  });
+
   it("renders attached image previews above user message text", () => {
     const message: ChatMessage = {
       id: "user-image",

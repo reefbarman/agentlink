@@ -1212,9 +1212,15 @@ function UserAttachments({
   ) {
     return null;
   }
+  const documents = displayMedia?.documents ?? [];
+  // Named document chips describe the files exactly, so the generic
+  // "[N files attached]" text marker would only duplicate them. Surfaces that
+  // store raw text (Browser Ask Agent) have no marker at all.
+  const visibleMediaLabel = documents.length > 0 ? null : mediaLabel;
   const showChipRow =
     files.length > 0 ||
-    Boolean(mediaLabel) ||
+    documents.length > 0 ||
+    Boolean(visibleMediaLabel) ||
     Boolean(slashLabel) ||
     Boolean(remote);
 
@@ -1260,10 +1266,22 @@ function UserAttachments({
               </span>
             );
           })}
-          {mediaLabel && (
+          {documents.map((document, index) => (
+            <span
+              key={`document-${document.name}-${index}`}
+              class="user-attachment-chip user-attachment-document"
+              title={document.mimeType}
+            >
+              <i class="codicon codicon-file" />
+              <span class="user-attachment-chip-name">
+                {document.name || `Attached file ${index + 1}`}
+              </span>
+            </span>
+          ))}
+          {visibleMediaLabel && (
             <span class="user-attachment-chip user-attachment-media">
               <i class="codicon codicon-file-media" />
-              <span class="user-attachment-chip-name">{mediaLabel}</span>
+              <span class="user-attachment-chip-name">{visibleMediaLabel}</span>
             </span>
           )}
           {slashLabel && (
