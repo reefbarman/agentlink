@@ -1,6 +1,6 @@
 {
   "name": "@agentlink/cli",
-  "version": "0.54.0",
+  "version": "0.54.1",
   "private": true,
   "description": "Standalone local AgentLink coding CLI",
   "license": "MIT",
