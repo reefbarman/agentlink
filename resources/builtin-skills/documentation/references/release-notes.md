@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.77.0
+
 - The agent no longer ends a turn with a "Waiting for input" card when it can ask you directly. In VS Code, browser chat, Ask Agent and the CLI, `set_task_status` now offers only `completed`, `blocked` and `cancelled`, and the guidance tells the agent to use an `ask_user` card instead, which shows the options and its recommended answer. A waiting card had no next-step button and left you to type a reply from scratch. If the agent still tries to wait, the call is rejected with that guidance and the turn carries on. The Assistant, which has no question card, keeps `waiting_for_user`. Older waiting cards in saved chats still display.
 
 ## 1.76.0

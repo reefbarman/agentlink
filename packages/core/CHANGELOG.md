@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.45.0 — 2026-11-03
+
+- MCP URL elicitation requests on the 2026-07-28 revision, which carry no elicitationId, are now shown to the user instead of being silently declined.
+- **Breaking:** Where ask_user is available, the agent now asks with an ask_user card instead of ending turns with waiting_for_user, which is no longer offered and is rejected there; hosts like the Assistant keep waiting_for_user.
+
 ## 0.44.0 — 2026-11-03
 
 - Adds a manual-smoke MCP testbed server and checklist under node-host test fixtures; it is test-only and does not change any shipped behaviour.
