@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "8f2820a8bff4b7c158d7697d1114e2addf53aec3",
-  "createdAt": "2026-11-02T21:59:08.716Z",
+  "sourceSha": "b55a675df54d861e31bbc6209ab97e82af2f34b9",
+  "createdAt": "2026-11-03T03:26:20.599Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,148 +10,131 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.73.0",
-      "baselineRef": "v1.73.0",
-      "reserved": "1.73.0",
-      "commits": ["cd9dc5d436e5200876680879a2dd559a2c5bb803"],
+      "published": "1.73.1",
+      "baselineRef": "v1.73.1",
+      "reserved": "1.73.1",
+      "commits": ["b55a675df54d861e31bbc6209ab97e82af2f34b9"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.73.1",
-      "effectiveBump": "patch",
+      "version": "1.74.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.73.1",
+      "tag": "v1.74.0",
       "notes": [
         {
-          "sha": "cd9dc5d436e5200876680879a2dd559a2c5bb803",
-          "subject": "chore(deps): bump the minor-and-patch group across 1 directory with 18 updates",
-          "summary": "Updates 18 minor and patch dependencies (MCP SDK, openai, undici, unpdf, preact, react, keyring, electron-builder and others) across all shipped components.",
+          "sha": "b55a675df54d861e31bbc6209ab97e82af2f34b9",
+          "subject": "feat(mcp): show live MCP tool progress in tool rows",
+          "summary": "MCP tool calls now show live progress (bar, percentage and server message) under the running tool row in VS Code and the browser view, with SDK support for progress callbacks and a new data-plane feature.}",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.73.0",
-      "baselineRef": "desktop-v0.73.0",
-      "reserved": "0.73.0",
-      "commits": ["cd9dc5d436e5200876680879a2dd559a2c5bb803"],
+      "published": "0.73.1",
+      "baselineRef": "desktop-v0.73.1",
+      "reserved": "0.73.1",
+      "commits": ["b55a675df54d861e31bbc6209ab97e82af2f34b9"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.73.1",
-      "effectiveBump": "patch",
+      "version": "0.74.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.73.1",
+      "tag": "desktop-v0.74.0",
       "notes": [
         {
-          "sha": "cd9dc5d436e5200876680879a2dd559a2c5bb803",
-          "subject": "chore(deps): bump the minor-and-patch group across 1 directory with 18 updates",
-          "summary": "Updates 18 minor and patch dependencies (MCP SDK, openai, undici, unpdf, preact, react, keyring, electron-builder and others) across all shipped components.",
+          "sha": "b55a675df54d861e31bbc6209ab97e82af2f34b9",
+          "subject": "feat(mcp): show live MCP tool progress in tool rows",
+          "summary": "MCP tool calls now show live progress (bar, percentage and server message) under the running tool row in VS Code and the browser view, with SDK support for progress callbacks and a new data-plane feature.}",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.51.0",
-      "baselineRef": "cli-v0.51.0",
-      "reserved": "0.51.0",
-      "commits": [
-        "cd9dc5d436e5200876680879a2dd559a2c5bb803",
-        "dd8da93485258593176a92145be243cd49d79516"
-      ],
+      "published": "0.51.1",
+      "baselineRef": "cli-v0.51.1",
+      "reserved": "0.51.1",
+      "commits": ["b55a675df54d861e31bbc6209ab97e82af2f34b9"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.51.1",
-      "effectiveBump": "patch",
+      "version": "0.52.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.51.1",
+      "tag": "cli-v0.52.0",
       "notes": [
         {
-          "sha": "cd9dc5d436e5200876680879a2dd559a2c5bb803",
-          "subject": "chore(deps): bump the minor-and-patch group across 1 directory with 18 updates",
-          "summary": "Updates 18 minor and patch dependencies (MCP SDK, openai, undici, unpdf, preact, react, keyring, electron-builder and others) across all shipped components.",
-          "breaking": false
-        },
-        {
-          "sha": "dd8da93485258593176a92145be243cd49d79516",
-          "subject": "fix(deps): adapt to sandbox-runtime 0.0.81 and testing-library dom v10",
-          "summary": "Pins the apply-seccomp build to sandbox-runtime 0.0.81, fixes tests for testing-library dom v10, and regenerates CLI third-party notices for updated dependencies.",
+          "sha": "b55a675df54d861e31bbc6209ab97e82af2f34b9",
+          "subject": "feat(mcp): show live MCP tool progress in tool rows",
+          "summary": "MCP tool calls now show live progress (bar, percentage and server message) under the running tool row in VS Code and the browser view, with SDK support for progress callbacks and a new data-plane feature.}",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.41.0",
-      "baselineRef": "sdk-v0.41.0",
-      "reserved": "0.41.0",
-      "commits": ["cd9dc5d436e5200876680879a2dd559a2c5bb803"],
+      "published": "0.41.1",
+      "baselineRef": "sdk-v0.41.1",
+      "reserved": "0.41.1",
+      "commits": ["b55a675df54d861e31bbc6209ab97e82af2f34b9"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.41.1",
-      "effectiveBump": "patch",
+      "version": "0.42.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.41.1",
+      "tag": "sdk-v0.42.0",
       "notes": [
         {
-          "sha": "cd9dc5d436e5200876680879a2dd559a2c5bb803",
-          "subject": "chore(deps): bump the minor-and-patch group across 1 directory with 18 updates",
-          "summary": "Updates 18 minor and patch dependencies (MCP SDK, openai, undici, unpdf, preact, react, keyring, electron-builder and others) across all shipped components.",
+          "sha": "b55a675df54d861e31bbc6209ab97e82af2f34b9",
+          "subject": "feat(mcp): show live MCP tool progress in tool rows",
+          "summary": "MCP tool calls now show live progress (bar, percentage and server message) under the running tool row in VS Code and the browser view, with SDK support for progress callbacks and a new data-plane feature.}",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.45.0",
-      "baselineRef": "assistant-v0.45.0",
-      "reserved": "0.45.0",
-      "commits": ["cd9dc5d436e5200876680879a2dd559a2c5bb803"],
+      "published": "0.45.1",
+      "baselineRef": "assistant-v0.45.1",
+      "reserved": "0.45.1",
+      "commits": ["b55a675df54d861e31bbc6209ab97e82af2f34b9"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.45.1",
-      "effectiveBump": "patch",
+      "version": "0.46.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.45.1",
+      "tag": "assistant-v0.46.0",
       "notes": [
         {
-          "sha": "cd9dc5d436e5200876680879a2dd559a2c5bb803",
-          "subject": "chore(deps): bump the minor-and-patch group across 1 directory with 18 updates",
-          "summary": "Updates 18 minor and patch dependencies (MCP SDK, openai, undici, unpdf, preact, react, keyring, electron-builder and others) across all shipped components.",
+          "sha": "b55a675df54d861e31bbc6209ab97e82af2f34b9",
+          "subject": "feat(mcp): show live MCP tool progress in tool rows",
+          "summary": "MCP tool calls now show live progress (bar, percentage and server message) under the running tool row in VS Code and the browser view, with SDK support for progress callbacks and a new data-plane feature.}",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "cd9dc5d436e5200876680879a2dd559a2c5bb803": {
-      "bump": "patch",
+    "b55a675df54d861e31bbc6209ab97e82af2f34b9": {
+      "bump": "minor",
       "breakingUnits": [],
-      "summary": "Updates 18 minor and patch dependencies (MCP SDK, openai, undici, unpdf, preact, react, keyring, electron-builder and others) across all shipped components.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "dd8da93485258593176a92145be243cd49d79516": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Pins the apply-seccomp build to sandbox-runtime 0.0.81, fixes tests for testing-library dom v10, and regenerates CLI third-party notices for updated dependencies.",
+      "summary": "MCP tool calls now show live progress (bar, percentage and server message) under the running tool row in VS Code and the browser view, with SDK support for progress callbacks and a new data-plane feature.}",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

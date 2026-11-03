@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.74.0
+
 - MCP tool calls now show the server's live progress under the tool row while they run, in VS Code and the browser view. Before, AgentLink received `notifications/progress` but only used it to keep long calls from timing out, so a slow indexing or sync call looked stuck. The row shows a bar and percentage when the server reports a total (otherwise the raw count) and the server's latest message, which is trimmed to 500 characters and rendered as plain text. Updates are coalesced so a chatty server cannot flood the chat, the model never sees them, and they clear when the call finishes. Browser pages negotiate this with the new `transcript-tool-progress-v1` data-plane feature, so older pages are unaffected.
 
 ## 1.73.1

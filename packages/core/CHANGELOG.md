@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.42.0 — 2026-11-03
+
+- MCP tool calls now show live progress (bar, percentage and server message) under the running tool row in VS Code and the browser view, with SDK support for progress callbacks and a new data-plane feature.}
+
 ## 0.41.1 — 2026-11-02
 
 - Updates 18 minor and patch dependencies (MCP SDK, openai, undici, unpdf, preact, react, keyring, electron-builder and others) across all shipped components.
