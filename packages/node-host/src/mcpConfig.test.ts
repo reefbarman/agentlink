@@ -93,6 +93,30 @@ describe("shared MCP config", () => {
     ]);
   });
 
+  it("reads the per-server protocol override", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-shared-"));
+    roots.push(root);
+    const file = await source(root, "global", {
+      mcpServers: {
+        pinned: { command: "node", protocol: "2026-07-28" },
+        old: { command: "node", protocol: "legacy" },
+        unknown: { command: "node", protocol: "2025-11-25" },
+        unset: { command: "node" },
+      },
+    });
+    const configs = await loadMcpConfigsFromSources([file], {});
+    expect(
+      Object.fromEntries(configs.map((cfg) => [cfg.name, cfg.protocol])),
+    ).toEqual({
+      pinned: "2026-07-28",
+      old: "legacy",
+      unknown: "auto",
+      unset: undefined,
+    });
+    // Unset stays absent so existing configs compare equal across reloads.
+    expect("protocol" in JSON.parse(JSON.stringify(configs[3]))).toBe(false);
+  });
+
   it("does not classify home-as-project sources as project authority", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-shared-"));
     roots.push(home);

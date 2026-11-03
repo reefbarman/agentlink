@@ -71,6 +71,17 @@ vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
       return { content: [{ type: "text", text: "fixture MCP result" }] };
     }
     async close() {}
+    // A 2025-era connection: no negotiated modern era or listen stream.
+    getProtocolEra() {
+      return "legacy";
+    }
+    getNegotiatedProtocolVersion() {
+      return "2025-11-25";
+    }
+    getDiscoverResult() {
+      return undefined;
+    }
+    readonly autoOpenedSubscription = undefined;
   },
 }));
 

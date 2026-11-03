@@ -843,6 +843,9 @@ function applySecretMutation(
   entry[field] = current;
 }
 
+/** Hand-edited mcp.json fields with no manager control. */
+const MANAGER_PRESERVED_FIELDS = ["protocol"] as const;
+
 function applyNormalizedOperations(
   doc: McpJsonDocument,
   operations: NormalizedBatchOperation[],
@@ -881,6 +884,11 @@ function applyNormalizedOperations(
     const next = { ...operation.entry };
     if (existing.env !== undefined) next.env = existing.env;
     if (existing.headers !== undefined) next.headers = existing.headers;
+    // Fields the manager does not edit survive a manager save.
+    for (const field of MANAGER_PRESERVED_FIELDS) {
+      if (existing[field] !== undefined && next[field] === undefined)
+        next[field] = existing[field];
+    }
     applySecretMutation(next, "env", operation.env);
     applySecretMutation(next, "headers", operation.headers);
     servers[targetName] = next;

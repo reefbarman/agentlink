@@ -14,6 +14,7 @@ import { createAgentPluginMcpFetch } from "./agentPluginHttpFetch.js";
 import { buildAgentPluginStdioEnvironment } from "./agentPluginMcpRuntime.js";
 import { AgentPluginSseClientTransport } from "./AgentPluginSseClientTransport.js";
 import { inspectMcpOAuthResponse } from "./mcpOAuthErrorDiagnostic.js";
+import { createMementoMcpProtocolVerdictStore } from "./mcpProtocolVerdictStore.js";
 
 export type {
   McpClientHubOptions,
@@ -70,6 +71,11 @@ export class McpClientHub extends NodeMcpClientHub {
           await import("@modelcontextprotocol/client/validators/ajv");
         return new AjvJsonSchemaValidator();
       },
+      ...(globalState
+        ? {
+            protocolVerdicts: createMementoMcpProtocolVerdictStore(globalState),
+          }
+        : {}),
     };
     super(host, clientVersion, options);
   }

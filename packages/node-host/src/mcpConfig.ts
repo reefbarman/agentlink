@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { normalizeMcpProtocolSetting } from "./mcpProtocolNegotiation.js";
 import os from "node:os";
 import { parseJsonWithComments } from "@agentlink/protocol/jsonc";
 import path from "node:path";
@@ -35,6 +36,11 @@ export interface McpServerConfig {
   supportsParallelToolCalls?: boolean;
   allowedTools?: string[];
   disabled?: boolean;
+  /**
+   * MCP protocol negotiation: `auto` (default) probes for 2026-07-28 and
+   * falls back to the 2025-era handshake; `legacy` and `2026-07-28` force one.
+   */
+  protocol?: "auto" | "legacy" | "2026-07-28";
   sourceServerName?: string;
   sourceProjectIds?: string[];
   sourceProjectRoots?: string[];
@@ -177,6 +183,7 @@ export async function loadMcpConfigsFromSources(
         supportsParallelToolCalls: existing?.supportsParallelToolCalls ?? false,
         allowedTools: existing?.allowedTools,
         disabled: existing?.disabled ?? false,
+        protocol: existing?.protocol,
       };
       if (raw.type !== undefined)
         next.type = raw.type as McpServerConfig["type"];
@@ -202,6 +209,8 @@ export async function loadMcpConfigsFromSources(
         next.supportsParallelToolCalls = raw.supportsParallelToolCalls === true;
       }
       if (raw.disabled !== undefined) next.disabled = raw.disabled === true;
+      if (raw.protocol !== undefined)
+        next.protocol = normalizeMcpProtocolSetting(raw.protocol);
       if (Array.isArray(raw.allowedTools)) {
         next.allowedTools = [...raw.allowedTools];
       }

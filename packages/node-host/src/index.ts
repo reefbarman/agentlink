@@ -21,6 +21,7 @@ export * from "./keychainMcpCredentialRepository.js";
 export * from "./mcpConfig.js";
 export * from "./mcpAuthCoordinator.js";
 export * from "./McpClientHub.js";
+export * from "./mcpProtocolNegotiation.js";
 export * from "./mcpToolResult.js";
 export * from "./mcpToolPolicy.js";
 export * from "./mcpConnectionCache.js";

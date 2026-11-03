@@ -68,6 +68,19 @@ Standard `mcpServers` object:
 - `disabled: true` persists across refresh/reload and removes the server's tools from the runtime.
 - `timeout` is the per-tool-call inactivity timeout in milliseconds (default: `60000`). AgentLink respects any positive finite configured value; MCP progress notifications reset the inactivity window, and HTTP/SSE transport deadlines do not shorten it. There is no separate hidden total cap: an active server can extend the call by continuing to report progress, while caller cancellation still stops it.
 - MCP tools run concurrently only when the tool advertises the read-only annotation, or when the server opts in via `supportsParallelToolCalls: true`.
+- `protocol` chooses the MCP protocol version: `"auto"` (default), `"legacy"` or `"2026-07-28"`. See **Protocol versions** below. It has no MCP Manager control; set it by editing `mcp.json`. Saving the server from the MCP Manager keeps it.
+
+## Protocol versions
+
+AgentLink speaks both MCP 2026-07-28 and the 2025-era protocol. With `protocol` unset or `"auto"`, it first asks the server which versions it supports (`server/discover`) and uses 2026-07-28 when offered, otherwise the 2025-era `initialize` handshake. For a `stdio` server this check starts a short-lived second copy of the server, and a server that does not answer within 10 seconds is treated as 2025-era. The answer is remembered per server for 7 days, and any change to the server's URL, command, arguments, working directory, environment or headers checks again, so later connections skip the check. VS Code keeps it across reloads and windows; Desktop and the CLI remember it until the process exits. If a remembered answer fails to connect, AgentLink forgets it and checks again on the next attempt. An HTTP server that rejects the check with a server error or an unreadable reply is treated as 2025-era, so the automatic retry uses the older handshake; a network failure is not. A `stdio` server run through `mcp-remote` is not checked and uses the 2025-era handshake, because a second copy would start a second sign-in or token refresh; set `protocol: "2026-07-28"` to force the newer version. While a server waits for browser sign-in, AgentLink checks again instead of reusing a remembered 2026-07-28 answer, so sign-in keeps its 10-minute window.
+
+- `"legacy"` always uses the 2025-era handshake. Use it for a server that misbehaves when asked which versions it supports.
+- `"2026-07-28"` requires 2026-07-28 and fails the connection if the server does not offer it.
+
+On a 2026-07-28 connection:
+
+- Change notifications (`list_changed`) arrive on a stream AgentLink opens to the server. If that stream drops while the server stays connected, AgentLink reopens it with backoff (1, 2, 4, 8, 16, then 30 seconds; it stops after six quick failures in a row) and refreshes the affected lists, because notifications sent during the gap were lost. A stream that stayed open for 60 seconds resets that budget.
+- A server asks for input by answering a tool call, resource read or prompt request with a request for input instead of sending a separate request. AgentLink shows the same form or link prompt as before and retries the original call with your answer, for at most 10 rounds per call. A server's URL prompt does not tell AgentLink when the browser step finishes on this protocol version, so close the prompt yourself when you are done.
 
 ## MCP from Agent Plugins
 

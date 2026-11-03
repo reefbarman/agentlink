@@ -20,6 +20,7 @@ import type {
   OAuthClientProvider,
   Transport,
   RequestOptions,
+  McpSubscription,
 } from "@modelcontextprotocol/client";
 import { ResultSchema, ToolSchema } from "@modelcontextprotocol/core";
 import type {
@@ -54,6 +55,15 @@ import {
 } from "@agentlink/protocol/mcp-url-elicitation";
 import { normalizeMcpToolResult } from "./mcpToolResult.js";
 import { mcpStartupDiagnostic } from "./mcpStartupDiagnostic.js";
+import {
+  createInMemoryMcpProtocolVerdictStore,
+  isMcpProbeRejection,
+  mcpProtocolVerdictKey,
+  normalizeMcpProtocolSetting,
+  resolveMcpProtocolPlan,
+  type McpProtocolPlan,
+  type McpProtocolVerdictStore,
+} from "./mcpProtocolNegotiation.js";
 import {
   normalizeMcpElicitationSchema,
   type McpFormElicitationInput,
@@ -250,6 +260,11 @@ export interface McpHubHost {
     },
   ) => Transport;
   readonly createSchemaValidator: () => Promise<McpSchemaValidatorProvider>;
+  /**
+   * Durable store for protocol negotiation verdicts. Without one, verdicts
+   * are remembered for the life of the process.
+   */
+  readonly protocolVerdicts?: McpProtocolVerdictStore;
 }
 
 export interface McpClientHubOptions {
@@ -297,6 +312,8 @@ interface ConnectedServer {
   retryCount: number;
   connectedAt?: number;
   retryTimer?: ReturnType<typeof setTimeout>;
+  /** Pending re-open of a dropped `subscriptions/listen` stream. */
+  listenTimer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -317,6 +334,15 @@ const httpConnectQueues = new Map<string, Promise<unknown>>();
 const INTERACTIVE_CONNECT_TIMEOUT_MS = 11 * 60_000;
 const MAX_MCP_CATALOG_PAGES = 100;
 const MAX_MCP_CATALOG_ITEMS = 10_000;
+/** Cap on 2026-07-28 `input_required` rounds (elicitation) for one request. */
+const MAX_MCP_INPUT_ROUNDS = 10;
+/** Re-listen backoff after a change-notification stream drops unexpectedly. */
+const MCP_RELISTEN_BASE_DELAY_MS = 1_000;
+const MCP_RELISTEN_MAX_DELAY_MS = 30_000;
+const MCP_RELISTEN_MAX_ATTEMPTS = 6;
+/** A stream that stayed open this long resets the re-listen attempt budget. */
+const MCP_RELISTEN_STABLE_MS = 60_000;
+const sharedProtocolVerdicts = createInMemoryMcpProtocolVerdictStore();
 
 interface McpRemoteInvocation {
   readonly serverUrl: string;
@@ -798,6 +824,23 @@ function describeOutputSchemaError(
     return `MCP tool '${toolName}' returned structured content that does not match its output schema. ${message}`;
   }
   return undefined;
+}
+
+/**
+ * The `subscriptions/listen` filter for the change notifications a modern
+ * server advertises. Empty on 2025-era connections, which deliver
+ * notifications unsolicited.
+ */
+function modernChangeFilter(client: Client): McpSubscription["honoredFilter"] {
+  if (client.getProtocolEra() !== "modern") return {};
+  const capabilities = client.getServerCapabilities();
+  return {
+    ...(capabilities?.tools?.listChanged ? { toolsListChanged: true } : {}),
+    ...(capabilities?.resources?.listChanged
+      ? { resourcesListChanged: true }
+      : {}),
+    ...(capabilities?.prompts?.listChanged ? { promptsListChanged: true } : {}),
+  };
 }
 
 async function withHttpConnectLock<T>(
@@ -1321,6 +1364,151 @@ export class McpClientHub {
     }, 0);
   }
 
+  private get protocolVerdicts(): McpProtocolVerdictStore {
+    return this.host.protocolVerdicts ?? sharedProtocolVerdicts;
+  }
+
+  private async readProtocolVerdict(
+    cfg: Readonly<McpServerConfig>,
+  ): Promise<unknown> {
+    // Only `auto` consults remembered verdicts.
+    if (normalizeMcpProtocolSetting(cfg.protocol) !== "auto") return undefined;
+    try {
+      return await this.protocolVerdicts.get(mcpProtocolVerdictKey(cfg));
+    } catch (error) {
+      this.log(
+        `[mcp:${cfg.name}] could not read remembered protocol verdict: ${this.describeError(error)}`,
+      );
+      return undefined;
+    }
+  }
+
+  /** Remember a fresh `auto` probe outcome so later connects skip the probe. */
+  private async rememberProtocolVerdict(
+    entry: ConnectedServer,
+    plan: McpProtocolPlan,
+  ): Promise<void> {
+    if (!plan.verdictKey || plan.prior) return;
+    const era = entry.client.getProtocolEra();
+    const discover = entry.client.getDiscoverResult();
+    const checkedAt = Date.now();
+    try {
+      if (era === "modern" && discover) {
+        await this.protocolVerdicts.set(plan.verdictKey, {
+          kind: "modern",
+          discover,
+          checkedAt,
+        });
+      } else if (era === "legacy") {
+        await this.protocolVerdicts.set(plan.verdictKey, {
+          kind: "legacy",
+          checkedAt,
+        });
+      }
+    } catch (error) {
+      this.log(
+        `[mcp:${entry.name}] could not remember protocol verdict: ${this.describeError(error)}`,
+      );
+    }
+  }
+
+  private async forgetProtocolVerdict(key: string): Promise<void> {
+    try {
+      await this.protocolVerdicts.delete(key);
+    } catch (error) {
+      this.log(
+        `[mcp] could not forget protocol verdict: ${this.describeError(error)}`,
+      );
+    }
+  }
+
+  private isLiveConnection(entry: ConnectedServer, client: Client): boolean {
+    return (
+      this.servers.get(entry.name) === entry &&
+      entry.client === client &&
+      entry.status === "connected" &&
+      !entry.connectionController.signal.aborted
+    );
+  }
+
+  /**
+   * On 2026-07-28 connections, change notifications arrive only while a
+   * client-opened `subscriptions/listen` stream is open, and the SDK does not
+   * reopen one that drops. Reopen it with bounded backoff, then refresh what
+   * it covers because notifications sent during the gap were lost.
+   */
+  private watchChangeSubscription(
+    entry: ConnectedServer,
+    client: Client,
+    subscription: McpSubscription,
+    attempt: number,
+  ): void {
+    const openedAt = Date.now();
+    void subscription.closed.then((cause) => {
+      // Closing the client also reports "remote", so only a still-live
+      // connection is worth re-listening on.
+      if (cause !== "remote" || !this.isLiveConnection(entry, client)) return;
+      const nextAttempt =
+        Date.now() - openedAt >= MCP_RELISTEN_STABLE_MS ? 0 : attempt;
+      this.log(
+        `[mcp:${entry.name}] change notification stream closed unexpectedly; re-listening (attempt ${nextAttempt + 1}/${MCP_RELISTEN_MAX_ATTEMPTS})`,
+      );
+      this.scheduleRelisten(
+        entry,
+        client,
+        subscription.honoredFilter,
+        nextAttempt,
+      );
+    });
+  }
+
+  private scheduleRelisten(
+    entry: ConnectedServer,
+    client: Client,
+    filter: McpSubscription["honoredFilter"],
+    attempt: number,
+  ): void {
+    if (attempt >= MCP_RELISTEN_MAX_ATTEMPTS) {
+      this.log(
+        `[mcp:${entry.name}] gave up re-opening the change notification stream; catalog changes will be picked up on reconnect`,
+      );
+      return;
+    }
+    if (entry.listenTimer) clearTimeout(entry.listenTimer);
+    const delay = Math.min(
+      MCP_RELISTEN_BASE_DELAY_MS * 2 ** attempt,
+      MCP_RELISTEN_MAX_DELAY_MS,
+    );
+    entry.listenTimer = setTimeout(() => {
+      entry.listenTimer = undefined;
+      if (!this.isLiveConnection(entry, client)) return;
+      void client.listen(filter).then(
+        (next) => {
+          if (!this.isLiveConnection(entry, client)) {
+            void next.close().catch(() => undefined);
+            return;
+          }
+          this.log(`[mcp:${entry.name}] change notification stream reopened`);
+          const honored = next.honoredFilter;
+          if (honored.toolsListChanged)
+            this.scheduleCatalogRefresh(entry, "tools");
+          if (honored.resourcesListChanged)
+            this.scheduleCatalogRefresh(entry, "resources");
+          if (honored.promptsListChanged)
+            this.scheduleCatalogRefresh(entry, "prompts");
+          this.watchChangeSubscription(entry, client, next, attempt + 1);
+        },
+        (error: unknown) => {
+          if (!this.isLiveConnection(entry, client)) return;
+          this.log(
+            `[mcp:${entry.name}] re-listen failed: ${this.describeError(error)}`,
+          );
+          this.scheduleRelisten(entry, client, filter, attempt + 1);
+        },
+      );
+    }, delay);
+  }
+
   private async drainCatalogRefresh(
     entry: ConnectedServer,
     kind: McpCatalogKind,
@@ -1529,12 +1717,27 @@ export class McpClientHub {
       status: "connecting",
       retryCount,
     };
+    const protocolPlan = resolveMcpProtocolPlan(
+      cfg,
+      await this.readProtocolVerdict(cfg),
+      {
+        now: Date.now(),
+        interactiveAuth: authMode === "interactive",
+        authProxy: isMcpRemoteConfig(cfg),
+      },
+    );
+    signal.throwIfAborted();
     entry.client = new Client(
       { name: "agentlink", title: "AgentLink", version: this.clientVersion },
       {
         capabilities: {
           elicitation: { form: { applyDefaults: true }, url: {} },
         },
+        versionNegotiation: protocolPlan.negotiation,
+        // 2026-07-28 servers ask for input (elicitation) by answering a
+        // request with `input_required`; the SDK fulfils each round through
+        // the `elicitation/create` handler registered below.
+        inputRequired: { maxRounds: MAX_MCP_INPUT_ROUNDS },
         listChanged: {
           tools: {
             autoRefresh: false,
@@ -1759,16 +1962,22 @@ export class McpClientHub {
               ...(authMode === "interactive"
                 ? { timeout: INTERACTIVE_CONNECT_TIMEOUT_MS }
                 : {}),
+              ...(protocolPlan.prior ? { prior: protocolPlan.prior } : {}),
             });
           },
           signal,
         );
       } else {
-        await entry.client.connect(transport, { signal });
+        await entry.client.connect(transport, {
+          signal,
+          ...(protocolPlan.prior ? { prior: protocolPlan.prior } : {}),
+        });
       }
       signal.throwIfAborted();
       if (this.servers.get(cfg.name) !== entry) return;
-      this.log(`[mcp:${cfg.name}] connect succeeded`);
+      this.log(
+        `[mcp:${cfg.name}] connect succeeded protocol=${entry.client.getNegotiatedProtocolVersion() ?? "unknown"} era=${entry.client.getProtocolEra() ?? "unknown"} negotiation=${protocolPlan.setting}${protocolPlan.prior ? ` remembered=${protocolPlan.prior.kind}` : ""}`,
+      );
       this.authCoordinator.record({
         type: "connect_success",
         serverName: cfg.name,
@@ -1795,6 +2004,23 @@ export class McpClientHub {
       this.authCoordinator.clearAttempt(attemptId);
       this.runtimeReconnectPending.delete(cfg.name);
 
+      // The SDK opens the change notification stream only after a probe; a
+      // remembered modern verdict (or a failed auto-open) leaves none. Open it
+      // before loading catalogs so no change between the two is missed.
+      const changeFilter = modernChangeFilter(entry.client);
+      let subscription = entry.client.autoOpenedSubscription;
+      if (!subscription && Object.keys(changeFilter).length > 0) {
+        subscription = await entry.client
+          .listen(changeFilter, { signal })
+          .catch((error: unknown) => {
+            this.log(
+              `[mcp:${cfg.name}] could not open the change notification stream: ${this.describeError(error)}`,
+            );
+            return undefined;
+          });
+        signal.throwIfAborted();
+      }
+
       await Promise.all(
         (["tools", "resources", "prompts"] as const).map((kind) =>
           this.refreshCatalog(entry, kind, false, {
@@ -1809,7 +2035,27 @@ export class McpClientHub {
       }
       entry.status = "connected";
       entry.connectedAt = Date.now();
+      void this.rememberProtocolVerdict(entry, protocolPlan);
+      if (subscription) {
+        this.watchChangeSubscription(entry, entry.client, subscription, 0);
+      } else if (Object.keys(changeFilter).length > 0) {
+        this.scheduleRelisten(entry, entry.client, changeFilter, 0);
+      }
     } catch (err) {
+      // A remembered verdict may be stale (for example the server was
+      // downgraded or replaced). Forget it so the next attempt probes again.
+      if (protocolPlan.prior && protocolPlan.verdictKey) {
+        void this.forgetProtocolVerdict(protocolPlan.verdictKey);
+      } else if (protocolPlan.verdictKey && isMcpProbeRejection(err)) {
+        // The server rejected the probe itself; retry with `initialize`.
+        this.log(
+          `[mcp:${cfg.name}] server rejected the protocol version probe; using the 2025-era handshake next`,
+        );
+        void this.protocolVerdicts.set(protocolPlan.verdictKey, {
+          kind: "legacy",
+          checkedAt: Date.now(),
+        });
+      }
       if (signal.aborted || this.servers.get(cfg.name) !== entry) return;
       const errMsg = err instanceof Error ? err.message : String(err);
       const normalizedErr = errMsg.toLowerCase();
@@ -2557,6 +2803,8 @@ export class McpClientHub {
     this.runtimeReconnectPending.delete(name);
     if (!entry) return;
     if (entry.retryTimer) clearTimeout(entry.retryTimer);
+    if (entry.listenTimer) clearTimeout(entry.listenTimer);
+    entry.listenTimer = undefined;
     for (const state of Object.values(entry.catalogRefresh)) {
       if (state.scheduled) clearTimeout(state.scheduled);
       state.scheduled = undefined;

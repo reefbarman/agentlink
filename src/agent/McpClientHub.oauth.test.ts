@@ -111,6 +111,18 @@ vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
       return mocks.createTransportClose();
     }
 
+    // A 2025-era connection: no negotiated modern era or listen stream.
+    getProtocolEra(): "legacy" {
+      return "legacy";
+    }
+    getNegotiatedProtocolVersion(): string {
+      return "2025-11-25";
+    }
+    getDiscoverResult(): undefined {
+      return undefined;
+    }
+    readonly autoOpenedSubscription = undefined;
+
     async listTools(): Promise<{ tools: unknown[] }> {
       return mocks.createTransportListTools();
     }

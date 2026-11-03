@@ -599,6 +599,38 @@ describe("loadMcpConfigs", () => {
     });
   });
 
+  it("preserves a hand-set protocol override across manager edits", async () => {
+    const configPath = join(home, ".agentlink", "ask-agent", "mcp.json");
+    await writeJson(configPath, {
+      mcpServers: {
+        remote: {
+          type: "http",
+          url: "https://example.com/mcp",
+          protocol: "legacy",
+        },
+      },
+    });
+
+    await upsertMcpConfigServer({
+      profile: "ask-agent",
+      scope: "ask-agent-global",
+      server: {
+        name: "remote",
+        type: "http",
+        url: "https://example.com/mcp",
+        toolPolicy: "allow",
+      },
+    });
+
+    const written = JSON.parse(await readFile(configPath, "utf-8"));
+    expect(written.mcpServers.remote).toEqual({
+      type: "http",
+      url: "https://example.com/mcp",
+      toolPolicy: "allow",
+      protocol: "legacy",
+    });
+  });
+
   it("writes and removes Ask Agent MCP servers only in the Ask Agent config", async () => {
     await upsertMcpConfigServer({
       profile: "ask-agent",

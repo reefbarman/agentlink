@@ -125,6 +125,17 @@ vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
     async close(): Promise<void> {
       await mocks.close();
     }
+    // A 2025-era connection: no negotiated modern era or listen stream.
+    getProtocolEra(): "legacy" {
+      return "legacy";
+    }
+    getNegotiatedProtocolVersion(): string {
+      return "2025-11-25";
+    }
+    getDiscoverResult(): undefined {
+      return undefined;
+    }
+    readonly autoOpenedSubscription = undefined;
     async listTools(params?: { cursor?: string }): Promise<unknown> {
       return mocks.listTools(params);
     }
