@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "6264a62e3384949e12086a30dfd0e59cce282c7e",
-  "createdAt": "2026-11-03T05:22:29.930Z",
+  "sourceSha": "02a86f8f614748d299478fab11359d73896af95e",
+  "createdAt": "2026-11-03T07:23:38.190Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,131 +10,213 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.74.1",
-      "baselineRef": "v1.74.1",
-      "reserved": "1.74.1",
-      "commits": ["6264a62e3384949e12086a30dfd0e59cce282c7e"],
+      "published": "1.75.0",
+      "baselineRef": "v1.75.0",
+      "reserved": "1.75.1",
+      "commits": [
+        "26d869156710a9133bace9903c79bf00163f7fa5",
+        "fd2f61beee6ca4fd2f87f214030a9bdedb611eba",
+        "02a86f8f614748d299478fab11359d73896af95e"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.75.0",
+      "version": "1.76.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.75.0",
+      "tag": "v1.76.0",
       "notes": [
         {
-          "sha": "6264a62e3384949e12086a30dfd0e59cce282c7e",
-          "subject": "feat(mcp): negotiate protocol 2026-07-28 with remembered verdicts",
-          "summary": "MCP connections now negotiate protocol 2026-07-28 with fallback to the older handshake, remember the result per server for 7 days, add a per-server `protocol` setting in mcp.json, and reopen dropped change-notification streams.",
+          "sha": "26d869156710a9133bace9903c79bf00163f7fa5",
+          "subject": "test(mcp): add manual-smoke testbed MCP server and checklist",
+          "summary": "Adds a manual-smoke MCP testbed server and checklist under node-host test fixtures; it is test-only and does not change any shipped behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "fd2f61beee6ca4fd2f87f214030a9bdedb611eba",
+          "subject": "feat(mcp): show elicitation as an Activity Shelf card with Decline and a tool-row summary",
+          "summary": "MCP form and URL requests now appear as an Activity Shelf card with separate Decline and Cancel actions, readable field labels and optional markers, and the tool row records the answers; progress without a total no longer repeats the count.",
+          "breaking": false
+        },
+        {
+          "sha": "02a86f8f614748d299478fab11359d73896af95e",
+          "subject": "fix(mcp): let a pending elicitation card take over the Activity Shelf",
+          "summary": "A pending MCP request card now takes over the Activity Shelf, hiding the task list, opening tall enough to fit, and keeping its action buttons pinned to the bottom when the form scrolls.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.74.1",
-      "baselineRef": "desktop-v0.74.1",
-      "reserved": "0.74.1",
-      "commits": ["6264a62e3384949e12086a30dfd0e59cce282c7e"],
+      "published": "0.75.0",
+      "baselineRef": "desktop-v0.75.0",
+      "reserved": "0.75.0",
+      "commits": [
+        "26d869156710a9133bace9903c79bf00163f7fa5",
+        "fd2f61beee6ca4fd2f87f214030a9bdedb611eba",
+        "02a86f8f614748d299478fab11359d73896af95e"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.75.0",
+      "version": "0.76.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.75.0",
+      "tag": "desktop-v0.76.0",
       "notes": [
         {
-          "sha": "6264a62e3384949e12086a30dfd0e59cce282c7e",
-          "subject": "feat(mcp): negotiate protocol 2026-07-28 with remembered verdicts",
-          "summary": "MCP connections now negotiate protocol 2026-07-28 with fallback to the older handshake, remember the result per server for 7 days, add a per-server `protocol` setting in mcp.json, and reopen dropped change-notification streams.",
+          "sha": "26d869156710a9133bace9903c79bf00163f7fa5",
+          "subject": "test(mcp): add manual-smoke testbed MCP server and checklist",
+          "summary": "Adds a manual-smoke MCP testbed server and checklist under node-host test fixtures; it is test-only and does not change any shipped behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "fd2f61beee6ca4fd2f87f214030a9bdedb611eba",
+          "subject": "feat(mcp): show elicitation as an Activity Shelf card with Decline and a tool-row summary",
+          "summary": "MCP form and URL requests now appear as an Activity Shelf card with separate Decline and Cancel actions, readable field labels and optional markers, and the tool row records the answers; progress without a total no longer repeats the count.",
+          "breaking": false
+        },
+        {
+          "sha": "02a86f8f614748d299478fab11359d73896af95e",
+          "subject": "fix(mcp): let a pending elicitation card take over the Activity Shelf",
+          "summary": "A pending MCP request card now takes over the Activity Shelf, hiding the task list, opening tall enough to fit, and keeping its action buttons pinned to the bottom when the form scrolls.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.52.1",
-      "baselineRef": "cli-v0.52.1",
-      "reserved": "0.52.1",
-      "commits": ["6264a62e3384949e12086a30dfd0e59cce282c7e"],
+      "published": "0.53.0",
+      "baselineRef": "cli-v0.53.0",
+      "reserved": "0.53.0",
+      "commits": [
+        "26d869156710a9133bace9903c79bf00163f7fa5",
+        "fd2f61beee6ca4fd2f87f214030a9bdedb611eba"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.53.0",
+      "version": "0.54.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.53.0",
+      "tag": "cli-v0.54.0",
       "notes": [
         {
-          "sha": "6264a62e3384949e12086a30dfd0e59cce282c7e",
-          "subject": "feat(mcp): negotiate protocol 2026-07-28 with remembered verdicts",
-          "summary": "MCP connections now negotiate protocol 2026-07-28 with fallback to the older handshake, remember the result per server for 7 days, add a per-server `protocol` setting in mcp.json, and reopen dropped change-notification streams.",
+          "sha": "26d869156710a9133bace9903c79bf00163f7fa5",
+          "subject": "test(mcp): add manual-smoke testbed MCP server and checklist",
+          "summary": "Adds a manual-smoke MCP testbed server and checklist under node-host test fixtures; it is test-only and does not change any shipped behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "fd2f61beee6ca4fd2f87f214030a9bdedb611eba",
+          "subject": "feat(mcp): show elicitation as an Activity Shelf card with Decline and a tool-row summary",
+          "summary": "MCP form and URL requests now appear as an Activity Shelf card with separate Decline and Cancel actions, readable field labels and optional markers, and the tool row records the answers; progress without a total no longer repeats the count.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.42.1",
-      "baselineRef": "sdk-v0.42.1",
-      "reserved": "0.42.1",
-      "commits": ["6264a62e3384949e12086a30dfd0e59cce282c7e"],
+      "published": "0.43.0",
+      "baselineRef": "sdk-v0.43.0",
+      "reserved": "0.43.0",
+      "commits": [
+        "26d869156710a9133bace9903c79bf00163f7fa5",
+        "fd2f61beee6ca4fd2f87f214030a9bdedb611eba"
+      ],
       "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
+      "breakingCommits": ["fd2f61beee6ca4fd2f87f214030a9bdedb611eba"],
+      "bump": "breaking",
       "status": "release",
-      "version": "0.43.0",
+      "version": "0.44.0",
       "effectiveBump": "minor",
-      "breaking": false,
+      "breaking": true,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.43.0",
+      "tag": "sdk-v0.44.0",
       "notes": [
         {
-          "sha": "6264a62e3384949e12086a30dfd0e59cce282c7e",
-          "subject": "feat(mcp): negotiate protocol 2026-07-28 with remembered verdicts",
-          "summary": "MCP connections now negotiate protocol 2026-07-28 with fallback to the older handshake, remember the result per server for 7 days, add a per-server `protocol` setting in mcp.json, and reopen dropped change-notification streams.",
+          "sha": "26d869156710a9133bace9903c79bf00163f7fa5",
+          "subject": "test(mcp): add manual-smoke testbed MCP server and checklist",
+          "summary": "Adds a manual-smoke MCP testbed server and checklist under node-host test fixtures; it is test-only and does not change any shipped behaviour.",
           "breaking": false
+        },
+        {
+          "sha": "fd2f61beee6ca4fd2f87f214030a9bdedb611eba",
+          "subject": "feat(mcp): show elicitation as an Activity Shelf card with Decline and a tool-row summary",
+          "summary": "MCP form and URL requests now appear as an Activity Shelf card with separate Decline and Cancel actions, readable field labels and optional markers, and the tool row records the answers; progress without a total no longer repeats the count.",
+          "breaking": true
         }
       ]
     },
     "assistant": {
-      "published": "0.46.1",
-      "baselineRef": "assistant-v0.46.1",
-      "reserved": "0.46.1",
-      "commits": ["6264a62e3384949e12086a30dfd0e59cce282c7e"],
+      "published": "0.47.0",
+      "baselineRef": "assistant-v0.47.0",
+      "reserved": "0.47.0",
+      "commits": [
+        "26d869156710a9133bace9903c79bf00163f7fa5",
+        "fd2f61beee6ca4fd2f87f214030a9bdedb611eba",
+        "02a86f8f614748d299478fab11359d73896af95e"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.47.0",
+      "version": "0.48.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.47.0",
+      "tag": "assistant-v0.48.0",
       "notes": [
         {
-          "sha": "6264a62e3384949e12086a30dfd0e59cce282c7e",
-          "subject": "feat(mcp): negotiate protocol 2026-07-28 with remembered verdicts",
-          "summary": "MCP connections now negotiate protocol 2026-07-28 with fallback to the older handshake, remember the result per server for 7 days, add a per-server `protocol` setting in mcp.json, and reopen dropped change-notification streams.",
+          "sha": "26d869156710a9133bace9903c79bf00163f7fa5",
+          "subject": "test(mcp): add manual-smoke testbed MCP server and checklist",
+          "summary": "Adds a manual-smoke MCP testbed server and checklist under node-host test fixtures; it is test-only and does not change any shipped behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "fd2f61beee6ca4fd2f87f214030a9bdedb611eba",
+          "subject": "feat(mcp): show elicitation as an Activity Shelf card with Decline and a tool-row summary",
+          "summary": "MCP form and URL requests now appear as an Activity Shelf card with separate Decline and Cancel actions, readable field labels and optional markers, and the tool row records the answers; progress without a total no longer repeats the count.",
+          "breaking": false
+        },
+        {
+          "sha": "02a86f8f614748d299478fab11359d73896af95e",
+          "subject": "fix(mcp): let a pending elicitation card take over the Activity Shelf",
+          "summary": "A pending MCP request card now takes over the Activity Shelf, hiding the task list, opening tall enough to fit, and keeping its action buttons pinned to the bottom when the form scrolls.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "6264a62e3384949e12086a30dfd0e59cce282c7e": {
-      "bump": "minor",
+    "26d869156710a9133bace9903c79bf00163f7fa5": {
+      "bump": "none",
       "breakingUnits": [],
-      "summary": "MCP connections now negotiate protocol 2026-07-28 with fallback to the older handshake, remember the result per server for 7 days, add a per-server `protocol` setting in mcp.json, and reopen dropped change-notification streams.",
+      "summary": "Adds a manual-smoke MCP testbed server and checklist under node-host test fixtures; it is test-only and does not change any shipped behaviour.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "fd2f61beee6ca4fd2f87f214030a9bdedb611eba": {
+      "bump": "minor",
+      "breakingUnits": ["sdk"],
+      "summary": "MCP form and URL requests now appear as an Activity Shelf card with separate Decline and Cancel actions, readable field labels and optional markers, and the tool row records the answers; progress without a total no longer repeats the count.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "02a86f8f614748d299478fab11359d73896af95e": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "A pending MCP request card now takes over the Activity Shelf, hiding the task list, opening tall enough to fit, and keeping its action buttons pinned to the bottom when the form scrolls.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

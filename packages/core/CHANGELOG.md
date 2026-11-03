@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.44.0 — 2026-11-03
+
+- Adds a manual-smoke MCP testbed server and checklist under node-host test fixtures; it is test-only and does not change any shipped behaviour.
+- **Breaking:** MCP form and URL requests now appear as an Activity Shelf card with separate Decline and Cancel actions, readable field labels and optional markers, and the tool row records the answers; progress without a total no longer repeats the count.
+
 ## 0.43.0 — 2026-11-03
 
 - MCP connections now negotiate protocol 2026-07-28 with fallback to the older handshake, remember the result per server for 7 days, add a per-server `protocol` setting in mcp.json, and reopen dropped change-notification streams.
