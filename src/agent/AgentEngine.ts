@@ -1359,7 +1359,7 @@ export class AgentEngine {
         }
 
         const requestModelSelectionRevision = modelSelectionRevision;
-        const requestSystemPrompt = session.systemPrompt;
+        const requestSystemPrompt = session.requestSystemPrompt;
         const toolSetupStartedAt = Date.now();
         // Include tools when dispatch context is available, filtered by mode.
         // Compute this before any condense path so both automatic and retry-triggered
@@ -4052,7 +4052,7 @@ export class AgentEngine {
         return;
       }
 
-      const systemPrompt = session.systemPrompt;
+      const systemPrompt = session.requestSystemPrompt;
       const filesRead = [...session.filesRead];
       const composeFilesRead = [...session.composeFilesRead];
       const cwd = session.requireProjectRoot();
@@ -4603,7 +4603,7 @@ export class AgentEngine {
             messages: condenseInputMessages,
             provider: resolvedProvider,
             activeModel,
-            systemPrompt: session.systemPrompt,
+            systemPrompt: session.requestSystemPrompt,
             isAutomatic,
             filesRead: [...session.filesRead],
             composeFilesRead: [...session.composeFilesRead],

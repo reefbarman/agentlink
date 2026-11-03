@@ -205,6 +205,8 @@ export interface AgentSessionManagerOptions {
     sessionId: string,
     rootSessionId: string,
   ) => import("../core/capabilities/terminal.js").TerminalProvider | undefined;
+  /** Resolves the display number of the chat tab bound to a root session. */
+  chatTabNumberForSession?: (rootSessionId: string) => number | undefined;
 }
 
 export function createDefaultAgentSessionManagerHost(args: {

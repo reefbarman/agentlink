@@ -9080,3 +9080,112 @@ describe("AgentSessionManager memory candidate nudges", () => {
     );
   });
 });
+
+describe("session identity", () => {
+  function makeIdentityManager(
+    chatTabNumberForSession: (rootSessionId: string) => number | undefined,
+  ) {
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: "test",
+      displayName: "Test",
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => ({
+        supportsThinking: false,
+        supportsCaching: false,
+        supportsImages: false,
+        supportsToolUse: true,
+        contextWindow: 200_000,
+        maxOutputTokens: 8_192,
+      })),
+      listModels: vi.fn(() => [
+        {
+          id: "model-a",
+          displayName: "model-a",
+          provider: "test",
+          capabilities: {
+            supportsThinking: false,
+            supportsCaching: false,
+            supportsImages: false,
+            supportsToolUse: true,
+            contextWindow: 200_000,
+            maxOutputTokens: 8_192,
+          },
+        },
+      ]),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    } as any);
+    const identitiesAtRun: unknown[] = [];
+    const engine = {
+      setToolRuntime: vi.fn(),
+      run: vi.fn(async function* (session: {
+        setSessionIdentity: { mock: { calls: unknown[][] } };
+      }) {
+        identitiesAtRun.push(session.setSessionIdentity.mock.calls.at(-1)?.[0]);
+        yield {
+          type: "done",
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheCreationTokens: 0,
+        };
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      { ...makeConfig(), model: "model-a" },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          providers,
+          createEngine: vi.fn(() => engine as never),
+          config: {
+            resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
+            getCondenseThresholdForModel: () => 0.9,
+            getBackgroundAgentSettings: () => ({}),
+          },
+        },
+        chatTabNumberForSession,
+      },
+    );
+    return { mgr, identitiesAtRun };
+  }
+
+  it("applies the host-resolved tab identity before the production send loop runs the engine", async () => {
+    const resolver = vi.fn(() => 3);
+    const { mgr, identitiesAtRun } = makeIdentityManager(resolver);
+    const session: any = await mgr.createSession("code");
+    session.setSessionIdentity = vi.fn();
+
+    await mgr.sendMessage(session.id, "start", session.mode);
+
+    expect(resolver).toHaveBeenCalledWith(session.id);
+    expect(identitiesAtRun).toEqual([{ tabNumber: 3, background: false }]);
+  });
+
+  it("uses a background agent's fleet root and skips sessions without a tab", async () => {
+    const resolver = vi.fn((rootSessionId: string) =>
+      rootSessionId === "root-session" ? 2 : undefined,
+    );
+    const { mgr } = makeIdentityManager(resolver);
+    const background: any = await mgr.createSession("code");
+    background.background = true;
+    background.fleetMetadata = { rootSessionId: "root-session" };
+    background.setSessionIdentity = vi.fn();
+    (mgr as any).applySessionIdentity(background);
+    expect(background.setSessionIdentity).toHaveBeenCalledWith({
+      tabNumber: 2,
+      background: true,
+    });
+
+    const untabbed: any = await mgr.createSession("code");
+    untabbed.setSessionIdentity = vi.fn();
+    (mgr as any).applySessionIdentity(untabbed);
+    expect(untabbed.setSessionIdentity).not.toHaveBeenCalled();
+  });
+});

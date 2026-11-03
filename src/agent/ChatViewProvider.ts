@@ -5747,7 +5747,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             : `ignored:${fg.activeFileContext.reason}`;
       }
     }
-    let systemPrompt = fg?.systemPrompt;
+    let systemPrompt = fg?.requestSystemPrompt;
     if (!systemPrompt && debugRoot) {
       try {
         const mode = fg?.mode ?? "code";
@@ -14052,7 +14052,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             : `ignored:${fg.activeFileContext.reason}`;
       }
     }
-    let systemPrompt = fg?.systemPrompt;
+    let systemPrompt = fg?.requestSystemPrompt;
     if (!systemPrompt && debugRoot) {
       try {
         const mode = fg?.mode ?? "code";

@@ -2266,6 +2266,8 @@ export async function activate(
           ? tabTerminalProviders.forOwner(terminalOwnerForTab(tab, sessionId))
           : undefined;
       },
+      chatTabNumberForSession: (rootSessionId) =>
+        chatTabController.getTabForSession(rootSessionId)?.displayNumber,
     },
   );
   if (agentPluginActivationEnabled) {

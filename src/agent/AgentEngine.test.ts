@@ -543,6 +543,25 @@ describe("explicit skill selection request boundaries", () => {
     },
   );
 
+  it("sends the session identity after the built system prompt", async () => {
+    const session = await makeSession();
+    session.systemPrompt = "base prompt";
+    session.setSessionIdentity({ tabNumber: 4, background: false });
+    // An unknown identity (tab closed) keeps the known one.
+    session.setSessionIdentity(undefined);
+    session.addUserMessage("hi");
+    const provider = makeMockProvider();
+    const stream = vi.spyOn(provider, "stream");
+
+    await collectEvents(new AgentEngine(makeRegistry(provider)).run(session));
+
+    const shortId = session.id.replace(/-/g, "").slice(0, 8);
+    expect(stream.mock.calls[0]?.[0].systemPrompt).toBe(
+      `base prompt\n\n## Session Identity\n\nYou are AgentLink chat tab 4 (session \`${shortId}\`).`,
+    );
+    expect(session.systemPrompt).toBe("base prompt");
+  });
+
   it("leaves selected and ordinary neighbours pending when a selection fails, without dispatching", async () => {
     const session = await makeSession();
     session.addUserMessage("Original task");

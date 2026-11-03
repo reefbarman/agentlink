@@ -8397,6 +8397,9 @@ describe("ChatViewProvider session state sync", () => {
       mode: "ask",
       model: "gpt-5.6-sol",
       systemPrompt: "requested session prompt",
+      // The debug view shows the prompt as sent, including session identity.
+      requestSystemPrompt:
+        "requested session prompt\n\n## Session Identity\n\nYou are AgentLink chat tab 2 (session `requeste`).",
     };
     provider.setSessionManager({
       getForegroundSession: vi.fn(() => ({
@@ -8404,6 +8407,7 @@ describe("ChatViewProvider session state sync", () => {
         mode: "code",
         model: "claude-sonnet-4-6",
         systemPrompt: "other session prompt",
+        requestSystemPrompt: "other session prompt",
       })),
       getSession: vi.fn((sessionId: string) =>
         sessionId === requestedSession.id ? requestedSession : undefined,
@@ -8426,7 +8430,7 @@ describe("ChatViewProvider session state sync", () => {
         expect.objectContaining({
           type: "agentDebugInfo",
           sessionId: requestedSession.id,
-          systemPrompt: requestedSession.systemPrompt,
+          systemPrompt: requestedSession.requestSystemPrompt,
         }),
       );
     });

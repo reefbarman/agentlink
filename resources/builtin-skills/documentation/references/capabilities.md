@@ -2,6 +2,8 @@
 
 AgentLink is a VS Code extension whose built-in agent chats in stable independent tabs, edits files through diff views, runs commands in the integrated terminal, and uses VS Code diagnostics, symbol navigation, code actions, and rename support. Chat tabs can move between the sidebar and restorable editor panels; at least one tab remains docked, closing a popped panel docks it again, and switching presentation does not interrupt another tab's work. Read-only turns can run concurrently; write-capable turns in the same window serialize across the shared workspace mutation domain, except that native background writers delegated an enforced `ownedPaths` scope run alongside the tree writer and only serialize against overlapping delegated scopes and checkpoint operations. AgentLink also connects to MCP servers, spawns background agents, and can be remote-controlled from a browser.
 
+Each workspace chat's agent knows which tab it is. From its first turn in a tab, its system prompt ends with one line such as "You are AgentLink chat tab 2 (session `1a2b3c4d`)", and background agents name the tab they were started from. The number is the tab's number in the tab strip. Numbers are reused after a tab closes, so the short session ID tells a later tab with the same number apart. The line goes at the end of the system prompt and changes only if the chat moves to another tab, so it does not affect prompt caching. `/environment` shows it in VS Code and the browser view. Projectless Ask Agent and chats outside a tab have no tab line.
+
 For tool parameters, response shapes, and recovery behavior, read [Tools](tools.md). The complete reference retains the exhaustive compatibility contract.
 
 ## Modes

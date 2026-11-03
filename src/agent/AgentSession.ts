@@ -27,6 +27,11 @@ import {
   getEffectiveHistory,
   injectSyntheticToolResults,
 } from "./condense.js";
+import {
+  buildSessionIdentitySection,
+  sessionIdentitiesEqual,
+  type SessionIdentity,
+} from "./sessionIdentity.js";
 
 import type { AgentMode } from "./modes.js";
 import { BUILT_IN_MODES } from "./modes.js";
@@ -183,6 +188,8 @@ export class AgentSession {
   readonly projectScope: Readonly<SessionProjectScope>;
   readonly projectAvailability: SessionProjectAvailabilityStatus;
   systemPrompt: string;
+  /** Host-assigned tab identity; set before runs once the tab is known. */
+  private sessionIdentity: SessionIdentity | undefined;
   contextBreakdown: RequestContextBreakdown;
   mcpToolDisclosure?: McpToolDisclosurePartition;
 
@@ -445,6 +452,30 @@ export class AgentSession {
     this.mcpToolDisclosure = opts.mcpToolDisclosure;
     this.agentPluginCatalogProvider = opts.agentPluginCatalogProvider;
     this.initialArchitectReviewPending = opts.initialArchitectReviewPending;
+  }
+
+  /**
+   * Record the owning tab. An unknown identity never clears a known one, so a
+   * background agent keeps its line after its tab closes.
+   */
+  setSessionIdentity(identity: SessionIdentity | undefined): void {
+    if (!identity || sessionIdentitiesEqual(identity, this.sessionIdentity)) {
+      return;
+    }
+    this.sessionIdentity = identity;
+  }
+
+  getSessionIdentity(): SessionIdentity | undefined {
+    return this.sessionIdentity;
+  }
+
+  /**
+   * The system prompt as sent to the provider: the built prompt plus the
+   * session identity section, appended last so the cached prefix is unchanged.
+   */
+  get requestSystemPrompt(): string {
+    if (!this.sessionIdentity || !this.systemPrompt) return this.systemPrompt;
+    return `${this.systemPrompt}\n\n${buildSessionIdentitySection(this.id, this.sessionIdentity)}`;
   }
 
   static async create(opts: {

@@ -910,6 +910,9 @@ export class AgentSessionManager {
   private readonly terminalProviderForSession:
     | NonNullable<AgentSessionManagerOptions["terminalProviderForSession"]>
     | undefined;
+  private readonly chatTabNumberForSession:
+    | NonNullable<AgentSessionManagerOptions["chatTabNumberForSession"]>
+    | undefined;
   private browserPreferredProjectId: string | undefined;
   private readonly onBrowserPreferredProjectChanged:
     | ((projectId: string) => void | Promise<void>)
@@ -1222,6 +1225,7 @@ export class AgentSessionManager {
     this.hookRuntimeProvider = opts?.hookRuntimeProvider;
     this.executionUnavailableReason = opts?.executionUnavailableReason;
     this.terminalProviderForSession = opts?.terminalProviderForSession;
+    this.chatTabNumberForSession = opts?.chatTabNumberForSession;
     this.browserPreferredProjectId = opts?.browserPreferredProjectId;
     this.onBrowserPreferredProjectChanged =
       opts?.onBrowserPreferredProjectChanged;
@@ -7850,6 +7854,7 @@ export class AgentSessionManager {
               let naturalDone = false;
               let explicitFinalMarker = false;
               runAbortGeneration = session.abortGeneration;
+              this.applySessionIdentity(session);
 
               for await (const event of engine.run(session, {
                 automaticMemoryContext,
@@ -8583,6 +8588,7 @@ export class AgentSessionManager {
       try {
         while (true) {
           let naturalDone = false;
+          this.applySessionIdentity(session);
           for await (const event of engine.run(session, {
             automaticMemoryContext,
             composeEnabled: session.composeEnabled,
@@ -12060,6 +12066,7 @@ export class AgentSessionManager {
       try {
         if (reviewTarget) assertReviewScopeAvailable(reviewTarget);
         await this.ensurePreparedTurnMutationLease(session, preparedTurn);
+        this.applySessionIdentity(session);
         for await (const event of bgEngine.run(session, {
           isBackground: true,
           automaticMemoryContext,
@@ -13201,6 +13208,22 @@ export class AgentSessionManager {
       return { killed: false, partialOutput: denial.error };
     }
     return this.killBackground(targetSessionId, reason);
+  }
+
+  /**
+   * Give a session its host-assigned tab identity before a run. Background
+   * agents take the tab of their fleet root. Sessions are bound to tabs after
+   * creation, so this runs per turn rather than at prompt build time.
+   */
+  private applySessionIdentity(session: AgentSession): void {
+    if (!this.chatTabNumberForSession) return;
+    const rootSessionId = session.background
+      ? session.fleetMetadata?.rootSessionId
+      : session.id;
+    if (!rootSessionId) return;
+    const tabNumber = this.chatTabNumberForSession(rootSessionId);
+    if (tabNumber === undefined) return;
+    session.setSessionIdentity({ tabNumber, background: session.background });
   }
 
   steerAuthorizedBackground(

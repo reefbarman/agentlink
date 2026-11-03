@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- In VS Code, each chat's agent now knows which tab it is in. Its system prompt ends with one line naming the chat tab number and a short session ID (for example "You are AgentLink chat tab 2 (session `1a2b3c4d`)"), and background agents name the tab they were started from. Before, an agent had no way to refer to its own tab, so you had to tell it which one it was. The line is set by AgentLink rather than chosen by the model, is added from the first turn after the chat is in a tab, and sits at the end of the prompt so prompt caching is unaffected. `/environment` shows it in VS Code and the browser view.
+
 ## 1.77.0
 
 - The agent no longer ends a turn with a "Waiting for input" card when it can ask you directly. In VS Code, browser chat, Ask Agent and the CLI, `set_task_status` now offers only `completed`, `blocked` and `cancelled`, and the guidance tells the agent to use an `ask_user` card instead, which shows the options and its recommended answer. A waiting card had no next-step button and left you to type a reply from scratch. If the agent still tries to wait, the call is rejected with that guidance and the turn carries on. The Assistant, which has no question card, keeps `waiting_for_user`. Older waiting cards in saved chats still display.
