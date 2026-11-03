@@ -4033,7 +4033,7 @@ export function App({
               revealMinHeight={Math.max(
                 approvalPanelHeight + 10,
                 environmentPanelOpen ? 320 : 0,
-                elicitation || urlElicitation ? 240 : 0,
+                elicitation || urlElicitation ? 480 : 0,
               )}
             >
               <MessageQueuePanel
@@ -4452,7 +4452,10 @@ export function App({
                   }
                 />
               )}
-              {state.todos.length > 0 && <TodoPanel todos={state.todos} />}
+              {/* A pending MCP request takes over the Shelf; tasks return after. */}
+              {state.todos.length > 0 && !elicitation && !urlElicitation && (
+                <TodoPanel todos={state.todos} />
+              )}
 
               {elicitation && (
                 <McpFormElicitationCard

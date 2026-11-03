@@ -11112,11 +11112,17 @@ export function BrowserGatewayApp({
               <ChatActivityShelf
                 revealKey={
                   visibleApproval?.id ??
+                  pendingFormElicitation?.id ??
+                  (!isAskAgentSelected ? pendingUrlElicitation?.id : null) ??
                   (environmentPanelOpen ? "environment" : null)
                 }
                 revealMinHeight={Math.max(
                   approvalPanelHeight + 10,
                   environmentPanelOpen ? 320 : 0,
+                  pendingFormElicitation ||
+                    (!isAskAgentSelected && pendingUrlElicitation)
+                    ? 480
+                    : 0,
                 )}
               >
                 {!isAskAgentSelected && handoffDraft && !mobileReviewOpen && (
@@ -11471,9 +11477,13 @@ export function BrowserGatewayApp({
                       />
                     );
                   })()}
-                {!mobileReviewOpen && (foreground?.todos?.length ?? 0) > 0 && (
-                  <TodoPanel todos={foreground?.todos ?? []} />
-                )}
+                {/* A pending MCP request takes over the Shelf; tasks return after. */}
+                {!mobileReviewOpen &&
+                  !pendingFormElicitation &&
+                  !(!isAskAgentSelected && pendingUrlElicitation) &&
+                  (foreground?.todos?.length ?? 0) > 0 && (
+                    <TodoPanel todos={foreground?.todos ?? []} />
+                  )}
                 {pendingFormElicitation &&
                   !mobileReviewOpen &&
                   (() => {
