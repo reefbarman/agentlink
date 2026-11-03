@@ -17,6 +17,7 @@ describe("browser gateway helper lifecycle", () => {
       "transcript-work-summary-v1",
       "transcript-final-elapsed-v1",
       "transcript-final-result-v1",
+      "transcript-tool-progress-v1",
     ];
 
     expect(BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION).toBe(2);

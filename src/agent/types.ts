@@ -153,6 +153,14 @@ export type AgentEvent =
       partialJson: string;
     }
   | {
+      /** Live, display-only progress for a running tool call. */
+      type: "tool_progress";
+      toolCallId: string;
+      progress: number;
+      total?: number;
+      message?: string;
+    }
+  | {
       type: "tool_result";
       toolCallId: string;
       toolName: string;

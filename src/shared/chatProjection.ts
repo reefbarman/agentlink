@@ -1014,6 +1014,11 @@ export type AppAction =
     }
   | { type: "TOOL_INPUT_DELTA"; toolCallId: string; partialJson: string }
   | {
+      type: "TOOL_PROGRESS";
+      toolCallId: string;
+      progress: import("@agentlink/protocol/chat-transcript").ToolCallProgress;
+    }
+  | {
       type: "TOOL_COMPLETE";
       toolCallId: string;
       toolName: string;
@@ -2514,6 +2519,27 @@ export function reducer(state: AppState, action: AppAction): AppState {
       return { ...state, messages: tiMsgs };
     }
 
+    case "TOOL_PROGRESS": {
+      // Latest-wins progress for a running top-level tool call. Nested
+      // (Compose child) calls have no top-level block and are ignored.
+      for (let index = state.messages.length - 1; index >= 0; index--) {
+        const message = state.messages[index];
+        const blockIndex = message.blocks.findIndex(
+          (block) =>
+            block.type === "tool_call" && block.id === action.toolCallId,
+        );
+        if (blockIndex < 0) continue;
+        const block = message.blocks[blockIndex];
+        if (block.type !== "tool_call" || block.complete) return state;
+        const blocks = [...message.blocks];
+        blocks[blockIndex] = { ...block, progress: action.progress };
+        const messages = [...state.messages];
+        messages[index] = { ...message, blocks };
+        return { ...state, messages };
+      }
+      return state;
+    }
+
     case "TOOL_COMPLETE": {
       if (action.parentCallId) {
         const messages = state.messages.map((message) => ({
@@ -2641,6 +2667,8 @@ export function reducer(state: AppState, action: AppAction): AppState {
                 }
               : {}),
           };
+          // Live progress is transient and ends with the tool call.
+          delete (nextBase as { progress?: unknown }).progress;
           if (b.type === "skill_load" && isSkillResourceResult(action.result)) {
             return {
               type: "tool_call" as const,

@@ -1141,6 +1141,45 @@ describe("McpClientHub protocol correctness", () => {
     );
   });
 
+  it("forwards bounded server progress to the caller without failing the call", async () => {
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([config]);
+    const updates: unknown[] = [];
+    mocks.callTool.mockImplementationOnce(async (...args: unknown[]) => {
+      const options = args[2] as {
+        onprogress: (progress: unknown) => void;
+      };
+      options.onprogress({
+        progress: 3,
+        total: 10,
+        message: `  indexing\n${"x".repeat(600)}  `,
+      });
+      options.onprogress({ progress: Number.NaN, total: 0 });
+      return { content: [{ type: "text", text: "done" }] };
+    });
+
+    const result = await hub.callTool(
+      "fixture__read",
+      {},
+      {
+        onProgress: (progress) => {
+          updates.push(progress);
+          if (updates.length === 2) throw new Error("listener failed");
+        },
+      },
+    );
+
+    expect(result.content).toEqual([{ type: "text", text: "done" }]);
+    expect(updates).toEqual([
+      {
+        progress: 3,
+        total: 10,
+        message: `indexing ${"x".repeat(490)}…`,
+      },
+      { progress: 0 },
+    ]);
+  });
+
   it.each([undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
     "uses the SDK-compatible default timeout for invalid config value %s",
     async (timeout) => {

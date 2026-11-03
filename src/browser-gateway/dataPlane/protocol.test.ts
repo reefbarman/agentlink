@@ -1267,6 +1267,7 @@ describe("browser gateway owner protocol", () => {
           name: "read_file",
           complete: true,
           durationMs: 10,
+          progress: { progress: 2, total: 5, message: "Reading" },
         },
         {
           type: "skill_load",

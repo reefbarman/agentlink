@@ -20,6 +20,15 @@ export interface McpToolInvocationRequest {
   signal?: AbortSignal;
   /** Surface-owned evidence that ordinary approval checks completed. */
   authorizedByCaller?: boolean;
+  /** Receives the server's live progress notifications for this call. */
+  onProgress?: (progress: McpToolProgress) => void;
+}
+
+/** One MCP `notifications/progress` update for an in-flight request. */
+export interface McpToolProgress {
+  progress: number;
+  total?: number;
+  message?: string;
 }
 
 export interface McpToolSummary {

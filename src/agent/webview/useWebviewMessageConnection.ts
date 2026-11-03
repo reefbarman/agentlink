@@ -63,6 +63,7 @@ const SESSION_INDEPENDENT_EVENT_TYPES = new Set<ExtensionMessage["type"]>([
   "agentBgTextDelta",
   "agentBgToolStart",
   "agentBgToolInputDelta",
+  "agentBgToolProgress",
   "agentBgToolComplete",
   "agentBgApiRequest",
   "agentBgError",

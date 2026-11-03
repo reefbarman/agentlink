@@ -548,6 +548,10 @@ const declarationsPlugin = {
                       '"./browserGatewayTranscriptText.js"',
                       '"./browserGatewayTranscriptText.cjs"',
                     )
+                    .replaceAll(
+                      '"./chatTranscript.js"',
+                      '"./chatTranscript.cjs"',
+                    )
                     .replaceAll('"./modelCatalog.js"', '"./modelCatalog.cjs"'),
                 ),
             ),

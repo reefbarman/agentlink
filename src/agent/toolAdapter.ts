@@ -1597,6 +1597,7 @@ function createMcpToolInvocationProvider(
       return mcpHub.callTool(request.toolName, request.input, {
         signal: request.signal,
         authorizedByCaller: request.authorizedByCaller,
+        onProgress: request.onProgress,
       });
     },
   };
@@ -1888,6 +1889,8 @@ export interface ToolDispatchContext {
   pendingQuestionRecovery?: AgentToolExecutionRequest["context"]["pendingQuestionRecovery"];
   /** Current provider tool-call identity for exact UI/result correlation. */
   toolCallId?: string;
+  /** Publishes live progress for the current tool call to the UI. */
+  onToolProgress?: AgentToolExecutionRequest["context"]["onToolProgress"];
   /** Records the intended final marker for the current foreground turn. */
   onFinalStatus?: (marker: FinalMessageMarker) => void;
   /** Structured result contract requested by the parent of a background session. */
@@ -2564,6 +2567,7 @@ export function createAgentToolRuntime(
                     .trackerCtx as ToolDispatchContext["trackerCtx"],
                   toolAbortSignal: request.context.toolAbortSignal,
                   toolCallId: request.context.toolCallId,
+                  onToolProgress: request.context.onToolProgress,
                   getAdvertisedSkills: request.context.getAdvertisedSkills,
                   getSkillDiagnostics: request.context.getSkillDiagnostics,
                   getAdvertisedRules: request.context.getAdvertisedRules,
@@ -3806,12 +3810,20 @@ async function dispatchToolCallWithTrackedApprovals(
       audit(guardianSource ?? "unknown", "allow", "authorized");
     }
 
+    const progressToolCallId = ctx.toolCallId;
+    const onToolProgress = ctx.onToolProgress;
     const result = await mcpToolInvocationProvider
       .callTool({
         toolName,
         input,
         signal: toolAbortSignal,
         authorizedByCaller: true,
+        ...(progressToolCallId && onToolProgress
+          ? {
+              onProgress: (progress) =>
+                onToolProgress({ toolCallId: progressToolCallId, ...progress }),
+            }
+          : {}),
       })
       .catch(handleToolError);
     // Never accept authorization metadata supplied by an MCP server/provider.

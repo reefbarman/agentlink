@@ -546,6 +546,50 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     ).toBe(252_000);
   });
 
+  it("forwards running tool progress only to helpers that advertise it", () => {
+    const source = readSet();
+    source.foreground = {
+      ...source.foreground!,
+      messages: [
+        {
+          ...message("message-assistant", "assistant", "", 800),
+          blocks: [
+            {
+              type: "tool_call",
+              id: "call-1",
+              name: "linear__sync",
+              inputJson: "{}",
+              result: "",
+              complete: false,
+              progress: {
+                progress: 2,
+                total: 5,
+                message: "x".repeat(1_200),
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const legacy = makeAdapter(new ProjectionSources(source), {
+      dataPlaneFeatures: ["transcript-block-detail-v1"],
+    });
+    expect(
+      legacy.getCheckpoint().transcript.messages[0]?.blocks[0],
+    ).not.toHaveProperty("progress");
+
+    const adapter = makeAdapter(new ProjectionSources(source), {
+      dataPlaneFeatures: ["transcript-tool-progress-v1"],
+    });
+    expect(
+      adapter.getCheckpoint().transcript.messages[0]?.blocks[0],
+    ).toMatchObject({
+      type: "tool_call",
+      progress: { progress: 2, total: 5, message: "x".repeat(1_000) },
+    });
+  });
+
   it("forwards bounded web image attribution only to helpers that advertise it", () => {
     const source = readSet();
     source.foreground = {

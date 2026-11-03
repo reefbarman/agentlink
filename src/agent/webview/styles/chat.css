@@ -3039,6 +3039,45 @@ body.chat-activity-shelf-resizing * {
   font-weight: 600;
 }
 
+.tool-call-progress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 2px 12px 0 22px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.tool-call-progress-bar {
+  position: relative;
+  flex: 0 0 64px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35));
+}
+
+.tool-call-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--vscode-progressBar-background, #4ec9b0);
+  transition: width 0.2s ease-out;
+}
+
+.tool-call-progress-value {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-call-progress-message {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tool-auto-approval-badge {
   display: inline-flex;
   align-items: center;

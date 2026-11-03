@@ -3297,12 +3297,36 @@ export class AgentEngine {
             wakeDispatchEvents = undefined;
             wake?.();
           };
+          const settledToolCallIds = new Set<string>();
+          // Progress is display-only and latest-wins: drop it after the tool
+          // settles, and coalesce updates the consumer has not yet drained so
+          // a chatty server cannot flood the event stream.
+          const pushToolProgress = (
+            progress: Omit<
+              Extract<AgentEvent, { type: "tool_progress" }>,
+              "type"
+            >,
+          ) => {
+            if (settledToolCallIds.has(progress.toolCallId)) return;
+            const event: AgentEvent = { type: "tool_progress", ...progress };
+            const pendingIndex = dispatchEvents.findIndex(
+              (pending) =>
+                pending.type === "tool_progress" &&
+                pending.toolCallId === progress.toolCallId,
+            );
+            if (pendingIndex >= 0) {
+              dispatchEvents[pendingIndex] = event;
+              return;
+            }
+            pushDispatchEvent(event);
+          };
 
           const dispatchPromise = this.executeToolCalls(
             dispatchBlocks,
             signal,
             {
               ...sessionToolContext,
+              onToolProgress: pushToolProgress,
               onNestedToolStart: (nested) =>
                 pushDispatchEvent({
                   type: "tool_start",
@@ -3325,6 +3349,7 @@ export class AgentEngine {
             session,
             (tr) => {
               const toolUseBlock = toolUseBlocksById.get(tr.tool_use_id);
+              settledToolCallIds.add(tr.tool_use_id);
               pushDispatchEvent({
                 type: "tool_result" as const,
                 toolCallId: tr.tool_use_id,

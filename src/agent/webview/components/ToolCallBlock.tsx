@@ -194,6 +194,51 @@ function getGenericInputSummary(
   return url ? [{ type: "text", text: url.slice(0, 140) }] : [];
 }
 
+/** Percentage (0-100) when the progress carries a usable total. */
+export function toolProgressPercent(
+  progress: NonNullable<ToolCallData["progress"]>,
+): number | undefined {
+  if (progress.total === undefined || !(progress.total > 0)) return undefined;
+  const ratio = progress.progress / progress.total;
+  if (!Number.isFinite(ratio)) return undefined;
+  return Math.round(Math.min(1, Math.max(0, ratio)) * 100);
+}
+
+/** Live progress reported by a running tool, such as an MCP server. */
+function ToolCallProgressLine({
+  progress,
+}: {
+  progress: NonNullable<ToolCallData["progress"]>;
+}) {
+  const percent = toolProgressPercent(progress);
+  const label =
+    percent !== undefined ? `${percent}%` : String(progress.progress);
+  return (
+    <div class="tool-call-progress" role="status" aria-live="polite">
+      {percent !== undefined && (
+        <span
+          class="tool-call-progress-bar"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+        >
+          <span
+            class="tool-call-progress-fill"
+            style={{ width: `${percent}%` }}
+          />
+        </span>
+      )}
+      <span class="tool-call-progress-value">{label}</span>
+      {progress.message && (
+        <span class="tool-call-progress-message" title={progress.message}>
+          {progress.message}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /** Generate a smart one-liner summary for known tools. */
 function getToolSummary(
   name: string,
@@ -1067,6 +1112,10 @@ export function ToolCallBlock({
           <span class="tool-command-reason-label">Reason</span>
           <span>{commandReason}</span>
         </div>
+      )}
+
+      {!complete && projectedToolCall.progress && (
+        <ToolCallProgressLine progress={projectedToolCall.progress} />
       )}
 
       {expanded && (

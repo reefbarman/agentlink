@@ -177,6 +177,53 @@ describe("ToolCallBlock remote details", () => {
   });
 });
 
+describe("ToolCallBlock live progress", () => {
+  const running = {
+    type: "tool_call" as const,
+    id: "call-1",
+    name: "linear__sync",
+    inputJson: "{}",
+    result: "",
+    complete: false,
+  };
+
+  it("renders a bounded percentage bar and message while running", () => {
+    render(
+      <ToolCallBlock
+        toolCall={{
+          ...running,
+          progress: { progress: 3, total: 4, message: "Indexing files" },
+        }}
+      />,
+    );
+    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe(
+      "75",
+    );
+    expect(screen.getByText("75%")).toBeTruthy();
+    expect(screen.getByText("Indexing files")).toBeTruthy();
+  });
+
+  it("shows the raw value without a bar when the total is unknown, and hides progress once complete", () => {
+    const { rerender } = render(
+      <ToolCallBlock toolCall={{ ...running, progress: { progress: 7 } }} />,
+    );
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.getByText("7")).toBeTruthy();
+
+    rerender(
+      <ToolCallBlock
+        toolCall={{
+          ...running,
+          complete: true,
+          result: "ok",
+          progress: { progress: 7 },
+        }}
+      />,
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
 describe("ToolCallBlock result documents", () => {
   it("offers presented files as downloads", () => {
     render(

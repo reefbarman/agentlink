@@ -206,6 +206,7 @@ export function bgTranscriptStreamingOverride(
     case "agentBgTextDelta":
     case "agentBgToolStart":
     case "agentBgToolInputDelta":
+    case "agentBgToolProgress":
     case "agentBgToolComplete":
     case "agentBgInterjection":
       return { streaming: true };
@@ -333,6 +334,7 @@ const TRANSCRIPT_CONTENT_EVENT_TYPES = new Set<string>([
   "agentTextDelta",
   "agentToolStart",
   "agentToolInputDelta",
+  "agentToolProgress",
   "agentToolComplete",
   "agentDone",
   "agentError",
@@ -1106,6 +1108,16 @@ export function App({
         case "agentToolInputDelta":
           if (dropIfNotStreaming()) break;
           controls.appendToolInputDelta(msg.toolCallId, msg.partialJson);
+          break;
+        case "agentToolProgress":
+          if (dropIfNotStreaming()) break;
+          // Buffered input deltas for this row must land before its progress.
+          flushDeltasNow();
+          dispatch({
+            type: "TOOL_PROGRESS",
+            toolCallId: msg.toolCallId,
+            progress: msg.progress,
+          });
           break;
         case "agentToolComplete":
           if (dropIfNotStreaming()) break;
@@ -2008,6 +2020,20 @@ export function App({
                 type: "TOOL_INPUT_DELTA",
                 toolCallId: msg.toolCallId,
                 partialJson: msg.partialJson,
+              },
+              bgTranscriptStreamingOverride(msg.type),
+            ),
+          );
+          break;
+        case "agentBgToolProgress":
+          setTranscriptView((prev) =>
+            reduceOpenTranscript(
+              prev,
+              msg.sessionId,
+              {
+                type: "TOOL_PROGRESS",
+                toolCallId: msg.toolCallId,
+                progress: msg.progress,
               },
               bgTranscriptStreamingOverride(msg.type),
             ),

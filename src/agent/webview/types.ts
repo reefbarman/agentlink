@@ -31,6 +31,7 @@ import type {
   ChatMessage as ProtocolChatMessage,
   ContentBlock as ProtocolContentBlock,
   TodoItem as ProtocolTodoItem,
+  ToolCallProgress,
 } from "@agentlink/protocol/chat-transcript";
 import type {
   StructuredQuestionRequest,
@@ -177,6 +178,12 @@ export type ExtensionMessage =
       sessionId: string;
       toolCallId: string;
       partialJson: string;
+    }
+  | {
+      type: "agentToolProgress";
+      sessionId: string;
+      toolCallId: string;
+      progress: ToolCallProgress;
     }
   | {
       type: "agentToolComplete";
@@ -643,6 +650,12 @@ export type ExtensionMessage =
       sessionId: string;
       toolCallId: string;
       partialJson: string;
+    }
+  | {
+      type: "agentBgToolProgress";
+      sessionId: string;
+      toolCallId: string;
+      progress: ToolCallProgress;
     }
   | {
       type: "agentBgToolComplete";

@@ -164,6 +164,16 @@ export interface AgentToolExecutionContext {
   hookCwd?: string;
   /** Current tool-call identity, used as the parent for nested activity. */
   toolCallId?: string;
+  /**
+   * Publishes live progress (for example MCP `notifications/progress`) for a
+   * running tool call. Display-only: never alters the result or model history.
+   */
+  onToolProgress?: (event: {
+    toolCallId: string;
+    progress: number;
+    total?: number;
+    message?: string;
+  }) => void;
   /** Parent tool call for nested activity. Undefined for model-emitted calls. */
   parentCallId?: string;
   /** Immutable request-boundary gate for Compose execution. */

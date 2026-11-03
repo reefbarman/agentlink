@@ -39,6 +39,17 @@ export interface RemoteFinalResultDetail {
   contentRevision: number;
 }
 
+/**
+ * Latest live progress reported by a running tool (for example an MCP
+ * `notifications/progress`). Transient UI state: cleared when the tool
+ * completes and never sent to the model. `message` is untrusted server text.
+ */
+export interface ToolCallProgress {
+  progress: number;
+  total?: number;
+  message?: string;
+}
+
 /** Ordered, serializable content projected into an assistant transcript message. */
 export type ContentBlock =
   | { type: "thinking"; id: string; text: string; complete: boolean }
@@ -64,6 +75,7 @@ export type ContentBlock =
       startedAt?: number;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
       composeTrace?: ComposeTrace;
+      progress?: ToolCallProgress;
       remoteDetail?: RemoteTranscriptBlockDetail;
     }
   | {

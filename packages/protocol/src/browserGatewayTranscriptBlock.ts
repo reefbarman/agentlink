@@ -1,6 +1,7 @@
 import type { BackgroundResultState } from "./backgroundResult.js";
 import type { BrowserGatewayTranscriptText } from "./browserGatewayTranscriptText.js";
 import type { CoreReasoningEffort } from "./modelCatalog.js";
+import type { ToolCallProgress } from "./chatTranscript.js";
 
 export interface BrowserGatewayTranscriptBlockDetailSummary {
   contentRevision: number;
@@ -29,6 +30,11 @@ export type BrowserGatewayTranscriptBlock =
       complete: boolean;
       durationMs?: number;
       startedAt?: number;
+      /**
+       * Live progress of a running tool. Sent only to helpers advertising
+       * `transcript-tool-progress-v1`, so older strict validators never see it.
+       */
+      progress?: ToolCallProgress;
       detail?: BrowserGatewayTranscriptBlockDetailSummary;
     }
   | {

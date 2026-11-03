@@ -528,6 +528,39 @@ function isCallToolResult(value: unknown): value is CallToolResult {
   );
 }
 
+const MAX_MCP_PROGRESS_MESSAGE_CHARS = 500;
+
+/** Bound untrusted server progress before it crosses into host UI. */
+export function normalizeMcpProgress(progress: {
+  progress: number;
+  total?: number;
+  message?: string;
+}): { progress: number; total?: number; message?: string } {
+  const value = Number.isFinite(progress.progress) ? progress.progress : 0;
+  const total =
+    typeof progress.total === "number" &&
+    Number.isFinite(progress.total) &&
+    progress.total > 0
+      ? progress.total
+      : undefined;
+  const message =
+    typeof progress.message === "string"
+      ? progress.message.replace(/\s+/g, " ").trim()
+      : "";
+  return {
+    progress: value,
+    ...(total !== undefined ? { total } : {}),
+    ...(message
+      ? {
+          message:
+            message.length > MAX_MCP_PROGRESS_MESSAGE_CHARS
+              ? `${message.slice(0, MAX_MCP_PROGRESS_MESSAGE_CHARS - 1)}…`
+              : message,
+        }
+      : {}),
+  };
+}
+
 function unknownCompletionResult(
   error: string,
   server: string,
@@ -2911,6 +2944,12 @@ export class McpClientHub {
     options?: Pick<RequestOptions, "signal"> & {
       readonly authorizedByCaller?: boolean;
       readonly requestContext?: Readonly<McpHubRequestContext>;
+      /** Receives the server's `notifications/progress` for this call. */
+      readonly onProgress?: (progress: {
+        progress: number;
+        total?: number;
+        message?: string;
+      }) => void;
     },
   ): Promise<ToolResult> {
     const parsed = parseMcpToolName(prefixedName);
@@ -3019,7 +3058,17 @@ export class McpClientHub {
           {
             signal: options?.signal,
             timeout,
-            onprogress: () => {},
+            // Requesting progress also lets a live server extend the timeout.
+            onprogress: (progress) => {
+              if (!options?.onProgress) return;
+              try {
+                options.onProgress(normalizeMcpProgress(progress));
+              } catch (error) {
+                this.log(
+                  `[mcp:${serverName}] progress listener failed: ${this.summarizeUnknown(error)}`,
+                );
+              }
+            },
             resetTimeoutOnProgress: true,
           },
         ),

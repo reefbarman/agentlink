@@ -1949,7 +1949,7 @@ describe("protocol package boundary", () => {
       );
       const normalizedSource = source.replace(/\s+/g, " ");
       expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/browserGatewayTranscriptBlock\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayTranscriptBlock\.d\.cts", content \.replaceAll\(\s*'"\.\/backgroundResult\.js"'\s*,\s*'"\.\/backgroundResult\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayTranscriptText\.js"'\s*,\s*'"\.\/browserGatewayTranscriptText\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/modelCatalog\.js"'\s*,\s*'"\.\/modelCatalog\.cjs"'\s*,?\s*\), \), \)/,
+        /readFile\("dist\/browserGatewayTranscriptBlock\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayTranscriptBlock\.d\.cts", content \.replaceAll\(\s*'"\.\/backgroundResult\.js"'\s*,\s*'"\.\/backgroundResult\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayTranscriptText\.js"'\s*,\s*'"\.\/browserGatewayTranscriptText\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/chatTranscript\.js"'\s*,\s*'"\.\/chatTranscript\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/modelCatalog\.js"'\s*,\s*'"\.\/modelCatalog\.cjs"'\s*,?\s*\), \), \)/,
       );
     }
 
@@ -1964,6 +1964,7 @@ describe("protocol package boundary", () => {
     for (const dependency of [
       "backgroundResult",
       "browserGatewayTranscriptText",
+      "chatTranscript",
       "modelCatalog",
     ]) {
       expect(declaration).toContain(`from "./${dependency}.cjs";`);

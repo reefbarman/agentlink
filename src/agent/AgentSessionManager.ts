@@ -12485,6 +12485,7 @@ export class AgentSessionManager {
         phase = "responding";
         break;
       case "tool_input_delta":
+      case "tool_progress":
         phase = "executing_tool";
         break;
       case "warning":

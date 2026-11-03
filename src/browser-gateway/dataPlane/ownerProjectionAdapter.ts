@@ -2,6 +2,7 @@ import type {
   ChatMessage,
   ContentBlock,
   TodoItem,
+  ToolCallProgress,
 } from "@agentlink/protocol/chat-transcript";
 import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import { boundedImageAttribution } from "./imageAttribution.js";
@@ -112,6 +113,8 @@ interface ProjectionContext {
   readonly finalResults?: boolean;
   /** Receiver accepts the final marker's ask duration. */
   readonly finalElapsed?: boolean;
+  /** Receiver accepts live progress on running tool-call blocks. */
+  readonly toolProgress?: boolean;
 }
 
 interface ProjectedReadSet {
@@ -161,6 +164,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
   private readonly workSummaries: boolean;
   private readonly finalResults: boolean;
   private readonly finalElapsed: boolean;
+  private readonly toolProgress: boolean;
   private historySessionId: string | null = null;
   private readonly historyMessages = new Map<string, ChatMessage>();
   private demanded = false;
@@ -212,6 +216,9 @@ export class BrowserGatewayOwnerProjectionAdapter {
         false);
     this.finalElapsed =
       options.dataPlaneFeatures?.includes("transcript-final-elapsed-v1") ??
+      false;
+    this.toolProgress =
+      options.dataPlaneFeatures?.includes("transcript-tool-progress-v1") ??
       false;
     this.sourceSubscription = sources.onDidChange((source) => {
       this.handleSourceChange(source);
@@ -353,6 +360,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
         workSummaries: this.workSummaries,
         finalResults: this.finalResults,
         finalElapsed: this.finalElapsed,
+        toolProgress: this.toolProgress,
       }),
     );
     const referencedDetails = detailsForMessages(
@@ -675,6 +683,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       workSummaries: this.workSummaries,
       finalResults: this.finalResults,
       finalElapsed: this.finalElapsed,
+      toolProgress: this.toolProgress,
     };
     const state = projectReadSet(readSet, context, this.commandCapabilities);
     const referencedDetails = [...details.values()];
@@ -702,6 +711,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       workSummaries: this.workSummaries,
       finalResults: this.finalResults,
       finalElapsed: this.finalElapsed,
+      toolProgress: this.toolProgress,
     });
     const referencedDetails = detailsForMessages(
       [...details.values()],
@@ -1602,6 +1612,9 @@ function projectBlock(
         ...(block.startedAt !== undefined
           ? { startedAt: safeInteger(block.startedAt) }
           : {}),
+        ...(context.toolProgress && block.progress && !block.complete
+          ? { progress: boundedToolProgress(block.progress) }
+          : {}),
       };
     case "skill_load":
       return {
@@ -2016,6 +2029,17 @@ function projectCapabilities(
 
 function bounded(value: string, maximumLength: number): string {
   return value.slice(0, maximumLength);
+}
+
+function boundedToolProgress(progress: ToolCallProgress): ToolCallProgress {
+  const finite = (value: number) => (Number.isFinite(value) ? value : 0);
+  return {
+    progress: finite(progress.progress),
+    ...(progress.total !== undefined && Number.isFinite(progress.total)
+      ? { total: progress.total }
+      : {}),
+    ...(progress.message ? { message: bounded(progress.message, 1_000) } : {}),
+  };
 }
 
 function finiteNonNegative(value: number): number {

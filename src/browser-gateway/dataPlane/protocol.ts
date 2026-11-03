@@ -1425,6 +1425,21 @@ function parseContextHealth(
   };
 }
 
+function parseToolCallProgress(
+  value: unknown,
+  path: string,
+): { progress: number; total?: number; message?: string } {
+  const object = strictRecord(value, path, ["progress", "total", "message"]);
+  const message = optionalString(object, "message", path, 1_000);
+  return {
+    progress: finiteNumber(object.progress, `${path}.progress`),
+    ...(object.total !== undefined
+      ? { total: finiteNumber(object.total, `${path}.total`) }
+      : {}),
+    ...(message ? { message } : {}),
+  };
+}
+
 function parseRevertRecoveryNotice(
   value: unknown,
   path: string,
@@ -1975,10 +1990,15 @@ function parseTranscriptBlock(
         "complete",
         "durationMs",
         "startedAt",
+        "progress",
         "detail",
       ]);
       const durationMs = optionalNonNegativeInteger(object, "durationMs", path);
       const startedAt = optionalNonNegativeInteger(object, "startedAt", path);
+      const progress =
+        object.progress === undefined
+          ? undefined
+          : parseToolCallProgress(object.progress, `${path}.progress`);
       const detail = parseBlockDetailSummary(object.detail, `${path}.detail`);
       return {
         type: "tool_call",
@@ -1992,6 +2012,7 @@ function parseTranscriptBlock(
         complete: booleanValue(object.complete, `${path}.complete`),
         ...(durationMs !== undefined ? { durationMs } : {}),
         ...(startedAt !== undefined ? { startedAt } : {}),
+        ...(progress ? { progress } : {}),
         ...(detail ? { detail } : {}),
       };
     }

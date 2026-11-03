@@ -2582,6 +2582,87 @@ describe("AgentEngine", () => {
       );
     });
 
+    it("emits coalesced live tool progress before the tool result", async () => {
+      let streamCall = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        streamCall += 1;
+        if (streamCall === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "call_mcp",
+                name: "linear__sync",
+                input: {},
+              },
+            ],
+          };
+        } else {
+          yield {
+            type: "content_blocks",
+            blocks: [{ type: "text", text: "done" }],
+          };
+        }
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("sync");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const executeTool = vi.fn(
+        async (request: {
+          context: {
+            toolCallId?: string;
+            onToolProgress?: (event: {
+              toolCallId: string;
+              progress: number;
+              total?: number;
+              message?: string;
+            }) => void;
+          };
+        }) => {
+          const report = request.context.onToolProgress!;
+          const toolCallId = request.context.toolCallId!;
+          report({ toolCallId, progress: 1, total: 3 });
+          report({ toolCallId, progress: 2, total: 3 });
+          report({ toolCallId, progress: 3, total: 3, message: "almost" });
+          return { content: [{ type: "text" as const, text: "ok" }] };
+        },
+      );
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "linear__sync",
+            description: "sync",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+        isParallelSafe: () => false,
+        executeTool,
+      });
+
+      const events = await collectEvents(engine.run(session));
+      const toolEvents = events.filter(
+        (event) =>
+          event.type === "tool_progress" || event.type === "tool_result",
+      );
+
+      expect(toolEvents.map((event) => event.type)).toEqual([
+        "tool_progress",
+        "tool_result",
+      ]);
+      expect(toolEvents[0]).toEqual({
+        type: "tool_progress",
+        toolCallId: "call_mcp",
+        progress: 3,
+        total: 3,
+        message: "almost",
+      });
+    });
+
     it("does not emit completed tool events after abort", async () => {
       const provider = makeMockProvider();
       provider.stream = async function* () {

@@ -26,6 +26,7 @@ it("pins the complete browser gateway transcript-block contract", () => {
         complete: boolean;
         durationMs?: number;
         startedAt?: number;
+        progress?: { progress: number; total?: number; message?: string };
         detail?: {
           contentRevision: number;
           status?: "error" | "interrupted";

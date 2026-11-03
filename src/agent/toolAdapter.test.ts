@@ -8639,6 +8639,62 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  it("delivers MCP server progress from the hub to the executing tool call", async () => {
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List issues",
+          input_schema: { type: "object" },
+        },
+      ]),
+      getServerConfig: vi.fn().mockReturnValue({ toolPolicy: "allow" }),
+      isToolReadOnly: vi.fn().mockReturnValue(false),
+      callTool: vi.fn(
+        async (
+          _name: string,
+          _input: Record<string, unknown>,
+          options?: { onProgress?: (progress: unknown) => void },
+        ) => {
+          options?.onProgress?.({
+            progress: 2,
+            total: 5,
+            message: "Syncing distinctive-progress-marker",
+          });
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+      ),
+    };
+    const onToolProgress = vi.fn();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      approvalManager: {
+        ...mockCtx.approvalManager,
+        isMcpApproved: vi.fn().mockReturnValue(true),
+      } as any,
+      mcpHub: mcpHub as any,
+    });
+
+    await runtime.executeTool({
+      name: "linear__list_issues",
+      input: { query: "bug" },
+      context: {
+        sessionId: "test",
+        mode: "code",
+        toolCallId: "call-progress-1",
+        onToolProgress,
+      },
+    });
+
+    expect(mcpHub.callTool).toHaveBeenCalledTimes(1);
+    expect(onToolProgress).toHaveBeenCalledWith({
+      toolCallId: "call-progress-1",
+      progress: 2,
+      total: 5,
+      message: "Syncing distinctive-progress-marker",
+    });
+  });
+
   it("uses invocation provider for call_mcp_tool target lookup and execution", async () => {
     const mcpHub = {
       getToolDefs: vi.fn(),

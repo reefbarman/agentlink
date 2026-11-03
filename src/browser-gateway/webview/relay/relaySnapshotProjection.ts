@@ -528,6 +528,7 @@ function projectBlock(
           ...(block.startedAt !== undefined
             ? { startedAt: block.startedAt }
             : {}),
+          ...(block.progress ? { progress: block.progress } : {}),
         },
       ];
     case "skill_load":

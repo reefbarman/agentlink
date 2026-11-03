@@ -42,7 +42,10 @@ import type {
   WorktreeSetupConfig,
 } from "./webview/types.js";
 import type { ChatSessionHistorySummary as WebviewSessionSummary } from "@agentlink/protocol/chat-session-history";
-import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
+import type {
+  ChatMessage,
+  ToolCallProgress,
+} from "@agentlink/protocol/chat-transcript";
 import {
   parseExplicitSkillSelection,
   projectCoreModelCatalogToChatModels,
@@ -523,6 +526,12 @@ export type ExtensionToWebview =
       partialJson: string;
     }
   | {
+      type: "agentToolProgress";
+      sessionId: string;
+      toolCallId: string;
+      progress: ToolCallProgress;
+    }
+  | {
       type: "agentToolComplete";
       sessionId: string;
       toolCallId: string;
@@ -912,6 +921,12 @@ export type ExtensionToWebview =
       sessionId: string;
       toolCallId: string;
       partialJson: string;
+    }
+  | {
+      type: "agentBgToolProgress";
+      sessionId: string;
+      toolCallId: string;
+      progress: ToolCallProgress;
     }
   | {
       type: "agentBgToolComplete";
@@ -11313,6 +11328,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       extMsg.type === "agentBgTextDelta" ||
       extMsg.type === "agentBgToolStart" ||
       extMsg.type === "agentBgToolInputDelta" ||
+      extMsg.type === "agentBgToolProgress" ||
       extMsg.type === "agentBgToolComplete" ||
       extMsg.type === "agentBgApiRequest" ||
       extMsg.type === "agentBgError" ||
@@ -11397,6 +11413,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           type: "TOOL_INPUT_DELTA",
           toolCallId: extMsg.toolCallId,
           partialJson: extMsg.partialJson,
+        });
+        break;
+
+      case "agentToolProgress":
+        if (dropIfNotStreaming()) break;
+        this.applyProjectedAction({
+          type: "TOOL_PROGRESS",
+          toolCallId: extMsg.toolCallId,
+          progress: extMsg.progress,
         });
         break;
 
@@ -11926,6 +11951,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           event.toolCallId,
           event.partialJson,
         );
+        break;
+
+      case "tool_progress":
+        // Keep ordering with buffered input deltas for the same tool row.
+        this.deltaBufferFlusher.flushNow();
+        this.postMessage({
+          type: isBackground ? "agentBgToolProgress" : "agentToolProgress",
+          sessionId,
+          toolCallId: event.toolCallId,
+          progress: {
+            progress: event.progress,
+            ...(event.total !== undefined ? { total: event.total } : {}),
+            ...(event.message !== undefined ? { message: event.message } : {}),
+          },
+        });
         break;
 
       case "checkpoint_created":

@@ -712,6 +712,55 @@ describe("assistant image chat projection", () => {
 });
 
 describe("tool lifecycle projection", () => {
+  it("shows latest live progress on a running tool and clears it on completion", () => {
+    let state = reducer(initialState, {
+      type: "TOOL_START",
+      toolCallId: "mcp-sync",
+      toolName: "linear__sync",
+      input: {},
+    });
+    state = reducer(state, {
+      type: "TOOL_PROGRESS",
+      toolCallId: "mcp-sync",
+      progress: { progress: 1, total: 4 },
+    });
+    state = reducer(state, {
+      type: "TOOL_PROGRESS",
+      toolCallId: "mcp-sync",
+      progress: { progress: 3, total: 4, message: "Indexing" },
+    });
+    expect(state.messages.at(-1)?.blocks[0]).toMatchObject({
+      id: "mcp-sync",
+      complete: false,
+      progress: { progress: 3, total: 4, message: "Indexing" },
+    });
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "mcp-sync",
+      toolName: "linear__sync",
+      result: "ok",
+      durationMs: 5,
+    });
+    const completed = state.messages.at(-1)?.blocks[0];
+    expect(completed).toMatchObject({ complete: true });
+    expect(completed).not.toHaveProperty("progress");
+
+    const late = reducer(state, {
+      type: "TOOL_PROGRESS",
+      toolCallId: "mcp-sync",
+      progress: { progress: 4, total: 4 },
+    });
+    expect(late).toBe(state);
+    expect(
+      reducer(state, {
+        type: "TOOL_PROGRESS",
+        toolCallId: "unknown",
+        progress: { progress: 1 },
+      }),
+    ).toBe(state);
+  });
+
   it("refreshes a tool card with a non-empty completion title", () => {
     let state = reducer(initialState, {
       type: "TOOL_START",
