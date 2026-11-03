@@ -311,6 +311,30 @@ describe("McpClientHub URL elicitation", () => {
     expect(result).toEqual({ action: "accept" });
   });
 
+  it("shows 2026-07-28 URL requests that carry no elicitationId", async () => {
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([stdioConfig]);
+    const elicitationHandler = mocks.requestHandlers[0];
+
+    const projected = new Promise<{ elicitationId: string }>((resolve) => {
+      hub.onUrlElicitation = (request, respond) => {
+        resolve(request);
+        respond("decline");
+      };
+    });
+
+    const result = await elicitationHandler!({
+      params: {
+        mode: "url",
+        message: "Open this page.",
+        url: "https://example.com/step",
+      },
+    });
+
+    expect((await projected).elicitationId).toMatch(/^local_/);
+    expect(result).toEqual({ action: "decline" });
+  });
+
   it("declines malformed or unsafe URL-mode elicitation requests", async () => {
     const hub = new McpClientHub(new FakeMemento());
     const onUrlElicitation = vi.fn();
@@ -337,6 +361,17 @@ describe("McpClientHub URL elicitation", () => {
           mode: "url",
           url: "https://example.com/missing-message",
           elicitationId: "missing-message",
+        },
+      }),
+    ).resolves.toEqual({ action: "decline" });
+
+    await expect(
+      elicitationHandler!({
+        params: {
+          mode: "url",
+          message: "Bad id.",
+          url: "https://example.com/bad-id",
+          elicitationId: 42,
         },
       }),
     ).resolves.toEqual({ action: "decline" });

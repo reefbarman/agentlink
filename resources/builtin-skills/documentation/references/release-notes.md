@@ -5,6 +5,7 @@
 ## 1.76.0
 
 - MCP requests for input (forms and links to open) now appear as a card in the Chat Activity Shelf in VS Code and the browser view, instead of a pop-up over the chat. The card adds a separate **Decline** action next to **Cancel**, so a server can tell "I won't provide this" apart from "dismissed"; before, VS Code forms could only submit or cancel. Fields the server did not title get readable labels (`favouriteColour` becomes "Favourite colour") and optional fields are marked. After you answer, the tool row shows what the server asked and whether you submitted, declined or cancelled, and expanding it lists your answers. The model does not see this record. Progress without a total no longer shows the count twice ("11 step 11 of 20"): the server's message is shown alone.
+- Fixes MCP servers on protocol version 2026-07-28 never getting a link (URL) prompt shown. That version's link requests have no `elicitationId`, which AgentLink treated as malformed and silently declined, so the server saw "declined" without you being asked.
 
 ## 1.75.0
 

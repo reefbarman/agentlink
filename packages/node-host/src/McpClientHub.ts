@@ -1870,17 +1870,29 @@ export class McpClientHub {
           if (!this.onUrlElicitation) {
             return { action: "decline" as const };
           }
+          // 2026-07-28 URL requests carry no `elicitationId` (completion is
+          // never notified on that revision), so only the 2025-era shape
+          // supplies one. A missing ID gets a local one for correlation.
+          const rawElicitationId = (params as { elicitationId?: unknown })
+            .elicitationId;
           if (
             typeof params.url !== "string" ||
             typeof params.message !== "string" ||
-            typeof params.elicitationId !== "string"
+            (rawElicitationId !== undefined &&
+              typeof rawElicitationId !== "string")
           ) {
             this.log(
               `[mcp:${cfg.name}] declined malformed URL elicitation request`,
             );
             return { action: "decline" as const };
           }
-          const urlParams = params as ElicitRequestURLParams;
+          const urlParams = {
+            ...params,
+            elicitationId:
+              typeof rawElicitationId === "string"
+                ? rawElicitationId
+                : `local_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+          } as ElicitRequestURLParams;
           const validated = validateMcpElicitationUrl(urlParams.url);
           if (!validated.ok) {
             this.log(
