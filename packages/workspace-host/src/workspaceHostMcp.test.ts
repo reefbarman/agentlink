@@ -10,7 +10,24 @@ const mocks = vi.hoisted(() => ({
   connects: 0,
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
+  StreamableHTTPClientTransport: class MockTransport {
+    readonly fetch: typeof globalThis.fetch;
+    readonly url: URL;
+    constructor(url: URL, options: { fetch: typeof globalThis.fetch }) {
+      this.url = url;
+      this.fetch = options.fetch;
+    }
+  },
+  SSEClientTransport: class MockTransport {
+    readonly fetch: typeof globalThis.fetch;
+    readonly url: URL;
+    constructor(url: URL, options: { fetch: typeof globalThis.fetch }) {
+      this.url = url;
+      this.fetch = options.fetch;
+    }
+  },
   Client: class MockClient {
     setRequestHandler() {}
     setNotificationHandler() {}
@@ -42,33 +59,18 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
     async listPrompts() {
       return { prompts: [] };
     }
+    // Catalog walks fetch pages as raw list requests.
+    async request(request: { method: string }) {
+      if (request.method === "tools/list") return this.listTools();
+      if (request.method === "resources/list") return this.listResources();
+      if (request.method === "prompts/list") return this.listPrompts();
+      throw new Error(`unexpected request ${request.method}`);
+    }
     async callTool(request: { name: string; arguments: unknown }) {
       mocks.calls.push({ name: request.name, input: request.arguments });
       return { content: [{ type: "text", text: "fixture MCP result" }] };
     }
     async close() {}
-  },
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: class MockTransport {
-    readonly fetch: typeof globalThis.fetch;
-    readonly url: URL;
-    constructor(url: URL, options: { fetch: typeof globalThis.fetch }) {
-      this.url = url;
-      this.fetch = options.fetch;
-    }
-  },
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: class MockTransport {
-    readonly fetch: typeof globalThis.fetch;
-    readonly url: URL;
-    constructor(url: URL, options: { fetch: typeof globalThis.fetch }) {
-      this.url = url;
-      this.fetch = options.fetch;
-    }
   },
 }));
 

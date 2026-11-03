@@ -486,7 +486,7 @@ export function createWorkspaceSharedMcpTools(
               },
               createSchemaValidator: async () => {
                 const { AjvJsonSchemaValidator } =
-                  await import("@modelcontextprotocol/sdk/validation/ajv");
+                  await import("@modelcontextprotocol/client/validators/ajv");
                 return new AjvJsonSchemaValidator();
               },
             },

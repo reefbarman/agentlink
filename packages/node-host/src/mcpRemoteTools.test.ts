@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
+import { UnauthorizedError } from "@modelcontextprotocol/client";
 import { createNodeHostMcpRemoteTools } from "./mcpRemoteTools.js";
 
 const mocks = vi.hoisted(() => ({
@@ -21,7 +21,6 @@ const mocks = vi.hoisted(() => ({
   callTool: vi.fn<
     (
       params: unknown,
-      metadata: unknown,
       options: unknown,
     ) => Promise<{ content: Array<{ type: "text"; text: string }> }>
   >(async () => ({ content: [{ type: "text", text: "found" }] })),
@@ -32,7 +31,34 @@ const mocks = vi.hoisted(() => ({
   connectWithRequest: false,
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
+  SSEClientTransport: class MockSseTransport {
+    fetch: typeof globalThis.fetch;
+    url: URL;
+    constructor(
+      url: URL,
+      options: { fetch: typeof globalThis.fetch; authProvider?: unknown },
+    ) {
+      this.fetch = options.fetch;
+      this.url = url;
+      mocks.fetches.push(options.fetch);
+      mocks.authProviders.push(options.authProvider);
+    }
+  },
+  StreamableHTTPClientTransport: class MockHttpTransport {
+    fetch: typeof globalThis.fetch;
+    url: URL;
+    constructor(
+      url: URL,
+      options: { fetch: typeof globalThis.fetch; authProvider?: unknown },
+    ) {
+      this.fetch = options.fetch;
+      this.url = url;
+      mocks.fetches.push(options.fetch);
+      mocks.authProviders.push(options.authProvider);
+    }
+  },
   Client: class MockClient {
     async connect(transport: {
       fetch?: typeof globalThis.fetch;
@@ -55,43 +81,16 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
     async listTools() {
       return mocks.listTools();
     }
-    async callTool(params: unknown, metadata: unknown, options: unknown) {
-      return mocks.callTool(params, metadata, options);
+    // Discovery fetches one raw tools/list page.
+    async request(request: { method: string }) {
+      if (request.method === "tools/list") return this.listTools();
+      throw new Error(`unexpected request ${request.method}`);
+    }
+    async callTool(params: unknown, options: unknown) {
+      return mocks.callTool(params, options);
     }
     async close() {
       return mocks.close();
-    }
-  },
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: class MockSseTransport {
-    fetch: typeof globalThis.fetch;
-    url: URL;
-    constructor(
-      url: URL,
-      options: { fetch: typeof globalThis.fetch; authProvider?: unknown },
-    ) {
-      this.fetch = options.fetch;
-      this.url = url;
-      mocks.fetches.push(options.fetch);
-      mocks.authProviders.push(options.authProvider);
-    }
-  },
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: class MockHttpTransport {
-    fetch: typeof globalThis.fetch;
-    url: URL;
-    constructor(
-      url: URL,
-      options: { fetch: typeof globalThis.fetch; authProvider?: unknown },
-    ) {
-      this.fetch = options.fetch;
-      this.url = url;
-      mocks.fetches.push(options.fetch);
-      mocks.authProviders.push(options.authProvider);
     }
   },
 }));
@@ -185,10 +184,9 @@ describe("node host remote MCP tools", () => {
     });
     expect(mocks.callTool).toHaveBeenCalledWith(
       { name: "search", arguments: { query: "recent" } },
-      undefined,
       expect.objectContaining({ timeout: 60_000 }),
     );
-    const callOptions = mocks.callTool.mock.calls[0]?.[2];
+    const callOptions = mocks.callTool.mock.calls[0]?.[1];
     expect(callOptions).not.toHaveProperty("onprogress");
     expect(callOptions).not.toHaveProperty("resetTimeoutOnProgress");
     expect(authorizeNetwork).toHaveBeenCalledTimes(2);

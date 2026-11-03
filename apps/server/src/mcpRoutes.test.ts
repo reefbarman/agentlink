@@ -4,9 +4,7 @@ import { createMcpRoutes, renderMcpReturnPage } from "./mcpRoutes.js";
 import type { AddressInfo } from "node:net";
 import type { AssistantServerAuth } from "./assistantServer.js";
 import { HttpError } from "./httpJson.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { InMemoryTransport, Server } from "@modelcontextprotocol/server";
 import { promises as fs } from "node:fs";
 import http from "node:http";
 import { openMcpRegistry } from "./mcpRegistry.js";
@@ -55,7 +53,7 @@ async function setup() {
         { name: "fake", version: "1.0.0" },
         { capabilities: { tools: {} } },
       );
-      server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      server.setRequestHandler("tools/list", async () => ({
         tools: [
           {
             name: "search",

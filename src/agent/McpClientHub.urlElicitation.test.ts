@@ -26,7 +26,14 @@ vi.mock("vscode", async () => {
   return actual;
 });
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
+  SSEClientTransport: class MockSSEClientTransport {
+    onclose?: () => void;
+  },
+  StreamableHTTPClientTransport: class MockStreamableHttpClientTransport {
+    onclose?: () => void;
+  },
   Client: class MockClient {
     async connect(): Promise<void> {
       return mocks.connect();
@@ -46,6 +53,14 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
 
     async listPrompts(): Promise<{ prompts: unknown[] }> {
       return mocks.listPrompts();
+    }
+
+    // The hub fetches catalog pages as raw list requests.
+    async request(request: { method: string }): Promise<unknown> {
+      if (request.method === "tools/list") return this.listTools();
+      if (request.method === "resources/list") return this.listResources();
+      if (request.method === "prompts/list") return this.listPrompts();
+      throw new Error(`unexpected request ${request.method}`);
     }
 
     setRequestHandler(
@@ -76,20 +91,8 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   },
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+vi.mock("@modelcontextprotocol/client/stdio", () => ({
   StdioClientTransport: class MockStdioClientTransport {
-    onclose?: () => void;
-  },
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: class MockSSEClientTransport {
-    onclose?: () => void;
-  },
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: class MockStreamableHttpClientTransport {
     onclose?: () => void;
   },
 }));

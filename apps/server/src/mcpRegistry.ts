@@ -10,16 +10,17 @@ import path from "node:path";
 import {
   auth,
   UnauthorizedError,
-  type OAuthClientProvider,
-} from "@modelcontextprotocol/sdk/client/auth.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+  Client,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
 import type {
+  OAuthClientProvider,
   OAuthClientInformationMixed,
+  OAuthDiscoveryState,
   OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+  Transport,
+  CallToolResult,
+} from "@modelcontextprotocol/client";
 
 import { writeFileAtomic } from "./atomicFile.js";
 import {
@@ -167,8 +168,15 @@ export interface McpRegistry {
     | { readonly kind: "redirect"; readonly authorizationUrl: string }
     | { readonly kind: "signed_in" }
   >;
-  /** Finish OAuth from the callback's `state` and `code`. */
-  finishSignIn(state: string, code: string): Promise<McpServerRecord>;
+  /**
+   * Finish OAuth from the callback's `state` and `code`, plus its RFC 9207
+   * `iss` when the authorization server sent one.
+   */
+  finishSignIn(
+    state: string,
+    code: string,
+    iss?: string,
+  ): Promise<McpServerRecord>;
   call(
     id: string,
     tool: string,
@@ -199,6 +207,8 @@ interface SecretState {
 interface PendingSignIn {
   readonly serverId: string;
   readonly codeVerifier: string;
+  /** The authorization server the redirect targeted, checked on callback. */
+  readonly discoveryState?: OAuthDiscoveryState;
   readonly expiresAt: number;
 }
 
@@ -277,9 +287,12 @@ export async function openMcpRegistry(options: {
     signIn?: {
       readonly onRedirect: (url: URL) => void;
       verifier?: string;
+      discoveryState?: OAuthDiscoveryState;
     },
   ): OAuthClientProvider => {
     let codeVerifier = signIn?.verifier ?? "";
+    // Lives with the PKCE verifier: per sign-in, carried across the redirect.
+    let discoveryState = signIn?.discoveryState;
     const entry = () => (secrets.oauth[server.id] ??= {});
     return {
       get redirectUrl() {
@@ -307,6 +320,10 @@ export async function openMcpRegistry(options: {
         codeVerifier = verifier;
       },
       codeVerifier: () => codeVerifier,
+      saveDiscoveryState: (state) => {
+        discoveryState = state;
+      },
+      discoveryState: () => discoveryState,
       redirectToAuthorization: (url) => {
         // Only while the owner is signing in; a call never opens a browser.
         if (!signIn) {
@@ -328,11 +345,16 @@ export async function openMcpRegistry(options: {
         pending.set(state, {
           serverId: server.id,
           codeVerifier,
+          ...(discoveryState ? { discoveryState } : {}),
           expiresAt: now() + SIGN_IN_TTL_MS,
         });
         signIn.onRedirect(url);
       },
       invalidateCredentials: async (scope) => {
+        // The SDK invalidates "client" then "tokens" separately on
+        // invalid_client / unauthorized_client; only "all" drops discovery.
+        if (scope === "all" || scope === "discovery")
+          discoveryState = undefined;
         const current = secrets.oauth[server.id];
         if (!current) return;
         if (scope === "all" || scope === "client") delete current.client;
@@ -603,7 +625,9 @@ export async function openMcpRegistry(options: {
       try {
         const client = await connect(server);
         try {
-          listed = (await client.listTools()).tools;
+          // One page, as before: a cursor-less listTools() would walk every
+          // page itself (and fail outright past the SDK's page cap).
+          listed = (await client.request({ method: "tools/list" })).tools;
         } finally {
           await client.close().catch(() => undefined);
         }
@@ -695,7 +719,7 @@ export async function openMcpRegistry(options: {
       return { kind: "redirect", authorizationUrl };
     },
 
-    async finishSignIn(state, code) {
+    async finishSignIn(state, code, iss) {
       const entry = pending.get(state);
       pending.delete(state);
       if (!entry || entry.expiresAt < now()) {
@@ -708,10 +732,14 @@ export async function openMcpRegistry(options: {
       const provider = oauthProvider(server, {
         onRedirect: () => undefined,
         verifier: entry.codeVerifier,
+        ...(entry.discoveryState
+          ? { discoveryState: entry.discoveryState }
+          : {}),
       });
       await auth(provider, {
         serverUrl: server.url,
         authorizationCode: code,
+        ...(iss ? { iss } : {}),
         fetchFn: fetchFor(server),
       });
       return (await registry.refresh(server.id)).server;
@@ -737,7 +765,6 @@ export async function openMcpRegistry(options: {
       try {
         const result = (await client.callTool(
           { name: toolName, arguments: { ...input } },
-          undefined,
           { ...(signal ? { signal } : {}), timeout: CALL_TIMEOUT_MS },
         )) as CallToolResult;
         return {

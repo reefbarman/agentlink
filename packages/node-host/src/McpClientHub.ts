@@ -1,24 +1,31 @@
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import {
-  ElicitationCompleteNotificationSchema,
-  ElicitRequestSchema,
-  ErrorCode,
-  McpError,
-  ResultSchema,
-  ToolSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+  ProtocolError,
+  Client,
+  SSEClientTransport,
+  StreamableHTTPClientTransport,
+  UnauthorizedError,
+  ProtocolErrorCode,
+  SdkError,
+  SdkErrorCode,
+  SdkHttpError,
+} from "@modelcontextprotocol/client";
 import type {
   CallToolResult,
   ElicitRequestURLParams,
+  ElicitResult,
   Prompt,
   Resource,
   Tool,
-} from "@modelcontextprotocol/sdk/types.js";
+  OAuthClientProvider,
+  Transport,
+  RequestOptions,
+} from "@modelcontextprotocol/client";
+import { ResultSchema, ToolSchema } from "@modelcontextprotocol/core";
 import type {
   CoreModelJsonSchema as JsonSchema,
   CoreModelToolDefinition as ToolDefinition,
 } from "@agentlink/core/model-runtime";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type {
   McpAuthEvent,
   McpAuthorizationDecision,
@@ -39,16 +46,8 @@ import {
   isMcpToolName,
   parseMcpToolName,
 } from "@agentlink/protocol/mcp-tool-identity";
-
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { McpServerConfig } from "./mcpConfig.js";
-import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
-
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
-import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import {
   validateMcpElicitationUrl,
   type McpUrlElicitationRequest,
@@ -592,12 +591,14 @@ function describeMcpTransportFailure(
   toolName: string,
   timeout: number,
 ): ToolResult | undefined {
-  if (!(error instanceof McpError)) return undefined;
+  // v2 reports local timeouts and closed connections as SdkError with string
+  // codes; JSON-RPC errors from the server stay ProtocolError.
+  if (!(error instanceof SdkError)) return undefined;
 
   const kind =
-    error.code === ErrorCode.RequestTimeout
+    error.code === SdkErrorCode.RequestTimeout
       ? "mcp_request_timeout"
-      : error.code === ErrorCode.ConnectionClosed
+      : error.code === SdkErrorCode.ConnectionClosed
         ? "mcp_connection_closed"
         : undefined;
   if (!kind) return undefined;
@@ -614,21 +615,30 @@ function describeMcpTransportFailure(
 }
 
 /**
- * Streamable HTTP transport errors carry the HTTP status as a positive
- * numeric `code`; JSON-RPC errors (McpError) use negative codes.
+ * Streamable HTTP transport errors carry the HTTP status on `status`
+ * (SdkHttpError). SSE transport errors still carry it as a positive numeric
+ * `code`; JSON-RPC errors (ProtocolError) use negative codes.
  */
 function isHttpNotFound(error: unknown): boolean {
+  if (error instanceof SdkHttpError) return error.status === 404;
   return (
     error instanceof Error &&
-    !(error instanceof McpError) &&
+    !(error instanceof ProtocolError) &&
+    !(error instanceof SdkError) &&
     "code" in error &&
     error.code === 404
   );
 }
 
-/** The SDK rejects responses that fail its Zod result schema with a ZodError. */
+/**
+ * The SDK rejects responses that fail its result schema, either as
+ * SdkError(InvalidResult) or as the underlying ZodError.
+ */
 function isSchemaValidationError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
+  if (error instanceof SdkError) {
+    return error.code === SdkErrorCode.InvalidResult;
+  }
   const candidate = error as { name?: unknown; issues?: unknown };
   return candidate.name === "ZodError" || Array.isArray(candidate.issues);
 }
@@ -724,6 +734,18 @@ function parseLenientToolsPage(raw: Record<string, unknown>):
   };
 }
 
+/**
+ * v2 reports a 401 that survives re-authentication as SdkHttpError
+ * (ClientHttpAuthentication); v1 raised UnauthorizedError from the SSE
+ * transport in the same situation.
+ */
+function isHttpAuthenticationFailure(error: unknown): boolean {
+  return (
+    error instanceof SdkHttpError &&
+    error.code === SdkErrorCode.ClientHttpAuthentication
+  );
+}
+
 /** A 404 is a session expiry only when the request carried a session ID. */
 function isExpiredStreamableHttpSession(
   error: unknown,
@@ -757,17 +779,17 @@ function describeOutputSchemaError(
   error: unknown,
   toolName: string,
 ): string | undefined {
-  if (!(error instanceof McpError)) return undefined;
+  if (!(error instanceof ProtocolError)) return undefined;
   const message = error.message.replace(/^MCP error -?\d+: /, "");
   if (
-    error.code === ErrorCode.InvalidRequest &&
+    error.code === ProtocolErrorCode.InvalidRequest &&
     message ===
       `Tool ${toolName} has an output schema but did not return structured content`
   ) {
     return `MCP tool '${toolName}' declares an output schema but returned no structured content.`;
   }
   if (
-    error.code === ErrorCode.InvalidParams &&
+    error.code === ProtocolErrorCode.InvalidParams &&
     (message.startsWith(
       "Structured content does not match the tool's output schema:",
     ) ||
@@ -1135,7 +1157,12 @@ export class McpClientHub {
         async (cursor) => {
           const params = cursor ? { cursor } : undefined;
           try {
-            const result = await entry.client.listTools(params);
+            // Fetch one page per call: a cursor-less listTools() would walk
+            // every page itself and bypass the catalog safety limits.
+            const result = await entry.client.request({
+              method: "tools/list",
+              ...(params ? { params } : {}),
+            });
             return { items: result.tools, nextCursor: result.nextCursor };
           } catch (error) {
             // The SDK rejects the whole page when one tool uses a valid JSON
@@ -1201,9 +1228,10 @@ export class McpClientHub {
         entry,
         kind,
         async (cursor) => {
-          const result = await entry.client.listResources(
-            cursor ? { cursor } : undefined,
-          );
+          const result = await entry.client.request({
+            method: "resources/list",
+            ...(cursor ? { params: { cursor } } : {}),
+          });
           return { items: result.resources, nextCursor: result.nextCursor };
         },
       );
@@ -1219,9 +1247,10 @@ export class McpClientHub {
       entry,
       kind,
       async (cursor) => {
-        const result = await entry.client.listPrompts(
-          cursor ? { cursor } : undefined,
-        );
+        const result = await entry.client.request({
+          method: "prompts/list",
+          ...(cursor ? { params: { cursor } } : {}),
+        });
         return { items: result.prompts, nextCursor: result.nextCursor };
       },
     );
@@ -1261,7 +1290,10 @@ export class McpClientHub {
       // empty catalog. Servers without tools support answer MethodNotFound.
       if (
         options.failOnError &&
-        !(error instanceof McpError && error.code === ErrorCode.MethodNotFound)
+        !(
+          error instanceof ProtocolError &&
+          error.code === ProtocolErrorCode.MethodNotFound
+        )
       ) {
         this.log(
           `[mcp:${entry.name}] initial ${kind} catalog failed: ${this.describeError(error)}`,
@@ -1606,7 +1638,7 @@ export class McpClientHub {
       }
 
       // Register elicitation handler
-      entry.client.setRequestHandler(ElicitRequestSchema, async (req) => {
+      entry.client.setRequestHandler("elicitation/create", async (req) => {
         const params = (req as { params: unknown }).params as {
           mode?: string;
           message?: string;
@@ -1678,14 +1710,18 @@ export class McpClientHub {
               message: params.message ?? "Please provide the required input.",
               fields: normalized.schema.fields,
             },
-            (values) => resolve({ action: "accept" as const, content: values }),
+            (values) =>
+              resolve({
+                action: "accept" as const,
+                content: values as ElicitResult["content"],
+              }),
             () => resolve({ action: "cancel" as const }),
           );
         });
       });
 
       entry.client.setNotificationHandler(
-        ElicitationCompleteNotificationSchema,
+        "notifications/elicitation/complete",
         (notification) => {
           this.onUrlElicitationComplete?.(
             cfg.name,
@@ -2039,7 +2075,8 @@ export class McpClientHub {
       if (err.kind === "stale_client_redirect") return "redirect_mismatch";
       return "authorization_error";
     }
-    if (err instanceof UnauthorizedError) return "unauthorized";
+    if (err instanceof UnauthorizedError || isHttpAuthenticationFailure(err))
+      return "unauthorized";
     const normalized = (
       err instanceof Error ? err.message : String(err)
     ).toLowerCase();
@@ -2079,6 +2116,7 @@ export class McpClientHub {
 
   private isAuthFailureError(err: unknown): boolean {
     if (err instanceof UnauthorizedError) return true;
+    if (isHttpAuthenticationFailure(err)) return true;
     if (err instanceof McpOAuthError) return true;
     const msg = err instanceof Error ? err.message : String(err);
     const normalized = msg.toLowerCase();
@@ -3054,7 +3092,6 @@ export class McpClientHub {
             name: toolName,
             arguments: input,
           },
-          undefined,
           {
             signal: options?.signal,
             timeout,

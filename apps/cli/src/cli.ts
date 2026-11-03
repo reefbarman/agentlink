@@ -52,7 +52,7 @@ import {
 import { askQuestionsInControlPanel } from "./questionControls.js";
 import { confirmModeSwitchInControlPanel } from "./modeSwitchControl.js";
 import { randomUUID } from "node:crypto";
-import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
+import { auth } from "@modelcontextprotocol/client";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";

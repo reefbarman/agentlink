@@ -7,10 +7,10 @@ const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/auth.js", async () => {
+vi.mock("@modelcontextprotocol/client", async () => {
   const actual = await vi.importActual<
-    typeof import("@modelcontextprotocol/sdk/client/auth.js")
-  >("@modelcontextprotocol/sdk/client/auth.js");
+    typeof import("@modelcontextprotocol/client")
+  >("@modelcontextprotocol/client");
   return { ...actual, auth: mocks.auth };
 });
 

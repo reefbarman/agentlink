@@ -5,7 +5,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { getEndpointCaps, usesCodexResponsesLite } from "@agentlink/core/codex";
 
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/client";
 import type { CoreModelMessage } from "@agentlink/core/model-runtime";
 import { PNG } from "pngjs";
 import { createHash } from "node:crypto";

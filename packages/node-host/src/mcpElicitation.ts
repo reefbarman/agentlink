@@ -1,6 +1,5 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-
+import { Client } from "@modelcontextprotocol/client";
+import type { ElicitResult } from "@modelcontextprotocol/client";
 import type { AgentPrincipal } from "@agentlink/core";
 import {
   MAX_MCP_ELICITATION_DESCRIPTION_LENGTH,
@@ -55,7 +54,7 @@ export function createNodeHostMcpClient<
   );
   if (!options.onElicitation) return client;
 
-  client.setRequestHandler(ElicitRequestSchema, async (request) => {
+  client.setRequestHandler("elicitation/create", async (request) => {
     const params = request.params;
     if (params.mode === "url") {
       return { action: "decline" as const };
@@ -94,7 +93,10 @@ export function createNodeHostMcpClient<
         response.content,
       );
       return validation.ok
-        ? { action: "accept" as const, content: validation.values }
+        ? {
+            action: "accept" as const,
+            content: validation.values as ElicitResult["content"],
+          }
         : { action: "decline" as const };
     } catch {
       return { action: "cancel" as const };

@@ -4,11 +4,11 @@ import {
   type CoreModelJsonSchema,
   type HostToolResolver,
 } from "@agentlink/core";
+import type { CallToolResult, Tool } from "@modelcontextprotocol/client";
 import {
   DEFAULT_INHERITED_ENV_VARS,
   StdioClientTransport,
-} from "@modelcontextprotocol/sdk/client/stdio.js";
-import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/client/stdio";
 import * as path from "node:path";
 
 import {
@@ -184,7 +184,9 @@ export function createNodeHostMcpStdioTools<
       });
       try {
         await client.connect(createTransport(server));
-        const catalog = await client.listTools();
+        // One page, as before: a cursor-less listTools() would walk every
+        // page itself (and fail outright past the SDK's page cap).
+        const catalog = await client.request({ method: "tools/list" });
         for (const tool of catalog.tools.slice(0, maxToolsPerServer)) {
           const name = `${server.id}__${tool.name}`;
           if (!validToolName(name) || names.has(name)) continue;
@@ -313,7 +315,6 @@ async function callStdioTool<TPrincipal extends AgentPrincipal>(options: {
     await client.connect(createTransport(options.server));
     const result = await client.callTool(
       { name: options.toolName, arguments: options.input },
-      undefined,
       {
         signal: options.context.signal,
         timeout: boundedTimeout(options.server.timeoutMs),

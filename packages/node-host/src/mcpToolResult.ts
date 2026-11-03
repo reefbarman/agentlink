@@ -4,7 +4,7 @@ import type {
   ToolResult,
 } from "@agentlink/protocol/tool-result";
 
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/client";
 import { redactAuthCallbackSecretsDeep } from "./mcpResultRedaction.js";
 
 const STRUCTURED_CONTENT_LABEL = "Structured content:";
@@ -84,7 +84,7 @@ function formatResourceLink(
 }
 
 function serializeStructuredContent(
-  structuredContent: Record<string, unknown>,
+  structuredContent: unknown,
   onWarning?: (message: string) => void,
 ): string | null {
   try {

@@ -3,8 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
-
+import { auth } from "./standaloneMcpSdkAuth.js";
 import type {
   CreateNodeHostMcpRemoteToolsOptions,
   CreateNodeHostMcpStdioToolsOptions,
@@ -116,10 +115,9 @@ interface StandaloneAskAgentMcpRuntimeOptions {
   readonly resolveOAuthProvider?: ResolveNodeHostMcpRemoteOAuthProvider;
   readonly resolveConnectionOAuthProvider?: (
     request: StandaloneMcpConnectionOAuthRequest,
-  ) => Promise<
-    | import("@modelcontextprotocol/sdk/client/auth.js").OAuthClientProvider
-    | undefined
-  >;
+  ) => Promise<import("@modelcontextprotocol/client", {
+        with: { "resolution-mode": "import" },
+      }).OAuthClientProvider | undefined>;
   readonly createHub?: (
     host: McpHubHost,
     clientVersion: string,
@@ -677,7 +675,7 @@ export class StandaloneAskAgentMcpRuntime {
           },
           createSchemaValidator: async () => {
             const { AjvJsonSchemaValidator } =
-              await import("@modelcontextprotocol/sdk/validation/ajv");
+              await import("@modelcontextprotocol/client/validators/ajv");
             return new AjvJsonSchemaValidator();
           },
         };

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { McpClientHub } from "./McpClientHub.js";
 import { McpOAuthError } from "./McpOAuthProvider.js";
 import type { McpServerConfig } from "./mcpConfig.js";
-import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
+import { UnauthorizedError } from "@modelcontextprotocol/client";
 
 const mocks = vi.hoisted(() => ({
   showWarningMessage: vi.fn(
@@ -70,7 +70,34 @@ vi.mock("vscode", async () => {
   };
 });
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
+  SSEClientTransport: class MockSSEClientTransport {
+    onclose?: () => void;
+    authProvider?: { suppressRefreshTokenReauthPrompt?: boolean };
+
+    constructor(
+      _url: URL,
+      options?: {
+        authProvider?: { suppressRefreshTokenReauthPrompt?: boolean };
+      },
+    ) {
+      this.authProvider = options?.authProvider;
+    }
+  },
+  StreamableHTTPClientTransport: class MockStreamableHttpClientTransport {
+    onclose?: () => void;
+    authProvider?: { suppressRefreshTokenReauthPrompt?: boolean };
+
+    constructor(
+      _url: URL,
+      options?: {
+        authProvider?: { suppressRefreshTokenReauthPrompt?: boolean };
+      },
+    ) {
+      this.authProvider = options?.authProvider;
+    }
+  },
   Client: class MockClient {
     async connect(
       transport: unknown,
@@ -96,6 +123,14 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
       return mocks.createTransportListPrompts();
     }
 
+    // The hub fetches catalog pages as raw list requests.
+    async request(request: { method: string }): Promise<unknown> {
+      if (request.method === "tools/list") return this.listTools();
+      if (request.method === "resources/list") return this.listResources();
+      if (request.method === "prompts/list") return this.listPrompts();
+      throw new Error(`unexpected request ${request.method}`);
+    }
+
     setRequestHandler(): void {
       // no-op for test
     }
@@ -118,41 +153,9 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   },
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+vi.mock("@modelcontextprotocol/client/stdio", () => ({
   StdioClientTransport: class MockStdioClientTransport {
     onclose?: () => void;
-  },
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: class MockSSEClientTransport {
-    onclose?: () => void;
-    authProvider?: { suppressRefreshTokenReauthPrompt?: boolean };
-
-    constructor(
-      _url: URL,
-      options?: {
-        authProvider?: { suppressRefreshTokenReauthPrompt?: boolean };
-      },
-    ) {
-      this.authProvider = options?.authProvider;
-    }
-  },
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: class MockStreamableHttpClientTransport {
-    onclose?: () => void;
-    authProvider?: { suppressRefreshTokenReauthPrompt?: boolean };
-
-    constructor(
-      _url: URL,
-      options?: {
-        authProvider?: { suppressRefreshTokenReauthPrompt?: boolean };
-      },
-    ) {
-      this.authProvider = options?.authProvider;
-    }
   },
 }));
 

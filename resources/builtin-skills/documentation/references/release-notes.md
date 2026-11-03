@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- AgentLink's MCP client now runs on version 2 of the official MCP TypeScript SDK (`@modelcontextprotocol/client` and `@modelcontextprotocol/core` 2.4.0) in VS Code, Desktop, the CLI and the Assistant. Connections still negotiate the same protocol versions as before, so servers, tools and saved sign-ins keep working without signing in again. MCP sign-in is stricter in two ways the new SDK enforces: AgentLink now passes the authorization server's `iss` from the sign-in callback so a response from a different server is rejected (RFC 9207), and token endpoints must use HTTPS unless they are on `localhost`. Each sign-in also remembers which authorization server it started with and checks it on the callback.
+
 ## 1.74.0
 
 - MCP tool calls now show the server's live progress under the tool row while they run, in VS Code and the browser view. Before, AgentLink received `notifications/progress` but only used it to keep long calls from timing out, so a slow indexing or sync call looked stuck. The row shows a bar and percentage when the server reports a total (otherwise the raw count) and the server's latest message, which is trimmed to 500 characters and rendered as plain text. Updates are coalesced so a chatty server cannot flood the chat, the model never sees them, and they clear when the call finishes. Browser pages negotiate this with the new `transcript-tool-progress-v1` data-plane feature, so older pages are unaffected.

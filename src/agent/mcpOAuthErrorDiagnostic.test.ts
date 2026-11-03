@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { inspectMcpOAuthResponse } from "./mcpOAuthErrorDiagnostic.js";
-import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
+import { parseErrorResponse } from "@modelcontextprotocol/client";
 
 const server = "https://mcp.example.test/admin-mcp";
 

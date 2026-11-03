@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { Client } from "@modelcontextprotocol/client";
 import { createNodeHostMcpResourcePromptProvider } from "./mcpResourcePrompts.js";
 
 const principal = { tenantId: "tenant-a", subjectId: "subject-a" };
@@ -11,8 +11,15 @@ const discovery = {
 };
 
 function fixtureClient(overrides: Partial<Client> = {}): Client {
-  return {
-    listResources: vi.fn(async ({ cursor } = {}) =>
+  const client = {
+    // Catalog walks fetch one page at a time through raw list requests.
+    request: vi.fn(
+      async (request: { method: string; params?: { cursor?: string } }) =>
+        request.method === "resources/list"
+          ? client.listResources(request.params)
+          : client.listPrompts(request.params),
+    ),
+    listResources: vi.fn(async ({ cursor }: { cursor?: string } = {}) =>
       cursor
         ? {
             resources: [
@@ -53,7 +60,8 @@ function fixtureClient(overrides: Partial<Client> = {}): Client {
     })),
     close: vi.fn(async () => {}),
     ...overrides,
-  } as unknown as Client;
+  };
+  return client as unknown as Client;
 }
 
 describe("node host MCP resources and prompts", () => {

@@ -1,13 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { InMemoryTransport, Server } from "@modelcontextprotocol/server";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -55,7 +49,7 @@ function fakeServer(tools: { current: FakeTool[] }) {
       { name: "fake", version: "1.0.0" },
       { capabilities: { tools: {} } },
     );
-    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    server.setRequestHandler("tools/list", async () => ({
       tools: tools.current.map((tool) => ({
         name: tool.name,
         description: tool.description,
@@ -73,7 +67,7 @@ function fakeServer(tools: { current: FakeTool[] }) {
           : {}),
       })),
     }));
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    server.setRequestHandler("tools/call", async (request) => {
       calls.push({
         name: request.params.name,
         arguments: request.params.arguments,

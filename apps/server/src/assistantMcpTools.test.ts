@@ -3,12 +3,8 @@ import os from "node:os";
 import path from "node:path";
 
 import type { AgentPrincipal } from "@agentlink/core";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { InMemoryTransport, Server } from "@modelcontextprotocol/server";
+import type { ListToolsResult } from "@modelcontextprotocol/server";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -58,37 +54,40 @@ async function setup() {
         { name: "fake", version: "1.0.0" },
         { capabilities: { tools: {} } },
       );
-      server.setRequestHandler(ListToolsRequestSchema, async () => ({
-        tools: [
-          {
-            name: "search",
-            description: tools.description,
-            inputSchema: { type: "object" as const, properties: {} },
-          },
-          {
-            name: "create",
-            description: "Create a page",
-            inputSchema: { type: "object" as const, properties: {} },
-          },
-          {
-            name: "list_events",
-            description: "List calendar events",
-            inputSchema: {
-              type: "object" as const,
-              properties: { calendarId: { type: "string" } },
+      server.setRequestHandler(
+        "tools/list",
+        async (): Promise<ListToolsResult> => ({
+          tools: [
+            {
+              name: "search",
+              description: tools.description,
+              inputSchema: { type: "object" as const, properties: {} },
             },
-          },
-          {
-            name: "send_email",
-            description: "Send an email",
-            inputSchema: {
-              type: "object" as const,
-              properties: { to: { type: "string" } },
+            {
+              name: "create",
+              description: "Create a page",
+              inputSchema: { type: "object" as const, properties: {} },
             },
-          },
-        ],
-      }));
-      server.setRequestHandler(CallToolRequestSchema, async (request) => {
+            {
+              name: "list_events",
+              description: "List calendar events",
+              inputSchema: {
+                type: "object" as const,
+                properties: { calendarId: { type: "string" } },
+              },
+            },
+            {
+              name: "send_email",
+              description: "Send an email",
+              inputSchema: {
+                type: "object" as const,
+                properties: { to: { type: "string" } },
+              },
+            },
+          ],
+        }),
+      );
+      server.setRequestHandler("tools/call", async (request) => {
         calls.push(request.params);
         return {
           content: [{ type: "text" as const, text: tools.result }],

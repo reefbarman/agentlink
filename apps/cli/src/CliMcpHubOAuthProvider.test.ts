@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CliMcpHubOAuthProvider } from "./CliMcpHubOAuthProvider.js";
 import type { McpAuthorizationAttempt } from "@agentlink/node-host";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { OAuthClientProvider } from "@modelcontextprotocol/client";
 
 const attempt: McpAuthorizationAttempt = {
   serverName: "example",

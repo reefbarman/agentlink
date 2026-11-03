@@ -1,8 +1,8 @@
 import {
   auth,
   extractWWWAuthenticateParams,
-  type OAuthClientProvider,
-} from "@modelcontextprotocol/sdk/client/auth.js";
+} from "@modelcontextprotocol/client";
+import type { OAuthClientProvider } from "@modelcontextprotocol/client";
 
 interface ProviderBinding {
   fetch: typeof globalThis.fetch;

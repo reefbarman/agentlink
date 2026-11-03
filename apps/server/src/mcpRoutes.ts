@@ -193,7 +193,11 @@ export function createMcpRoutes(options: McpRoutesOptions): McpRoutes {
       if (providerError || !state || !code) outcome = "sign-in-failed";
       else {
         try {
-          const server = await registry.finishSignIn(state, code);
+          const server = await registry.finishSignIn(
+            state,
+            code,
+            url.searchParams.get("iss") ?? undefined,
+          );
           await options.refresh(server.id).catch(() => undefined);
         } catch {
           outcome = "sign-in-failed";

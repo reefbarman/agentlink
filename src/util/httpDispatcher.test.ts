@@ -195,8 +195,7 @@ describe("installAgentLinkHttpDispatcher", () => {
       }),
     );
     const { agentLinkLongPollingFetch } = await import("./httpDispatcher.js");
-    const { parseErrorResponse } =
-      await import("@modelcontextprotocol/sdk/client/auth.js");
+    const { parseErrorResponse } = await import("@modelcontextprotocol/client");
 
     const response = await agentLinkLongPollingFetch(
       "https://example.com/register",

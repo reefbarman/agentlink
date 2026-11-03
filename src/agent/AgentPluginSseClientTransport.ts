@@ -1,17 +1,16 @@
+import { JSONRPCMessageSchema } from "@modelcontextprotocol/core";
 import {
   auth,
   extractWWWAuthenticateParams,
   UnauthorizedError,
-  type OAuthClientProvider,
-} from "@modelcontextprotocol/sdk/client/auth.js";
+} from "@modelcontextprotocol/client";
 import type {
+  OAuthClientProvider,
   FetchLike,
   Transport,
-} from "@modelcontextprotocol/sdk/shared/transport.js";
-import {
-  JSONRPCMessageSchema,
-  type JSONRPCMessage,
-} from "@modelcontextprotocol/sdk/types.js";
+  JSONRPCMessage,
+} from "@modelcontextprotocol/client";
+
 // eventsource is ESM-only; this module compiles as CommonJS, so load it with a
 // dynamic import at connect time and keep a type-only static import.
 import type { EventSource } from "eventsource" with {
@@ -59,12 +58,28 @@ export class AgentPluginSseClientTransport implements Transport {
     await this.startOrAuth();
   }
 
-  async finishAuth(authorizationCode: string): Promise<void> {
+  /**
+   * Accepts the callback's query parameters (preferred, so the RFC 9207 `iss`
+   * travels with the code) or a bare code plus optional `iss`, matching the
+   * SDK transports.
+   */
+  async finishAuth(
+    callback: string | URLSearchParams,
+    iss?: string,
+  ): Promise<void> {
     const authProvider = this.options.authProvider;
     if (!authProvider) throw new UnauthorizedError("No auth provider");
+    const authorizationCode =
+      typeof callback === "string" ? callback : callback.get("code");
+    if (!authorizationCode) {
+      throw new UnauthorizedError("Authorization callback has no code");
+    }
+    const issuer =
+      typeof callback === "string" ? iss : (callback.get("iss") ?? undefined);
     const result = await auth(authProvider, {
       serverUrl: this.url,
       authorizationCode,
+      ...(issuer ? { iss: issuer } : {}),
       resourceMetadataUrl: this.resourceMetadataUrl,
       scope: this.scope,
       fetchFn: this.options.oauthFetch,

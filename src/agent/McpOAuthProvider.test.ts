@@ -9,7 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { McpAuthorizationDecision } from "./mcpAuthCoordinator.js";
-import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
+import { auth } from "@modelcontextprotocol/client";
 import { getEventListeners } from "events";
 
 const ui = vi.hoisted(() => ({
@@ -25,7 +25,10 @@ vi.mock("vscode", () => ({
   env: { openExternal: ui.open },
   Uri: { parse: (value: string) => value },
 }));
-vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({ auth: vi.fn() }));
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
+  auth: vi.fn(),
+}));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

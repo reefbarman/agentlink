@@ -6,16 +6,13 @@ import type {
   McpCredentialRepository,
   McpPendingAuthorizationRepository,
 } from "@agentlink/core";
-import {
-  auth,
-  type OAuthClientProvider,
-} from "@modelcontextprotocol/sdk/client/auth.js";
+import { auth } from "@modelcontextprotocol/client";
 import type {
+  OAuthClientProvider,
   OAuthClientInformationMixed,
   OAuthClientMetadata,
   OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
-
+} from "@modelcontextprotocol/client";
 import { createNodeHostMcpOAuthCallbackHandler } from "./mcpOAuthCallback.js";
 import { registerMcpOAuthFetch } from "./mcpOAuthFetch.js";
 
@@ -195,9 +192,13 @@ export function createNodeHostMcpOAuthProvider<
       }
       if (!result.code) throw new Error("mcp_oauth_callback_missing_code");
       codeVerifier = result.authorization.codeVerifier;
+      // RFC 9207: forward the callback issuer so the SDK can reject a
+      // response from a different authorization server before exchanging.
+      const iss = callbackIssuer(callback.callbackUrl);
       await auth(provider, {
         serverUrl,
         authorizationCode: result.code,
+        ...(iss ? { iss } : {}),
         fetchFn: options.fetch,
       });
     },
@@ -217,6 +218,14 @@ export function createNodeHostMcpOAuthProvider<
       );
     },
   };
+
+  function callbackIssuer(callbackUrl: string): string | undefined {
+    try {
+      return new URL(callbackUrl).searchParams.get("iss") ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
 
   async function readCredential(): Promise<{
     record?: McpCredentialRecord<TPrincipal>;

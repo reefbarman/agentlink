@@ -226,7 +226,7 @@ describe("extension package contributions", () => {
     expect(
       Object.hasOwn(
         extensionPackage.dependencies ?? {},
-        "@modelcontextprotocol/sdk",
+        "@modelcontextprotocol/client",
       ),
     ).toBe(true);
   });

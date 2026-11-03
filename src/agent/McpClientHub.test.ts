@@ -1,22 +1,23 @@
-import type * as vscode from "vscode";
-
-import { createHash } from "crypto";
-import { PassThrough } from "node:stream";
 import * as fs from "fs/promises";
+import * as mcpConfig from "./mcpConfig.js";
 import * as os from "os";
 import * as path from "path";
+import type * as vscode from "vscode";
+
+import type { CallToolResult, Tool } from "@modelcontextprotocol/client";
 import {
-  ErrorCode,
-  McpError,
-  type CallToolResult,
-  type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
+  ProtocolError,
+  ProtocolErrorCode,
+  SdkError,
+  SdkErrorCode,
+  parseErrorResponse,
+} from "@modelcontextprotocol/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
 
 import { McpClientHub } from "./McpClientHub.js";
 import type { McpServerConfig } from "./mcpConfig.js";
-import * as mcpConfig from "./mcpConfig.js";
+import { PassThrough } from "node:stream";
+import { createHash } from "crypto";
 import { isWorkspaceMcpRuntimeConfigCurrent } from "./agentPluginMcpRuntime.js";
 
 interface Page<T> {
@@ -86,7 +87,32 @@ vi.mock("vscode", async () => {
   );
 });
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
+  SSEClientTransport: class MockSseClientTransport {
+    onclose?: () => void;
+
+    constructor(
+      _url: URL,
+      options:
+        | { fetch?: typeof globalThis.fetch; requestInit?: RequestInit }
+        | undefined,
+    ) {
+      mocks.sseTransportOptions = options;
+    }
+  },
+  StreamableHTTPClientTransport: class MockHttpClientTransport {
+    onclose?: () => void;
+
+    constructor(
+      _url: URL,
+      options:
+        | { fetch?: typeof globalThis.fetch; requestInit?: RequestInit }
+        | undefined,
+    ) {
+      mocks.httpTransportOptions = options;
+    }
+  },
   Client: class MockClient {
     constructor(info: unknown, options: typeof mocks.clientOptions) {
       mocks.clientInfo = info;
@@ -111,15 +137,28 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
     async callTool(...args: unknown[]): Promise<unknown> {
       return mocks.callTool(...args);
     }
-    async request(...args: unknown[]): Promise<unknown> {
-      return mocks.request(...args);
+    async request(
+      request: { method: string; params?: { cursor?: string } },
+      ...rest: unknown[]
+    ): Promise<unknown> {
+      // The hub fetches catalog pages as raw one-argument list requests;
+      // requests with an explicit result schema stay on mocks.request.
+      if (rest.length === 0) {
+        if (request.method === "tools/list")
+          return mocks.listTools(request.params);
+        if (request.method === "resources/list")
+          return mocks.listResources(request.params);
+        if (request.method === "prompts/list")
+          return mocks.listPrompts(request.params);
+      }
+      return mocks.request(request, ...rest);
     }
     setRequestHandler(): void {}
     setNotificationHandler(): void {}
   },
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+vi.mock("@modelcontextprotocol/client/stdio", () => ({
   StdioClientTransport: class MockStdioClientTransport {
     onclose?: () => void;
     stderr = new PassThrough();
@@ -146,35 +185,6 @@ vi.mock("./AgentPluginSseClientTransport.js", () => ({
     }
   },
 }));
-vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: class MockSseClientTransport {
-    onclose?: () => void;
-
-    constructor(
-      _url: URL,
-      options:
-        | { fetch?: typeof globalThis.fetch; requestInit?: RequestInit }
-        | undefined,
-    ) {
-      mocks.sseTransportOptions = options;
-    }
-  },
-}));
-vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: class MockHttpClientTransport {
-    onclose?: () => void;
-
-    constructor(
-      _url: URL,
-      options:
-        | { fetch?: typeof globalThis.fetch; requestInit?: RequestInit }
-        | undefined,
-    ) {
-      mocks.httpTransportOptions = options;
-    }
-  },
-}));
-
 class FakeMemento implements vscode.Memento {
   get<T>(_key: string): T | undefined;
   get<T>(_key: string, defaultValue: T): T;
@@ -1132,7 +1142,6 @@ describe("McpClientHub protocol correctness", () => {
         name: "set_import_settings",
         arguments: expectedArguments,
       },
-      undefined,
       {
         timeout: 300_000,
         onprogress: expect.any(Function),
@@ -1146,7 +1155,7 @@ describe("McpClientHub protocol correctness", () => {
     await hub.connect([config]);
     const updates: unknown[] = [];
     mocks.callTool.mockImplementationOnce(async (...args: unknown[]) => {
-      const options = args[2] as {
+      const options = args[1] as {
         onprogress: (progress: unknown) => void;
       };
       options.onprogress({
@@ -1190,7 +1199,6 @@ describe("McpClientHub protocol correctness", () => {
 
       expect(mocks.callTool).toHaveBeenCalledWith(
         { name: "read", arguments: {} },
-        undefined,
         {
           timeout: 60_000,
           onprogress: expect.any(Function),
@@ -1208,7 +1216,6 @@ describe("McpClientHub protocol correctness", () => {
 
     expect(mocks.callTool).toHaveBeenCalledWith(
       { name: "read", arguments: {} },
-      undefined,
       {
         timeout: 900_000,
         onprogress: expect.any(Function),
@@ -1221,7 +1228,7 @@ describe("McpClientHub protocol correctness", () => {
     const hub = new McpClientHub(new FakeMemento());
     await hub.connect([{ ...config, timeout: 300_000 }]);
     mocks.callTool.mockRejectedValueOnce(
-      new McpError(ErrorCode.RequestTimeout, "Request timed out"),
+      new SdkError(SdkErrorCode.RequestTimeout, "Request timed out"),
     );
 
     const result = await hub.callTool("fixture__write", {});
@@ -1249,7 +1256,7 @@ describe("McpClientHub protocol correctness", () => {
     await hub.connect([config]);
     controller.abort();
     mocks.callTool.mockRejectedValueOnce(
-      new McpError(ErrorCode.RequestTimeout, "This call was aborted"),
+      new SdkError(SdkErrorCode.RequestTimeout, "This call was aborted"),
     );
 
     const result = await hub.callTool(
@@ -1280,7 +1287,7 @@ describe("McpClientHub protocol correctness", () => {
     const hub = new McpClientHub(new FakeMemento());
     await hub.connect([config]);
     mocks.callTool.mockRejectedValueOnce(
-      new McpError(ErrorCode.ConnectionClosed, "Connection closed"),
+      new SdkError(SdkErrorCode.ConnectionClosed, "Connection closed"),
     );
 
     const result = await hub.callTool("fixture__write", {});
@@ -1342,11 +1349,11 @@ describe("McpClientHub protocol correctness", () => {
 
   it.each([
     [
-      ErrorCode.InvalidRequest,
+      ProtocolErrorCode.InvalidRequest,
       "Tool validated has an output schema but did not return structured content",
     ],
     [
-      ErrorCode.InvalidParams,
+      ProtocolErrorCode.InvalidParams,
       "Structured content does not match the tool's output schema: count must be number",
     ],
   ])(
@@ -1354,7 +1361,7 @@ describe("McpClientHub protocol correctness", () => {
     async (code, message) => {
       const hub = new McpClientHub(new FakeMemento());
       await hub.connect([config]);
-      mocks.callTool.mockRejectedValueOnce(new McpError(code, message));
+      mocks.callTool.mockRejectedValueOnce(new ProtocolError(code, message));
 
       const result = await hub.callTool("fixture__validated", {});
 
@@ -1373,7 +1380,10 @@ describe("McpClientHub protocol correctness", () => {
     const hub = new McpClientHub(new FakeMemento());
     await hub.connect([config]);
     mocks.callTool.mockRejectedValueOnce(
-      new McpError(ErrorCode.InvalidParams, "Server rejected tool arguments"),
+      new ProtocolError(
+        ProtocolErrorCode.InvalidParams,
+        "Server rejected tool arguments",
+      ),
     );
 
     const result = await hub.callTool("fixture__validated", {});
@@ -1492,7 +1502,7 @@ describe("McpClientHub protocol correctness", () => {
 
   it("stays connected when a server does not implement tools/list", async () => {
     mocks.listTools.mockRejectedValue(
-      new McpError(ErrorCode.MethodNotFound, "Method not found"),
+      new ProtocolError(ProtocolErrorCode.MethodNotFound, "Method not found"),
     );
     const hub = new McpClientHub(new FakeMemento());
     await hub.connect([config]);

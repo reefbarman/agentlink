@@ -6,14 +6,16 @@ import {
 } from "@agentlink/core";
 import {
   UnauthorizedError,
-  type OAuthClientProvider,
-} from "@modelcontextprotocol/sdk/client/auth.js";
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+  SSEClientTransport,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
+import type {
+  OAuthClientProvider,
+  Client,
+  CallToolResult,
+  Tool,
+} from "@modelcontextprotocol/client";
 import { createMcpOAuthTransportFetch } from "./mcpOAuthFetch.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
-
 import {
   createNodeHostMcpClient,
   type NodeHostMcpFormElicitationHandler,
@@ -276,7 +278,9 @@ export function createNodeHostMcpRemoteTools<
             createTransport(server, endpoint, fetch, authProvider),
           authProvider,
         });
-        const catalog = await client.listTools();
+        // One page, as before: a cursor-less listTools() would walk every
+        // page itself (and fail outright past the SDK's page cap).
+        const catalog = await client.request({ method: "tools/list" });
         let acceptedTools = 0;
         for (const tool of catalog.tools) {
           if (acceptedTools >= maxToolsPerServer) break;
@@ -506,7 +510,6 @@ async function callRemoteTool<TPrincipal extends AgentPrincipal>(options: {
   try {
     const result = await client.callTool(
       { name: options.toolName, arguments: options.input },
-      undefined,
       {
         signal: options.context.signal,
         timeout: boundedTimeout(options.server.timeoutMs),

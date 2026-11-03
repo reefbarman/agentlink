@@ -67,7 +67,7 @@ export class McpClientHub extends NodeMcpClientHub {
         new AgentPluginSseClientTransport(url, transportOptions),
       createSchemaValidator: async () => {
         const { AjvJsonSchemaValidator } =
-          await import("@modelcontextprotocol/sdk/validation/ajv");
+          await import("@modelcontextprotocol/client/validators/ajv");
         return new AjvJsonSchemaValidator();
       },
     };

@@ -12,7 +12,9 @@ import type {
   McpCredentialRepository,
   McpPendingAuthorizationRepository,
 } from "@agentlink/core";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { OAuthClientProvider } from "@modelcontextprotocol/client" with {
+  "resolution-mode": "import",
+};
 import { isSupportedStandaloneMcpOAuthDestination } from "./standaloneMcpOAuthPolicy.js";
 
 interface PendingAuthorization {

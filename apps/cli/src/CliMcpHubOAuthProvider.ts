@@ -1,8 +1,8 @@
-import {
-  auth,
-  type OAuthClientProvider,
-} from "@modelcontextprotocol/sdk/client/auth.js";
-import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { auth } from "@modelcontextprotocol/client";
+import type {
+  OAuthClientProvider,
+  OAuthTokens,
+} from "@modelcontextprotocol/client";
 import type {
   McpAuthEvent,
   McpAuthorizationAttempt,

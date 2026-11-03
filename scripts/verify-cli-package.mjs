@@ -58,11 +58,12 @@ export const EXPECTED_BUNDLED_DEPENDENCIES = {
   "@jimp/plugin-threshold": "1.6.1",
   "@jimp/types": "1.6.1",
   "@jimp/utils": "1.6.1",
-  "@modelcontextprotocol/sdk": "1.29.0",
+  "@modelcontextprotocol/client": "2.4.0",
+  "@modelcontextprotocol/core": "2.4.0",
   "@tokenizer/inflate": "0.4.1",
   "@xmldom/xmldom": "0.8.15",
   ajv: "8.18.0",
-  "ajv-formats": "3.0.1",
+
   "ansi-escapes": "7.3.0",
   "ansi-regex": "6.2.2",
   "ansi-styles": "6.2.3",
@@ -110,6 +111,7 @@ export const EXPECTED_BUNDLED_DEPENDENCIES = {
   "iterm2-version": "6.0.0",
   jimp: "1.6.1",
   "jpeg-js": "0.4.4",
+  jose: "6.2.12",
   "json-schema-traverse": "1.0.0",
   marked: "15.0.12",
   "merge-stream": "2.0.0",
@@ -166,7 +168,6 @@ export const EXPECTED_BUNDLED_DEPENDENCIES = {
   "yoga-layout": "3.2.1",
   "zod@4.4.3": "4.4.3",
   "zod@3.25.76": "3.25.76",
-  "zod-to-json-schema": "3.25.2",
 };
 export function expectedCliRipgrep(target) {
   return {

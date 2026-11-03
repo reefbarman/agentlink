@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CreateNodeHostMcpOAuthProviderOptions } from "@agentlink/node-host";
+import type { OAuthClientProvider } from "@modelcontextprotocol/client" with {
+  "resolution-mode": "import",
+};
 import { InMemoryMcpCredentialRepository } from "@agentlink/core";
 import type { McpServerConfig } from "../../agent/mcpConfig.js";
 import { StandaloneAskAgentMcpRuntime } from "./StandaloneAskAgentMcpRuntime.js";
@@ -9,15 +12,19 @@ import { StandaloneMcpOAuthRuntime } from "./StandaloneMcpOAuthRuntime.js";
 const transport = vi.hoisted(() => ({
   connect: vi.fn(async () => undefined),
   close: vi.fn(async () => undefined),
-  oauth: undefined as
-    | import("@modelcontextprotocol/sdk/client/auth.js").OAuthClientProvider
-    | undefined,
+  oauth: undefined as OAuthClientProvider | undefined,
   callTool: vi.fn(async () => ({
     content: [{ type: "text", text: "records found" }],
   })),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
+  StreamableHTTPClientTransport: class {
+    constructor(_url: URL, options: { authProvider?: OAuthClientProvider }) {
+      transport.oauth = options.authProvider;
+    }
+  },
   Client: class {
     connect = transport.connect;
     close = transport.close;
@@ -39,26 +46,20 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
     async listPrompts() {
       return { prompts: [] };
     }
+    // Catalog walks fetch pages as raw list requests.
+    async request(request: { method: string }) {
+      if (request.method === "tools/list") return this.listTools();
+      if (request.method === "resources/list") return this.listResources();
+      if (request.method === "prompts/list") return this.listPrompts();
+      throw new Error(`unexpected request ${request.method}`);
+    }
     setRequestHandler() {}
     setNotificationHandler() {}
   },
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+vi.mock("@modelcontextprotocol/client/stdio", () => ({
   StdioClientTransport: class {},
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: class {
-    constructor(
-      _url: URL,
-      options: {
-        authProvider?: import("@modelcontextprotocol/sdk/client/auth.js").OAuthClientProvider;
-      },
-    ) {
-      transport.oauth = options.authProvider;
-    }
-  },
 }));
 
 let runtime: StandaloneAskAgentMcpRuntime | undefined;

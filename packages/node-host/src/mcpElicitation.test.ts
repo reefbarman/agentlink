@@ -9,7 +9,8 @@ const mocks = vi.hoisted(() => ({
     | undefined,
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
   Client: class MockClient {
     constructor(_implementation: unknown, options: unknown) {
       mocks.capabilities.push(options);

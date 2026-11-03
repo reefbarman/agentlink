@@ -38,7 +38,22 @@ const mocks = vi.hoisted(() => ({
   }>,
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
+  StreamableHTTPClientTransport: class MockHttpTransport {
+    readonly kind = "remote" as const;
+    readonly fetch: typeof globalThis.fetch;
+    constructor(_url: URL, options: { fetch: typeof globalThis.fetch }) {
+      this.fetch = options.fetch;
+    }
+  },
+  SSEClientTransport: class MockSseTransport {
+    readonly kind = "remote" as const;
+    readonly fetch: typeof globalThis.fetch;
+    constructor(_url: URL, options: { fetch: typeof globalThis.fetch }) {
+      this.fetch = options.fetch;
+    }
+  },
   Client: class MockClient {
     private transport:
       | { kind?: "remote" | "stdio"; fetch?: typeof globalThis.fetch }
@@ -71,6 +86,12 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
       };
     }
 
+    // Discovery fetches one raw tools/list page.
+    async request(request: { method: string }) {
+      if (request.method === "tools/list") return this.listTools();
+      throw new Error(`unexpected request ${request.method}`);
+    }
+
     async callTool(params: { name: string; arguments: unknown }) {
       mocks.calls.push({ name: params.name, input: params.arguments });
       return {
@@ -90,27 +111,7 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   },
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: class MockHttpTransport {
-    readonly kind = "remote" as const;
-    readonly fetch: typeof globalThis.fetch;
-    constructor(_url: URL, options: { fetch: typeof globalThis.fetch }) {
-      this.fetch = options.fetch;
-    }
-  },
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: class MockSseTransport {
-    readonly kind = "remote" as const;
-    readonly fetch: typeof globalThis.fetch;
-    constructor(_url: URL, options: { fetch: typeof globalThis.fetch }) {
-      this.fetch = options.fetch;
-    }
-  },
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+vi.mock("@modelcontextprotocol/client/stdio", () => ({
   DEFAULT_INHERITED_ENV_VARS: ["HOME", "PATH"],
   StdioClientTransport: class MockStdioTransport {
     readonly kind = "stdio" as const;

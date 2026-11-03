@@ -1,12 +1,12 @@
 import type {
+  Client,
   GetPromptResult,
   Prompt,
   ReadResourceResult,
   Resource,
-} from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/client";
 
 import type { AgentPrincipal } from "@agentlink/core";
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 const MAX_CATALOG_PAGES = 100;
@@ -134,8 +134,11 @@ export async function createNodeHostMcpResourcePromptProvider<
         const listed = await walkCatalog<Resource>(
           (cursor) =>
             client!
-              .listResources(
-                cursor ? { cursor } : undefined,
+              .request(
+                {
+                  method: "resources/list",
+                  ...(cursor ? { params: { cursor } } : {}),
+                },
                 requestOptions(options.discovery.signal, connection.timeoutMs),
               )
               .then((result) => ({
@@ -179,8 +182,11 @@ export async function createNodeHostMcpResourcePromptProvider<
         const listed = await walkCatalog<Prompt>(
           (cursor) =>
             client!
-              .listPrompts(
-                cursor ? { cursor } : undefined,
+              .request(
+                {
+                  method: "prompts/list",
+                  ...(cursor ? { params: { cursor } } : {}),
+                },
                 requestOptions(options.discovery.signal, connection.timeoutMs),
               )
               .then((result) => ({

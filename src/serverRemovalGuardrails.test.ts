@@ -59,7 +59,7 @@ describe("external MCP server removal guardrails", () => {
     expect(
       Object.hasOwn(
         extensionPackage.dependencies ?? {},
-        "@modelcontextprotocol/sdk",
+        "@modelcontextprotocol/client",
       ),
     ).toBe(true);
   });

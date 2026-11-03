@@ -20,7 +20,6 @@ const mocks = vi.hoisted(() => ({
   callTool: vi.fn<
     (
       params: unknown,
-      metadata: unknown,
       options: unknown,
     ) => Promise<{ content: Array<{ type: "text"; text: string }> }>
   >(async () => ({ content: [{ type: "text", text: "found" }] })),
@@ -34,14 +33,20 @@ const mocks = vi.hoisted(() => ({
   }>,
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
   Client: class MockClient {
     async connect(_transport: unknown): Promise<void> {}
     async listTools() {
       return mocks.listTools();
     }
-    async callTool(params: unknown, metadata: unknown, options: unknown) {
-      return mocks.callTool(params, metadata, options);
+    // Discovery fetches one raw tools/list page.
+    async request(request: { method: string }) {
+      if (request.method === "tools/list") return this.listTools();
+      throw new Error(`unexpected request ${request.method}`);
+    }
+    async callTool(params: unknown, options: unknown) {
+      return mocks.callTool(params, options);
     }
     async close() {
       return mocks.close();
@@ -49,7 +54,7 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   },
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+vi.mock("@modelcontextprotocol/client/stdio", () => ({
   DEFAULT_INHERITED_ENV_VARS: ["HOME", "PATH", "USER"],
   StdioClientTransport: class MockStdioClientTransport {
     constructor(options: (typeof mocks.launches)[number]) {
@@ -150,7 +155,6 @@ describe("node host stdio MCP tools", () => {
     expect(authorizeLaunch).toHaveBeenCalledTimes(2);
     expect(mocks.callTool).toHaveBeenCalledWith(
       { name: "search", arguments: { query: "recent" } },
-      undefined,
       expect.objectContaining({
         signal: undefined,
         timeout: 60_000,

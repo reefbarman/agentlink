@@ -10,13 +10,14 @@ import type {
 import type {
   OAuthClientInformationMixed,
   OAuthClientMetadata,
+  OAuthClientProvider,
+  OAuthDiscoveryState,
   OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+} from "@modelcontextprotocol/client";
 
 import type { McpAuthEvent } from "@agentlink/node-host";
 import { McpOAuthError } from "@agentlink/node-host";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
+import { auth } from "@modelcontextprotocol/client";
 import { inspectMcpOAuthResponse } from "./mcpOAuthErrorDiagnostic.js";
 import { renderMcpOAuthCallbackPage } from "../shared/mcpOAuthCallbackPage.js";
 
@@ -103,6 +104,12 @@ export class McpOAuthProvider implements OAuthClientProvider {
   private _port = 0;
   private _server: http.Server | null = null;
   private _codeVerifier = "";
+  /**
+   * Authorization-server discovery recorded on the redirect leg, so the
+   * callback leg can confirm it exchanges the code at the same server. Kept
+   * with the same lifetime as the PKCE verifier.
+   */
+  private _discoveryState: OAuthDiscoveryState | undefined;
   private readonly lifetime = new AbortController();
 
   get signal(): AbortSignal {
@@ -507,9 +514,23 @@ export class McpOAuthProvider implements OAuthClientProvider {
     return this._codeVerifier;
   }
 
+  saveDiscoveryState(state: OAuthDiscoveryState): void {
+    this.signal.throwIfAborted();
+    this._discoveryState = state;
+  }
+
+  discoveryState(): OAuthDiscoveryState | undefined {
+    return this._discoveryState;
+  }
+
   async invalidateCredentials(
     scope: "all" | "client" | "tokens" | "verifier" | "discovery",
   ): Promise<void> {
+    // The SDK now invalidates "client" then "tokens" separately on
+    // invalid_client / unauthorized_client; only "all" also drops discovery.
+    if (scope === "all" || scope === "discovery") {
+      this._discoveryState = undefined;
+    }
     if (scope === "all" || scope === "tokens") {
       await this.deleteStored("tokens");
     }
@@ -737,6 +758,10 @@ export class McpOAuthProvider implements OAuthClientProvider {
         );
       }
 
+      // RFC 9207: forward the callback issuer so the SDK can reject a
+      // response from a different authorization server before exchanging.
+      const iss = callback.url.searchParams.get("iss") ?? undefined;
+
       await this.waitForLifetime(
         this.debugStateSnapshot("before authorizationCode exchange"),
       );
@@ -751,6 +776,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
           auth(this, {
             serverUrl: this.serverUrl,
             authorizationCode: code,
+            ...(iss ? { iss } : {}),
             fetchFn: this.authFetch,
           }),
         );
