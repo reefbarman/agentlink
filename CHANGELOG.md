@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.75.0
+
 - AgentLink now connects to MCP servers that use protocol version 2026-07-28, in VS Code, Desktop and the CLI. Before, it only spoke the 2025-era protocol, so a server that supports nothing older could not connect. AgentLink now asks each server which versions it supports and uses 2026-07-28 when offered, otherwise the 2025-era handshake, and remembers the answer for 7 days so the check runs once per server (VS Code remembers it across reloads, Desktop and the CLI until they exit). For a `stdio` server the check briefly starts a second copy of the server. A new per-server `protocol` setting in `mcp.json` (`"auto"`, `"legacy"` or `"2026-07-28"`) skips or forces the check, and saving the server from the MCP Manager keeps it. On 2026-07-28 connections, AgentLink reopens the change-notification stream if it drops and refreshes the affected tool, resource and prompt lists, and answers a server's requests for input (forms and links) through the same prompts as before, for at most 10 rounds per call.
 
 ## 1.74.1

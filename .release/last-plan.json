@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "58da5d352c96f695ab996c199b6051438390d718",
-  "createdAt": "2026-11-03T04:22:40.798Z",
+  "sourceSha": "6264a62e3384949e12086a30dfd0e59cce282c7e",
+  "createdAt": "2026-11-03T05:22:29.930Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,131 +10,131 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.74.0",
-      "baselineRef": "v1.74.0",
-      "reserved": "1.74.0",
-      "commits": ["58da5d352c96f695ab996c199b6051438390d718"],
+      "published": "1.74.1",
+      "baselineRef": "v1.74.1",
+      "reserved": "1.74.1",
+      "commits": ["6264a62e3384949e12086a30dfd0e59cce282c7e"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.74.1",
-      "effectiveBump": "patch",
+      "version": "1.75.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.74.1",
+      "tag": "v1.75.0",
       "notes": [
         {
-          "sha": "58da5d352c96f695ab996c199b6051438390d718",
-          "subject": "refactor(mcp): move the MCP client to SDK v2 packages",
-          "summary": "MCP client moved to the v2 SDK packages with the same protocol negotiation, adding RFC 9207 issuer checks on OAuth sign-in callbacks and preserving catalog page limits and auth-recovery behaviour.",
+          "sha": "6264a62e3384949e12086a30dfd0e59cce282c7e",
+          "subject": "feat(mcp): negotiate protocol 2026-07-28 with remembered verdicts",
+          "summary": "MCP connections now negotiate protocol 2026-07-28 with fallback to the older handshake, remember the result per server for 7 days, add a per-server `protocol` setting in mcp.json, and reopen dropped change-notification streams.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.74.0",
-      "baselineRef": "desktop-v0.74.0",
-      "reserved": "0.74.0",
-      "commits": ["58da5d352c96f695ab996c199b6051438390d718"],
+      "published": "0.74.1",
+      "baselineRef": "desktop-v0.74.1",
+      "reserved": "0.74.1",
+      "commits": ["6264a62e3384949e12086a30dfd0e59cce282c7e"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.74.1",
-      "effectiveBump": "patch",
+      "version": "0.75.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.74.1",
+      "tag": "desktop-v0.75.0",
       "notes": [
         {
-          "sha": "58da5d352c96f695ab996c199b6051438390d718",
-          "subject": "refactor(mcp): move the MCP client to SDK v2 packages",
-          "summary": "MCP client moved to the v2 SDK packages with the same protocol negotiation, adding RFC 9207 issuer checks on OAuth sign-in callbacks and preserving catalog page limits and auth-recovery behaviour.",
+          "sha": "6264a62e3384949e12086a30dfd0e59cce282c7e",
+          "subject": "feat(mcp): negotiate protocol 2026-07-28 with remembered verdicts",
+          "summary": "MCP connections now negotiate protocol 2026-07-28 with fallback to the older handshake, remember the result per server for 7 days, add a per-server `protocol` setting in mcp.json, and reopen dropped change-notification streams.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.52.0",
-      "baselineRef": "cli-v0.52.0",
-      "reserved": "0.52.0",
-      "commits": ["58da5d352c96f695ab996c199b6051438390d718"],
+      "published": "0.52.1",
+      "baselineRef": "cli-v0.52.1",
+      "reserved": "0.52.1",
+      "commits": ["6264a62e3384949e12086a30dfd0e59cce282c7e"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.52.1",
-      "effectiveBump": "patch",
+      "version": "0.53.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.52.1",
+      "tag": "cli-v0.53.0",
       "notes": [
         {
-          "sha": "58da5d352c96f695ab996c199b6051438390d718",
-          "subject": "refactor(mcp): move the MCP client to SDK v2 packages",
-          "summary": "MCP client moved to the v2 SDK packages with the same protocol negotiation, adding RFC 9207 issuer checks on OAuth sign-in callbacks and preserving catalog page limits and auth-recovery behaviour.",
+          "sha": "6264a62e3384949e12086a30dfd0e59cce282c7e",
+          "subject": "feat(mcp): negotiate protocol 2026-07-28 with remembered verdicts",
+          "summary": "MCP connections now negotiate protocol 2026-07-28 with fallback to the older handshake, remember the result per server for 7 days, add a per-server `protocol` setting in mcp.json, and reopen dropped change-notification streams.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.42.0",
-      "baselineRef": "sdk-v0.42.0",
-      "reserved": "0.42.0",
-      "commits": ["58da5d352c96f695ab996c199b6051438390d718"],
+      "published": "0.42.1",
+      "baselineRef": "sdk-v0.42.1",
+      "reserved": "0.42.1",
+      "commits": ["6264a62e3384949e12086a30dfd0e59cce282c7e"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.42.1",
-      "effectiveBump": "patch",
+      "version": "0.43.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.42.1",
+      "tag": "sdk-v0.43.0",
       "notes": [
         {
-          "sha": "58da5d352c96f695ab996c199b6051438390d718",
-          "subject": "refactor(mcp): move the MCP client to SDK v2 packages",
-          "summary": "MCP client moved to the v2 SDK packages with the same protocol negotiation, adding RFC 9207 issuer checks on OAuth sign-in callbacks and preserving catalog page limits and auth-recovery behaviour.",
+          "sha": "6264a62e3384949e12086a30dfd0e59cce282c7e",
+          "subject": "feat(mcp): negotiate protocol 2026-07-28 with remembered verdicts",
+          "summary": "MCP connections now negotiate protocol 2026-07-28 with fallback to the older handshake, remember the result per server for 7 days, add a per-server `protocol` setting in mcp.json, and reopen dropped change-notification streams.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.46.0",
-      "baselineRef": "assistant-v0.46.0",
-      "reserved": "0.46.0",
-      "commits": ["58da5d352c96f695ab996c199b6051438390d718"],
+      "published": "0.46.1",
+      "baselineRef": "assistant-v0.46.1",
+      "reserved": "0.46.1",
+      "commits": ["6264a62e3384949e12086a30dfd0e59cce282c7e"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.46.1",
-      "effectiveBump": "patch",
+      "version": "0.47.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.46.1",
+      "tag": "assistant-v0.47.0",
       "notes": [
         {
-          "sha": "58da5d352c96f695ab996c199b6051438390d718",
-          "subject": "refactor(mcp): move the MCP client to SDK v2 packages",
-          "summary": "MCP client moved to the v2 SDK packages with the same protocol negotiation, adding RFC 9207 issuer checks on OAuth sign-in callbacks and preserving catalog page limits and auth-recovery behaviour.",
+          "sha": "6264a62e3384949e12086a30dfd0e59cce282c7e",
+          "subject": "feat(mcp): negotiate protocol 2026-07-28 with remembered verdicts",
+          "summary": "MCP connections now negotiate protocol 2026-07-28 with fallback to the older handshake, remember the result per server for 7 days, add a per-server `protocol` setting in mcp.json, and reopen dropped change-notification streams.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "58da5d352c96f695ab996c199b6051438390d718": {
-      "bump": "patch",
+    "6264a62e3384949e12086a30dfd0e59cce282c7e": {
+      "bump": "minor",
       "breakingUnits": [],
-      "summary": "MCP client moved to the v2 SDK packages with the same protocol negotiation, adding RFC 9207 issuer checks on OAuth sign-in callbacks and preserving catalog page limits and auth-recovery behaviour.",
+      "summary": "MCP connections now negotiate protocol 2026-07-28 with fallback to the older handshake, remember the result per server for 7 days, add a per-server `protocol` setting in mcp.json, and reopen dropped change-notification streams.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.43.0 — 2026-11-03
+
+- MCP connections now negotiate protocol 2026-07-28 with fallback to the older handshake, remember the result per server for 7 days, add a per-server `protocol` setting in mcp.json, and reopen dropped change-notification streams.
+
 ## 0.42.1 — 2026-11-03
 
 - MCP client moved to the v2 SDK packages with the same protocol negotiation, adding RFC 9207 issuer checks on OAuth sign-in callbacks and preserving catalog page limits and auth-recovery behaviour.
