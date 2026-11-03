@@ -1,7 +1,10 @@
 import { TODO_WRITE_INPUT_SCHEMA, todoTool } from "@agentlink/core/todo-tool";
 import { describe, expect, it, vi } from "vitest";
 
-import { SET_TASK_STATUS_TOOL } from "@agentlink/core/interaction-tools";
+import {
+  SET_TASK_STATUS_TOOL,
+  setTaskStatusToolDefinition,
+} from "@agentlink/core/interaction-tools";
 import { createWorkspaceSessionInteractionTools } from "./sessionInteractionTools.js";
 
 const discovery = {
@@ -160,10 +163,12 @@ describe("workspace session interaction tools", () => {
     const find = (name: string) =>
       resolved.find((tool) => tool.definition.name === name)!;
     const setStatus = find("set_task_status");
+    // No ask_user here, so the host keeps waiting_for_user.
+    const withoutAskUser = setTaskStatusToolDefinition({ askUser: false });
     expect(setStatus.definition).toMatchObject({
       name: "set_task_status",
-      description: SET_TASK_STATUS_TOOL.description,
-      input_schema: SET_TASK_STATUS_TOOL.input_schema,
+      description: withoutAskUser.description,
+      input_schema: withoutAskUser.input_schema,
     });
     await find("todo_write").execute(
       {
@@ -312,6 +317,27 @@ describe("workspace session interaction tools", () => {
     await expect(
       setStatus.execute({ status: "done" }, execution),
     ).rejects.toThrow(/set_task_status/u);
+  });
+
+  it("offers ask_user instead of waiting_for_user when the host can ask", async () => {
+    const tools = createWorkspaceSessionInteractionTools({
+      askQuestions: vi.fn(),
+      finalStatus: true,
+    });
+    const setStatus = (await tools.resolveTools(discovery)).find(
+      (tool) => tool.definition.name === "set_task_status",
+    )!;
+    expect(setStatus.definition).toMatchObject({
+      description: SET_TASK_STATUS_TOOL.description,
+      input_schema: SET_TASK_STATUS_TOOL.input_schema,
+    });
+    // The schema itself refuses a wait, before the turn could end.
+    await expect(
+      setStatus.execute(
+        { status: "waiting_for_user", summary: "Which one?" },
+        execution,
+      ),
+    ).rejects.toThrow("must be equal to one of the allowed values");
   });
 
   it("replaces and snapshots session-scoped todo state", async () => {

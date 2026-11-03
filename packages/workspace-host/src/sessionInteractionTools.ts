@@ -14,8 +14,8 @@ import {
   todoTool,
 } from "@agentlink/core/todo-tool";
 import {
-  SET_TASK_STATUS_TOOL,
   askUserToolDefinition,
+  setTaskStatusToolDefinition,
   buildAskUserResultPayload,
   buildModeSwitchSkippedPayload,
   buildSwitchModeResultPayload,
@@ -344,9 +344,12 @@ function createSetTaskStatusTool<TPrincipal extends AgentPrincipal>(
   options: CreateWorkspaceSessionInteractionToolsOptions,
   delegation?: { readonly expectedResult?: BackgroundExpectedResult },
 ): HostTool<TPrincipal> {
+  // With ask_user the agent asks instead of ending the turn to wait.
+  const askUser = Boolean(options.askQuestions);
+  const baseDefinition = setTaskStatusToolDefinition({ askUser });
   const definition = delegation
-    ? backgroundSetTaskStatusTool(delegation.expectedResult)
-    : SET_TASK_STATUS_TOOL;
+    ? backgroundSetTaskStatusTool(delegation.expectedResult, { askUser })
+    : baseDefinition;
   const tool = defineTool({
     name: definition.name,
     description: definition.description,
@@ -355,9 +358,9 @@ function createSetTaskStatusTool<TPrincipal extends AgentPrincipal>(
     // bounded diagnostics rather than a schema error.
     inputSchema: delegation
       ? {
-          ...SET_TASK_STATUS_TOOL.input_schema,
+          ...baseDefinition.input_schema,
           properties: {
-            ...SET_TASK_STATUS_TOOL.input_schema.properties,
+            ...baseDefinition.input_schema.properties,
             result: {},
           },
         }
@@ -371,7 +374,9 @@ function createSetTaskStatusTool<TPrincipal extends AgentPrincipal>(
       if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
       const status = input.status;
       if (!isTaskStatus(status)) return toolError("Invalid status");
-      const continuationError = validateTaskStatusContinuation(status, input);
+      const continuationError = validateTaskStatusContinuation(status, input, {
+        askUser,
+      });
       if (continuationError) return toolError(continuationError);
       let result: FleetResultEnvelope | undefined;
       if (delegation) {

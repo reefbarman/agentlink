@@ -161,17 +161,41 @@ export function askUserToolDefinition(options: {
   };
 }
 
-/** Base schema for final task status; background result fields are added per run. */
+const SET_TASK_STATUS_SUMMARY_GUIDANCE =
+  "Put the complete final answer, findings, artifact or change report in summary, not a meta-description, duplicate of preceding text, or teaser promising later content. For code changes include changes, rationale, validation run/skipped, and follow-up.";
+
+/**
+ * With `ask_user` available, the agent asks instead of ending the turn to
+ * wait, so `waiting_for_user` is not offered.
+ */
+const SET_TASK_STATUS_DESCRIPTION_WITH_ASK_USER = `End the turn with completed, blocked, or cancelled, unless a user interjection is pending. Unfinished todos do not auto-resume. Never end the turn to wait for input: when you need the user's answer, decision, or permission, call ask_user instead, with your recommended answer. Use blocked only when no question can unblock you. With Auto Continue on, do available in-scope work first; do not expand scope or bypass approval. Do not call before ask_user, for intermediate progress, or when answering an interjection before resuming earlier work; use ordinary text instead. ${SET_TASK_STATUS_SUMMARY_GUIDANCE} Supply a short continueLabel and continuePrompt for a safe next phase, unfinished plan item, subtask or validation step.`;
+
+/** For hosts without a question card, such as the Assistant. */
+const SET_TASK_STATUS_DESCRIPTION_WITHOUT_ASK_USER = `End the turn with completed, waiting_for_user, blocked, or cancelled, unless a user interjection is pending. Unfinished todos do not auto-resume. Use waiting_for_user only when no further approved work can proceed without input or permission, never with continuation fields. With Auto Continue on, do available in-scope work first; do not expand scope or bypass approval. Do not call for intermediate progress, or when answering an interjection before resuming earlier work; use ordinary text instead. ${SET_TASK_STATUS_SUMMARY_GUIDANCE} Supply a short continueLabel and continuePrompt for a safe next phase, unfinished plan item, subtask or validation step, never when waiting for input.`;
+
+/** Statuses the agent may set; `waiting_for_user` only without `ask_user`. */
+export function taskStatusOptions(options: {
+  readonly askUser: boolean;
+}): FinalMessageStatus[] {
+  return options.askUser
+    ? ["completed", "blocked", "cancelled"]
+    : ["completed", "waiting_for_user", "blocked", "cancelled"];
+}
+
+/**
+ * Base schema for final task status; background result fields are added per
+ * run. This is the variant for hosts with `ask_user`; see
+ * `setTaskStatusToolDefinition` for hosts without it.
+ */
 export const SET_TASK_STATUS_TOOL: ToolDefinition = {
   name: "set_task_status",
-  description:
-    "End the turn with completed, waiting_for_user, blocked, or cancelled, unless a user interjection is pending. Unfinished todos do not auto-resume. Use waiting_for_user only when no further approved work can proceed without input or permission, never with continuation fields. With Auto Continue on, do available in-scope work first; do not expand scope or bypass approval. Do not call before ask_user, for intermediate progress, or when answering an interjection before resuming earlier work; use ordinary text instead. Put the complete final answer, findings, artifact or change report in summary, not a meta-description, duplicate of preceding text, or teaser promising later content. For code changes include changes, rationale, validation run/skipped, and follow-up. Supply a short continueLabel and continuePrompt for a safe next phase, unfinished plan item, subtask or validation step, never when waiting for input.",
+  description: SET_TASK_STATUS_DESCRIPTION_WITH_ASK_USER,
   input_schema: {
     type: "object",
     properties: {
       status: {
         type: "string",
-        enum: ["completed", "waiting_for_user", "blocked", "cancelled"],
+        enum: taskStatusOptions({ askUser: true }),
       },
       summary: {
         type: "string",
@@ -181,7 +205,7 @@ export const SET_TASK_STATUS_TOOL: ToolDefinition = {
       continueLabel: {
         type: "string",
         description:
-          "Button label for a clear next-step continuation. Not allowed with waiting_for_user. Provide this with continuePrompt when the final summary names a concrete follow-up, next phase, MVP slice, remaining plan item, subtask, or validation step.",
+          "Button label for a clear next-step continuation. Provide this with continuePrompt when the final summary names a concrete follow-up, next phase, MVP slice, remaining plan item, subtask, or validation step.",
       },
       completeTodos: {
         type: "boolean",
@@ -197,6 +221,35 @@ export const SET_TASK_STATUS_TOOL: ToolDefinition = {
     required: ["status"],
   },
 };
+
+const SET_TASK_STATUS_TOOL_WITHOUT_ASK_USER: ToolDefinition = {
+  ...SET_TASK_STATUS_TOOL,
+  description: SET_TASK_STATUS_DESCRIPTION_WITHOUT_ASK_USER,
+  input_schema: {
+    ...SET_TASK_STATUS_TOOL.input_schema,
+    properties: {
+      ...SET_TASK_STATUS_TOOL.input_schema.properties,
+      status: {
+        type: "string",
+        enum: taskStatusOptions({ askUser: false }),
+      },
+      continueLabel: {
+        type: "string",
+        description:
+          "Button label for a clear next-step continuation. Not allowed with waiting_for_user. Provide this with continuePrompt when the final summary names a concrete follow-up, next phase, MVP slice, remaining plan item, subtask, or validation step.",
+      },
+    },
+  },
+};
+
+/** `set_task_status` for a host with or without `ask_user`. */
+export function setTaskStatusToolDefinition(options: {
+  readonly askUser: boolean;
+}): ToolDefinition {
+  return options.askUser
+    ? SET_TASK_STATUS_TOOL
+    : SET_TASK_STATUS_TOOL_WITHOUT_ASK_USER;
+}
 
 // ── ask_user ──
 
@@ -457,11 +510,22 @@ export function buildModeSwitchResumePrompt(pending: {
 
 // ── set_task_status ──
 
-/** Reject contradictory waiting cards before any final-status side effects. */
+export const WAITING_FOR_USER_WITH_ASK_USER_ERROR =
+  "waiting_for_user is not available because ask_user is. If you need the user's answer, decision, confirmation, or permission, call ask_user with a self-contained question and your recommended answer instead of ending the turn. If the work is finished, use completed with continueLabel and continuePrompt for the suggested next step. Use blocked only when no question can unblock you.";
+
+/**
+ * Reject statuses the host does not offer and contradictory waiting cards,
+ * before any final-status side effects. With `ask_user` available, the agent
+ * must ask rather than end the turn waiting.
+ */
 export function validateTaskStatusContinuation(
   status: FinalMessageStatus,
   params: Record<string, unknown>,
+  options: { readonly askUser?: boolean } = {},
 ): string | undefined {
+  if (status === "waiting_for_user" && options.askUser) {
+    return WAITING_FOR_USER_WITH_ASK_USER_ERROR;
+  }
   if (
     status === "waiting_for_user" &&
     [params.continueLabel, params.continuePrompt].some(

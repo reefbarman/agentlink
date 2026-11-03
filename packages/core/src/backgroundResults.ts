@@ -1,5 +1,5 @@
 import type { FleetResultEnvelope } from "@agentlink/protocol/fleet-result";
-import { SET_TASK_STATUS_TOOL } from "./interactionTools.js";
+import { setTaskStatusToolDefinition } from "./interactionTools.js";
 import type { CoreModelToolDefinition as ToolDefinition } from "./modelRuntime.js";
 import { z } from "zod";
 
@@ -142,7 +142,11 @@ const REVIEW_FINDINGS_COMPLETENESS_GUIDANCE =
  */
 export function backgroundSetTaskStatusTool(
   expectedResult?: BackgroundExpectedResult,
+  options: { readonly askUser?: boolean } = {},
 ): ToolDefinition {
+  const base = setTaskStatusToolDefinition({
+    askUser: options.askUser ?? true,
+  });
   const { $schema: _, ...resultSchema } = z.toJSONSchema(
     getFleetResultSchema(expectedResult),
   );
@@ -150,12 +154,12 @@ export function backgroundSetTaskStatusTool(
     ? `This background task expects a structured ${expectedResult} result; include it in the result field when completing the task instead of printing serialized JSON in assistant text.${expectedResult === "review_findings" ? ` ${REVIEW_FINDINGS_COMPLETENESS_GUIDANCE}` : ""}`
     : "For coordinator-facing information or summaries, you may return a structured result instead of serializing data into assistant text.";
   return {
-    ...SET_TASK_STATUS_TOOL,
-    description: `${SET_TASK_STATUS_TOOL.description} ${resultGuidance} The result field is the coordinator-facing output, so summary may be omitted and should not duplicate it.`,
+    ...base,
+    description: `${base.description} ${resultGuidance} The result field is the coordinator-facing output, so summary may be omitted and should not duplicate it.`,
     input_schema: {
-      ...SET_TASK_STATUS_TOOL.input_schema,
+      ...base.input_schema,
       properties: {
-        ...SET_TASK_STATUS_TOOL.input_schema.properties,
+        ...base.input_schema.properties,
         result: resultSchema,
       },
     },

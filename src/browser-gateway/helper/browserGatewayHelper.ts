@@ -10464,9 +10464,11 @@ export class BrowserGatewayHelper {
       };
     }
 
+    // Ask Agent always offers ask_user, so it asks instead of waiting.
     const continuationError = validateTaskStatusContinuation(
       status,
       toolCall.input,
+      { askUser: true },
     );
     if (continuationError) {
       const content = JSON.stringify({ error: continuationError });

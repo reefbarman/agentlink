@@ -2379,12 +2379,19 @@ describe("getAgentTools", () => {
   it("guides set_task_status continuations for concrete follow-up work", () => {
     const tool = getAgentTools().find((t) => t.name === "set_task_status");
     expect(tool?.description).toContain(
-      "for a safe next phase, unfinished plan item, subtask or validation step, never when waiting for input",
+      "for a safe next phase, unfinished plan item, subtask or validation step.",
     );
     const properties = tool?.input_schema.properties as Record<
       string,
-      { description?: string }
+      { description?: string; enum?: string[] }
     >;
+    // ask_user replaces ending the turn to wait for input.
+    expect(properties.status.enum).toEqual([
+      "completed",
+      "blocked",
+      "cancelled",
+    ]);
+    expect(tool?.description).toContain("call ask_user instead");
     expect(properties.continueLabel.description).toContain(
       "when the final summary names a concrete follow-up",
     );
@@ -5992,8 +5999,8 @@ describe("dispatchToolCall", () => {
     const result = await dispatchToolCall(
       "set_task_status",
       {
-        status: "waiting_for_user",
-        summary: "Need input",
+        status: "blocked",
+        summary: "Need access",
         completeTodos: true,
       },
       { ...mockCtx, onFinalStatus: vi.fn(), onCompleteTodos },
@@ -6177,18 +6184,41 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  it("rejects waiting_for_user when ask_user is available", async () => {
+    const onFinalStatus = vi.fn();
+    const result = await dispatchToolCall(
+      "set_task_status",
+      { status: "waiting_for_user", summary: "Which option?" },
+      {
+        ...mockCtx,
+        onFinalStatus,
+        availableToolNames: new Set(["ask_user", "set_task_status"]),
+      },
+    );
+    expect(onFinalStatus).not.toHaveBeenCalled();
+    expect(result.isError).toBe(true);
+    expect(
+      JSON.parse((result.content[0] as { text: string }).text),
+    ).toMatchObject({ error: expect.stringContaining("call ask_user") });
+  });
+
   it.each([
     { continueLabel: "Next" },
     { continuePrompt: "Continue available work" },
     { continueLabel: "Next", continuePrompt: "Continue available work" },
   ])(
-    "rejects waiting with a next step before finalising: %j",
+    "without ask_user, rejects waiting with a next step before finalising: %j",
     async (continuation) => {
       const onFinalStatus = vi.fn();
+      const ctx = {
+        ...mockCtx,
+        onFinalStatus,
+        availableToolNames: new Set(["set_task_status"]),
+      };
       const result = await dispatchToolCall(
         "set_task_status",
         { status: "waiting_for_user", completeTodos: true, ...continuation },
-        { ...mockCtx, onFinalStatus },
+        ctx,
       );
       expect(onFinalStatus).not.toHaveBeenCalled();
       expect(result.isError).toBe(true);
@@ -6204,7 +6234,7 @@ describe("dispatchToolCall", () => {
           status: "waiting_for_user",
           summary: "Please provide the missing file.",
         },
-        { ...mockCtx, onFinalStatus },
+        ctx,
       );
       expect(onFinalStatus).toHaveBeenCalledWith({
         status: "waiting_for_user",

@@ -6588,7 +6588,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     ).toMatchObject({ status: "completed", source: "tool" });
   });
 
-  it("rejects Ask Agent waiting continuations and recovers to completed", async () => {
+  it("rejects Ask Agent waiting_for_user in favour of ask_user and recovers to completed", async () => {
     let callCount = 0;
     let rejectedResult = "";
     const modelClient = makeAskAgentToolLoopClient(async (params) => {
@@ -6685,7 +6685,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
 
     expect(send.ok).toBe(true);
     expect(callCount).toBe(3);
-    expect(rejectedResult).toContain("waiting_for_user cannot include");
+    expect(rejectedResult).toContain("call ask_user");
     expect(body.snapshot.session.foreground.todos).toEqual([
       expect.objectContaining({ id: "audit", status: "completed" }),
     ]);

@@ -73,8 +73,8 @@ import {
 import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import {
   ASK_USER_TOOL,
-  SET_TASK_STATUS_TOOL,
   SWITCH_MODE_TOOL,
+  setTaskStatusToolDefinition,
   buildAskUserResultPayload,
   buildSwitchModeResultPayload,
   buildTaskStatusMarker,
@@ -530,9 +530,10 @@ type ExpectedBackgroundResult =
 function getSetTaskStatusTool(
   expectedResult?: ExpectedBackgroundResult,
   isBackground = false,
+  askUser = true,
 ): ToolDefinition {
-  if (!isBackground) return SET_TASK_STATUS_TOOL;
-  return backgroundSetTaskStatusTool(expectedResult);
+  if (!isBackground) return setTaskStatusToolDefinition({ askUser });
+  return backgroundSetTaskStatusTool(expectedResult, { askUser });
 }
 
 const RESPOND_TO_BACKGROUND_QUESTION_TOOL: ToolDefinition = {
@@ -1086,7 +1087,13 @@ export function getAgentTools(
     ...mcpBridgeTools,
     ...(profileAllowlist ? [] : [ASK_USER_TOOL]),
     ...(!profileAllowlist || isBackground
-      ? [getSetTaskStatusTool(backgroundExpectedResult, Boolean(isBackground))]
+      ? [
+          getSetTaskStatusTool(
+            backgroundExpectedResult,
+            Boolean(isBackground),
+            !profileAllowlist,
+          ),
+        ]
       : []),
     ...(profileAllowlist ? [] : [SWITCH_MODE_TOOL]),
     ...(!profileAllowlist && !isBackground
@@ -3864,7 +3871,12 @@ async function dispatchToolCallWithTrackedApprovals(
           ],
         };
       }
-      const continuationError = validateTaskStatusContinuation(status, params);
+      // Request-scoped tools tell whether this turn could ask instead.
+      const continuationError = validateTaskStatusContinuation(status, params, {
+        askUser: ctx.availableToolNames
+          ? ctx.availableToolNames.has(ASK_USER_TOOL.name)
+          : true,
+      });
       if (continuationError) {
         return {
           content: [

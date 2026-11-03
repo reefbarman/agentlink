@@ -16,6 +16,7 @@ import {
   parseAskUserInput,
   switchModeToolDefinition,
   validateTaskStatusContinuation,
+  setTaskStatusToolDefinition,
 } from "./interactionTools.js";
 import { describe, expect, it } from "vitest";
 
@@ -275,9 +276,34 @@ describe("set_task_status contract", () => {
         params: { continueLabel: "Next", continuePrompt: "Do more work" },
       }).continueAction,
     ).toBeUndefined();
-    expect(SET_TASK_STATUS_TOOL.description).toContain(
-      "no further approved work",
+    expect(
+      setTaskStatusToolDefinition({ askUser: false }).description,
+    ).toContain("no further approved work");
+  });
+
+  it("offers ask_user instead of waiting_for_user when ask_user exists", () => {
+    const statusEnum = (tool: typeof SET_TASK_STATUS_TOOL) =>
+      (tool.input_schema.properties as Record<string, { enum?: string[] }>)
+        .status.enum;
+    expect(setTaskStatusToolDefinition({ askUser: true })).toBe(
+      SET_TASK_STATUS_TOOL,
     );
+    expect(statusEnum(SET_TASK_STATUS_TOOL)).toEqual([
+      "completed",
+      "blocked",
+      "cancelled",
+    ]);
+    expect(SET_TASK_STATUS_TOOL.description).toContain("call ask_user instead");
+    expect(SET_TASK_STATUS_TOOL.description).not.toContain("waiting_for_user");
+    expect(statusEnum(setTaskStatusToolDefinition({ askUser: false }))).toEqual(
+      ["completed", "waiting_for_user", "blocked", "cancelled"],
+    );
+    expect(
+      validateTaskStatusContinuation("waiting_for_user", {}, { askUser: true }),
+    ).toContain("call ask_user");
+    expect(
+      validateTaskStatusContinuation("blocked", {}, { askUser: true }),
+    ).toBeUndefined();
   });
 
   it("builds the final marker", () => {
