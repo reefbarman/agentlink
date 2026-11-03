@@ -8,6 +8,7 @@ import type { ChatReasoningEffort } from "./chatCatalog.js";
 import type { CommandApprovalPolicy } from "./commandApprovalPolicy.js";
 import type { ComposeTrace } from "./compose.js";
 import type { FinalMessageMarker } from "./finalStatus.js";
+import type { McpElicitationInteraction } from "./mcpElicitation.js";
 import type { RequestContextBreakdown } from "./contextDiagnostics.js";
 
 export interface RemoteTranscriptBlockDetail {
@@ -75,6 +76,8 @@ export type ContentBlock =
       startedAt?: number;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
       composeTrace?: ComposeTrace;
+      /** Elicitations the user answered during this call (display-only). */
+      mcpInteractions?: McpElicitationInteraction[];
       progress?: ToolCallProgress;
       remoteDetail?: RemoteTranscriptBlockDetail;
     }

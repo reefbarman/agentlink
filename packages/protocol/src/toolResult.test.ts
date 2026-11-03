@@ -68,6 +68,7 @@ describe("tool result protocol", () => {
           mcpApprovalPromotion?: McpApprovalPromotionMeta;
           composeTrace?: import("./compose.js").ComposeTrace;
           authorizationAudit?: AuthorizationAudit;
+          mcpInteractions?: import("./mcpElicitation.js").McpElicitationInteraction[];
         }
       | undefined
     >();

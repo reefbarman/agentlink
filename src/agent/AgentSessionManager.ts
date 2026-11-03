@@ -4598,6 +4598,7 @@ export class AgentSessionManager {
       humanQuestionAnswer: event.humanQuestionAnswer,
       mcpApprovalPromotion: event.mcpApprovalPromotion,
       composeTrace: event.composeTrace,
+      mcpInteractions: event.mcpInteractions,
     };
     session.runState = {
       ...session.runState,

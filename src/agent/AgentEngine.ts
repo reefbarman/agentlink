@@ -788,6 +788,7 @@ interface ToolCallResult {
   mcpApprovalPromotion?: McpApprovalPromotionMeta;
   authorizationAudit?: import("@agentlink/protocol/tool-result").AuthorizationAudit;
   composeTrace?: import("@agentlink/protocol/compose").ComposeTrace;
+  mcpInteractions?: import("@agentlink/protocol/mcp-elicitation").McpElicitationInteraction[];
 }
 
 function parseToolResultPayload(
@@ -3361,6 +3362,7 @@ export class AgentEngine {
                 mcpApprovalPromotion: tr.mcpApprovalPromotion,
                 authorizationAudit: tr.authorizationAudit,
                 composeTrace: tr.composeTrace,
+                mcpInteractions: tr.mcpInteractions,
               });
               if (
                 tr.toolName === "set_task_status" &&
@@ -3549,6 +3551,7 @@ export class AgentEngine {
             mcpApprovalPromotion: tr.mcpApprovalPromotion,
             authorizationAudit: tr.authorizationAudit,
             composeTrace: tr.composeTrace,
+            mcpInteractions: tr.mcpInteractions,
           })),
         );
         opts?.onAssistantTurnCommitted?.();
@@ -4282,6 +4285,7 @@ export class AgentEngine {
           mcpApprovalPromotion: result.uiMeta?.mcpApprovalPromotion,
           authorizationAudit: result.uiMeta?.authorizationAudit,
           composeTrace: result.uiMeta?.composeTrace,
+          mcpInteractions: result.uiMeta?.mcpInteractions,
         };
       } catch (err) {
         return {

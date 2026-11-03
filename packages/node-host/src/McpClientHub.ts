@@ -65,9 +65,17 @@ import {
   type McpProtocolVerdictStore,
 } from "./mcpProtocolNegotiation.js";
 import {
+  MAX_MCP_ELICITATION_SUMMARY_MESSAGE_LENGTH,
+  boundMcpElicitationSummaryText,
   normalizeMcpElicitationSchema,
+  summarizeMcpFormElicitation,
+  type McpElicitationInteraction,
   type McpFormElicitationInput,
 } from "@agentlink/protocol/mcp-elicitation";
+
+interface InFlightMcpCall {
+  readonly interactions: McpElicitationInteraction[];
+}
 
 export type McpServerStatus =
   | "connecting"
@@ -876,6 +884,7 @@ async function withHttpConnectLock<T>(
  */
 export class McpClientHub {
   private servers = new Map<string, ConnectedServer>();
+  private readonly inFlightCalls = new Map<string, Set<InFlightMcpCall>>();
   private disabledServers = new Map<string, McpServerConfig>();
   private oauthProviders = new Map<string, McpHubOAuthProvider>();
   private pendingInteractiveServers = new Map<string, McpServerConfig>();
@@ -1031,6 +1040,8 @@ export class McpClientHub {
     request: McpFormElicitationInput,
     resolve: (values: Record<string, unknown>) => void,
     cancel: () => void,
+    /** The user refused to provide the information (distinct from cancel). */
+    decline: () => void,
   ) => void;
 
   /** Called when an MCP server requests URL-mode elicitation. */
@@ -1890,7 +1901,19 @@ export class McpClientHub {
           };
 
           return new Promise((resolve) => {
-            this.onUrlElicitation!(request, (action) => resolve({ action }));
+            this.onUrlElicitation!(request, (action) => {
+              this.recordElicitationInteraction(cfg.name, {
+                kind: "url",
+                serverName: cfg.name,
+                message: boundMcpElicitationSummaryText(
+                  request.message,
+                  MAX_MCP_ELICITATION_SUMMARY_MESSAGE_LENGTH,
+                ),
+                action,
+                origin: request.origin,
+              });
+              resolve({ action });
+            });
           });
         }
 
@@ -1906,19 +1929,34 @@ export class McpClientHub {
           );
           return { action: "decline" as const };
         }
+        const formRequest: McpFormElicitationInput = {
+          serverName: cfg.name,
+          message: params.message ?? "Please provide the required input.",
+          fields: normalized.schema.fields,
+        };
         return new Promise((resolve) => {
+          let settled = false;
+          const finish = (
+            action: "accept" | "decline" | "cancel",
+            values?: Record<string, unknown>,
+          ) => {
+            if (settled) return;
+            settled = true;
+            this.recordElicitationInteraction(
+              cfg.name,
+              summarizeMcpFormElicitation(formRequest, action, values),
+            );
+            resolve(
+              action === "accept"
+                ? { action, content: values as ElicitResult["content"] }
+                : { action },
+            );
+          };
           this.onElicitation!(
-            {
-              serverName: cfg.name,
-              message: params.message ?? "Please provide the required input.",
-              fields: normalized.schema.fields,
-            },
-            (values) =>
-              resolve({
-                action: "accept" as const,
-                content: values as ElicitResult["content"],
-              }),
-            () => resolve({ action: "cancel" as const }),
+            formRequest,
+            (values) => finish("accept", values),
+            () => finish("cancel"),
+            () => finish("decline"),
           );
         });
       });
@@ -3326,6 +3364,71 @@ export class McpClientHub {
       };
     }
 
+    // Elicitations the user answers while this call runs are recorded on its
+    // result for the transcript (display-only, never sent to the model).
+    const call: InFlightMcpCall = { interactions: [] };
+    let calls = this.inFlightCalls.get(serverName);
+    if (!calls) {
+      calls = new Set();
+      this.inFlightCalls.set(serverName, calls);
+    }
+    calls.add(call);
+    try {
+      const result = await this.callAuthorizedTool(
+        server,
+        serverName,
+        toolName,
+        input,
+        options,
+      );
+      return call.interactions.length > 0
+        ? {
+            ...result,
+            uiMeta: {
+              ...result.uiMeta,
+              mcpInteractions: [...call.interactions],
+            },
+          }
+        : result;
+    } finally {
+      calls.delete(call);
+      if (calls.size === 0 && this.inFlightCalls.get(serverName) === calls) {
+        this.inFlightCalls.delete(serverName);
+      }
+    }
+  }
+
+  /**
+   * Records an answered elicitation against the call that caused it. A server
+   * request carries no call identity, so it is attributed only when exactly
+   * one call to that server is in flight; otherwise the record is dropped
+   * rather than guessed.
+   */
+  private recordElicitationInteraction(
+    serverName: string,
+    interaction: McpElicitationInteraction,
+  ): void {
+    const calls = this.inFlightCalls.get(serverName);
+    if (!calls || calls.size !== 1) return;
+    for (const call of calls) call.interactions.push(interaction);
+  }
+
+  private async callAuthorizedTool(
+    server: ConnectedServer,
+    serverName: string,
+    toolName: string,
+    input: Record<string, unknown>,
+    options:
+      | {
+          readonly signal?: AbortSignal;
+          readonly onProgress?: (progress: {
+            progress: number;
+            total?: number;
+            message?: string;
+          }) => void;
+        }
+      | undefined,
+  ): Promise<ToolResult> {
     const configuredTimeout = server.config.timeout;
     const timeout =
       typeof configuredTimeout === "number" &&

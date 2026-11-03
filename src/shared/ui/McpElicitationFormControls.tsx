@@ -1,9 +1,10 @@
-import type {
-  McpElicitationField,
-  McpElicitationFieldErrors,
-  McpElicitationMultiSelectField,
-  McpElicitationStringField,
-  McpElicitationValues,
+import {
+  mcpElicitationFieldLabel,
+  type McpElicitationField,
+  type McpElicitationFieldErrors,
+  type McpElicitationMultiSelectField,
+  type McpElicitationStringField,
+  type McpElicitationValues,
 } from "@agentlink/protocol/mcp-elicitation";
 
 export interface McpElicitationFormControlsProps {
@@ -72,30 +73,47 @@ function McpElicitationFormControl({
   const errorId = error ? `${inputId}-error` : undefined;
   const describedBy =
     [descriptionId, errorId].filter(Boolean).join(" ") || undefined;
-  const label = field.title ?? field.name;
+  const label = mcpElicitationFieldLabel(field);
+  const control = renderControl(field, value, {
+    id: inputId,
+    disabled,
+    describedBy,
+    invalid: Boolean(error),
+    onChange,
+  });
+  const labelContent = (
+    <>
+      <span class="mcp-elicitation-label-text">{label}</span>
+      {field.required ? (
+        <span class="mcp-elicitation-required" aria-hidden="true">
+          *
+        </span>
+      ) : (
+        <span class="mcp-elicitation-optional">Optional</span>
+      )}
+    </>
+  );
 
   return (
-    <div class="mcp-elicitation-field">
-      <label class="mcp-elicitation-label" for={inputId}>
-        {label}
-        {field.required && (
-          <span class="mcp-elicitation-required" aria-hidden="true">
-            *
-          </span>
-        )}
-      </label>
+    <div
+      class={`mcp-elicitation-field mcp-elicitation-field-${field.kind}${error ? " mcp-elicitation-field-invalid" : ""}`}
+    >
+      {field.kind === "boolean" ? (
+        <label class="mcp-elicitation-checkbox-row" for={inputId}>
+          {control}
+          <span class="mcp-elicitation-label">{labelContent}</span>
+        </label>
+      ) : (
+        <label class="mcp-elicitation-label" for={inputId}>
+          {labelContent}
+        </label>
+      )}
       {field.description && (
         <p id={descriptionId} class="mcp-elicitation-description">
           {field.description}
         </p>
       )}
-      {renderControl(field, value, {
-        id: inputId,
-        disabled,
-        describedBy,
-        invalid: Boolean(error),
-        onChange,
-      })}
+      {field.kind !== "boolean" && control}
       {error && (
         <p id={errorId} class="mcp-elicitation-error" role="alert">
           {error}
@@ -145,7 +163,7 @@ function renderControl(
           value={typeof value === "string" ? value : ""}
           onInput={(event) => props.onChange(event.currentTarget.value)}
         >
-          <option value="">— Select —</option>
+          <option value="">Select…</option>
           {field.options.map((option) => (
             <option key={option.value} value={option.value}>
               {option.title ?? option.value}

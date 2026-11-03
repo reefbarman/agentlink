@@ -1,3 +1,4 @@
+import { Fragment } from "preact";
 import { useCallback, useMemo, useState } from "preact/hooks";
 
 import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
@@ -6,6 +7,7 @@ import { ImageSourceCaption } from "./ImageSourceCaption";
 import { InlineDiff } from "./InlineDiff";
 import { JsonHighlight } from "../../../shared/ui/JsonHighlight";
 import type { McpApprovalPromotionMeta } from "@agentlink/protocol/tool-result";
+import type { McpElicitationInteraction } from "@agentlink/protocol/mcp-elicitation";
 import { matchFilePaths } from "./filePathLinks";
 import { recordFileLinkClick } from "./fileLinkFeedback";
 import { useRemoteToolDetail } from "./RemoteToolDetail";
@@ -211,8 +213,14 @@ function ToolCallProgressLine({
   progress: NonNullable<ToolCallData["progress"]>;
 }) {
   const percent = toolProgressPercent(progress);
+  // Without a total, a server message usually already states the count
+  // ("step 11 of 20"), so the raw number is shown only when there is none.
   const label =
-    percent !== undefined ? `${percent}%` : String(progress.progress);
+    percent !== undefined
+      ? `${percent}%`
+      : progress.message
+        ? undefined
+        : String(progress.progress);
   return (
     <div class="tool-call-progress" role="status" aria-live="polite">
       {percent !== undefined && (
@@ -229,12 +237,93 @@ function ToolCallProgressLine({
           />
         </span>
       )}
-      <span class="tool-call-progress-value">{label}</span>
+      {label !== undefined && (
+        <span class="tool-call-progress-value">{label}</span>
+      )}
       {progress.message && (
         <span class="tool-call-progress-message" title={progress.message}>
           {progress.message}
         </span>
       )}
+    </div>
+  );
+}
+
+const MCP_INTERACTION_OUTCOME: Record<
+  McpElicitationInteraction["kind"],
+  Record<McpElicitationInteraction["action"], string>
+> = {
+  form: { accept: "Submitted", decline: "Declined", cancel: "Cancelled" },
+  url: { accept: "Opened", decline: "Declined", cancel: "Cancelled" },
+};
+
+/** One-line record of each elicitation the user answered during the call. */
+function McpInteractionLines({
+  interactions,
+}: {
+  interactions: readonly McpElicitationInteraction[];
+}) {
+  return (
+    <div class="tool-call-interactions">
+      {interactions.map((interaction, index) => (
+        <div
+          key={index}
+          class={`tool-call-interaction tool-call-interaction-${interaction.action}`}
+        >
+          <i
+            class={`codicon codicon-${interaction.kind === "url" ? "link-external" : "list-selection"}`}
+            aria-hidden="true"
+          />
+          <span class="tool-call-interaction-text" title={interaction.message}>
+            <span class="tool-call-interaction-server">
+              {interaction.serverName}
+            </span>{" "}
+            asked: {interaction.message}
+          </span>
+          <span class="tool-call-interaction-outcome">
+            {MCP_INTERACTION_OUTCOME[interaction.kind]?.[interaction.action] ??
+              interaction.action}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Expanded detail: the answers the user gave, as label/value pairs. */
+function McpInteractionDetails({
+  interactions,
+}: {
+  interactions: readonly McpElicitationInteraction[];
+}) {
+  const withDetail = interactions.filter(
+    (interaction) => interaction.answers?.length || interaction.origin,
+  );
+  if (withDetail.length === 0) return null;
+  return (
+    <div class="tool-call-section">
+      <div class="tool-call-section-label">Your input</div>
+      {withDetail.map((interaction, index) => (
+        <dl key={index} class="tool-call-interaction-answers">
+          {interaction.origin && (
+            <>
+              <dt>Page</dt>
+              <dd>{interaction.origin}</dd>
+            </>
+          )}
+          {interaction.answers?.map((answer, answerIndex) => (
+            <Fragment key={answerIndex}>
+              <dt>{answer.label}</dt>
+              <dd>{answer.value || "(empty)"}</dd>
+            </Fragment>
+          ))}
+          {interaction.omittedAnswers ? (
+            <dd class="tool-call-interaction-omitted">
+              +{interaction.omittedAnswers} more
+            </dd>
+          ) : null}
+        </dl>
+      ))}
     </div>
   );
 }
@@ -825,6 +914,8 @@ export function ToolCallBlock({
   );
   const mcpApprovalPromotion = toolCall.mcpApprovalPromotion;
   const composeTrace = toolCall.composeTrace;
+  const mcpInteractions =
+    toolCall.mcpInteractions ?? projectedToolCall.mcpInteractions;
   const composeScript =
     toolCall.name === "compose" && typeof input?.script === "string"
       ? input.script
@@ -1118,6 +1209,10 @@ export function ToolCallBlock({
         <ToolCallProgressLine progress={projectedToolCall.progress} />
       )}
 
+      {mcpInteractions && mcpInteractions.length > 0 && (
+        <McpInteractionLines interactions={mcpInteractions} />
+      )}
+
       {expanded && (
         <div class="tool-call-details">
           {projectedToolCall.remoteDetail?.available === false && (
@@ -1161,6 +1256,9 @@ export function ToolCallBlock({
                 )}
               </div>
             </div>
+          )}
+          {mcpInteractions && mcpInteractions.length > 0 && (
+            <McpInteractionDetails interactions={mcpInteractions} />
           )}
           <InlineDiff toolName={toolCall.name} input={input} />
           {composeScript ? (

@@ -174,6 +174,7 @@ export type AgentEvent =
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
       authorizationAudit?: import("@agentlink/protocol/tool-result").AuthorizationAudit;
       composeTrace?: import("@agentlink/protocol/compose").ComposeTrace;
+      mcpInteractions?: import("@agentlink/protocol/mcp-elicitation").McpElicitationInteraction[];
     }
   | { type: "todo_update"; todos: TodoItem[] }
   | { type: "final_marker"; marker: FinalMessageMarker | null }

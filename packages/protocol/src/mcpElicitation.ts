@@ -89,6 +89,131 @@ export type McpFormElicitationResponse =
 export type McpElicitationValues = Record<string, unknown>;
 export type McpElicitationFieldErrors = Record<string, string>;
 
+export type McpElicitationAction = "accept" | "decline" | "cancel";
+
+/** Bounds for the display-only record of an answered elicitation. */
+export const MAX_MCP_ELICITATION_SUMMARY_MESSAGE_LENGTH = 500;
+export const MAX_MCP_ELICITATION_SUMMARY_ANSWERS = 20;
+export const MAX_MCP_ELICITATION_SUMMARY_VALUE_LENGTH = 200;
+
+/**
+ * Display-only record of one elicitation the user answered during an MCP tool
+ * call. Stored with the tool result for the transcript; never sent to the
+ * model. `message`, labels and values are untrusted server or user text.
+ */
+export interface McpElicitationInteraction {
+  kind: "form" | "url";
+  serverName: string;
+  message: string;
+  action: McpElicitationAction;
+  /** Accepted form answers as readable label/value pairs. */
+  answers?: Array<{ label: string; value: string }>;
+  /** Number of answered fields omitted by the summary bound. */
+  omittedAnswers?: number;
+  /** URL-mode only: the origin the user was asked to open. */
+  origin?: string;
+}
+
+/**
+ * Readable label for a form field: the server's title when it gave one,
+ * otherwise the property name split into words with only the first word
+ * capitalised (`favouriteColour` and `favourite_colour` become
+ * "Favourite colour"). All-caps words such as `ID` or `URL` keep their case.
+ */
+export function mcpElicitationFieldLabel(
+  field: Pick<McpElicitationField, "name" | "title">,
+): string {
+  const title = field.title?.trim();
+  if (title) return title;
+  return humanizeMcpFieldName(field.name);
+}
+
+export function humanizeMcpFieldName(name: string): string {
+  const words = name
+    .replace(/([a-z\d])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .split(/[\s_\-.]+/)
+    .filter(Boolean);
+  if (words.length === 0) return name;
+  return words
+    .map((word, index) => {
+      if (word.length > 1 && word === word.toUpperCase()) return word;
+      const lower = word.toLowerCase();
+      return index === 0
+        ? lower.charAt(0).toUpperCase() + lower.slice(1)
+        : lower;
+    })
+    .join(" ");
+}
+
+/** Builds the bounded transcript record for a form elicitation outcome. */
+export function summarizeMcpFormElicitation(
+  request: Pick<McpFormElicitationRequest, "serverName" | "message" | "fields">,
+  action: McpElicitationAction,
+  values?: Readonly<McpElicitationValues>,
+): McpElicitationInteraction {
+  const interaction: McpElicitationInteraction = {
+    kind: "form",
+    serverName: request.serverName,
+    message: boundMcpElicitationSummaryText(
+      request.message,
+      MAX_MCP_ELICITATION_SUMMARY_MESSAGE_LENGTH,
+    ),
+    action,
+  };
+  if (action !== "accept" || !values) return interaction;
+
+  const answers: Array<{ label: string; value: string }> = [];
+  let answered = 0;
+  for (const field of request.fields) {
+    if (!Object.prototype.hasOwnProperty.call(values, field.name)) continue;
+    answered += 1;
+    if (answers.length >= MAX_MCP_ELICITATION_SUMMARY_ANSWERS) continue;
+    answers.push({
+      label: boundMcpElicitationSummaryText(
+        mcpElicitationFieldLabel(field),
+        MAX_MCP_ELICITATION_SUMMARY_VALUE_LENGTH,
+      ),
+      value: boundMcpElicitationSummaryText(
+        formatMcpElicitationValue(field, values[field.name]),
+        MAX_MCP_ELICITATION_SUMMARY_VALUE_LENGTH,
+      ),
+    });
+  }
+  interaction.answers = answers;
+  if (answered > answers.length) {
+    interaction.omittedAnswers = answered - answers.length;
+  }
+  return interaction;
+}
+
+function formatMcpElicitationValue(
+  field: McpElicitationField,
+  value: unknown,
+): string {
+  const optionTitle = (entry: unknown) => {
+    if (field.kind !== "single-select" && field.kind !== "multi-select") {
+      return String(entry);
+    }
+    const option = field.options.find((candidate) => candidate.value === entry);
+    return option?.title ?? String(entry);
+  };
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (Array.isArray(value)) return value.map(optionTitle).join(", ");
+  if (value === null || value === undefined) return "";
+  return optionTitle(value);
+}
+
+/** Truncates untrusted summary text to a display bound. */
+export function boundMcpElicitationSummaryText(
+  value: string,
+  maximumLength: number,
+): string {
+  return value.length > maximumLength
+    ? `${value.slice(0, maximumLength - 1)}…`
+    : value;
+}
+
 export type McpElicitationSchemaNormalizationResult =
   | { ok: true; schema: McpElicitationFormSchema }
   | { ok: false; error: string };
@@ -672,7 +797,7 @@ function validateAndCoerceField(
   field: McpElicitationField,
   input: unknown,
 ): FieldValidationResult {
-  const label = field.title ?? field.name;
+  const label = mcpElicitationFieldLabel(field);
 
   if (field.kind === "boolean") {
     if (input === undefined || input === null || input === "") {

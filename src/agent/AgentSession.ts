@@ -1267,6 +1267,7 @@ export class AgentSession {
       mcpApprovalPromotion?: import("@agentlink/protocol/tool-result").McpApprovalPromotionMeta;
       authorizationAudit?: import("@agentlink/protocol/tool-result").AuthorizationAudit;
       composeTrace?: import("@agentlink/protocol/compose").ComposeTrace;
+      mcpInteractions?: import("@agentlink/protocol/mcp-elicitation").McpElicitationInteraction[];
     }>,
   ): void {
     this.messagesRevision++;

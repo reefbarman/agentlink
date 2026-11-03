@@ -317,6 +317,9 @@ export function encodeTranscriptBlockDetail(
               ? { startedAt: block.startedAt }
               : {}),
             ...(block.composeTrace ? { composeTrace: block.composeTrace } : {}),
+            ...(block.mcpInteractions?.length
+              ? { mcpInteractions: block.mcpInteractions }
+              : {}),
             ...(block.mcpApprovalPromotion
               ? { mcpApprovalPromotion: block.mcpApprovalPromotion }
               : {}),
@@ -556,6 +559,15 @@ function isDisplayBlock(value: unknown): value is TranscriptDisplayBlock {
     (value.composeTrace === undefined ||
       (isRecord(value.composeTrace) &&
         Array.isArray(value.composeTrace.children))) &&
+    (value.mcpInteractions === undefined ||
+      (Array.isArray(value.mcpInteractions) &&
+        value.mcpInteractions.every(
+          (entry) =>
+            isRecord(entry) &&
+            typeof entry.serverName === "string" &&
+            typeof entry.message === "string" &&
+            typeof entry.action === "string",
+        ))) &&
     (value.mcpApprovalPromotion === undefined ||
       (isRecord(value.mcpApprovalPromotion) &&
         Array.isArray(value.mcpApprovalPromotion.scopes)))

@@ -2,7 +2,11 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   createMcpElicitationInitialValues,
+  humanizeMcpFieldName,
   MAX_MCP_ELICITATION_FIELDS,
+  MAX_MCP_ELICITATION_SUMMARY_MESSAGE_LENGTH,
+  mcpElicitationFieldLabel,
+  summarizeMcpFormElicitation,
   MAX_MCP_ELICITATION_OPTIONS,
   normalizeMcpElicitationSchema,
   validateAndCoerceMcpElicitationValues,
@@ -489,5 +493,59 @@ describe("validateAndCoerceMcpElicitationValues", () => {
     });
     expect(result.ok).toBe(true);
     if (result.ok) expect({ ...result.values }).toEqual({});
+  });
+});
+
+describe("MCP elicitation display helpers", () => {
+  it("prefers the server title and humanizes untitled field names", () => {
+    expect(
+      mcpElicitationFieldLabel({ name: "x", title: " Server title " }),
+    ).toBe("Server title");
+    expect(humanizeMcpFieldName("favouriteColour")).toBe("Favourite colour");
+    expect(humanizeMcpFieldName("favourite_colour")).toBe("Favourite colour");
+    expect(humanizeMcpFieldName("apiURLPath")).toBe("Api URL path");
+    expect(humanizeMcpFieldName("userID")).toBe("User ID");
+    expect(humanizeMcpFieldName("___")).toBe("___");
+  });
+
+  it("summarizes accepted answers with option titles and bounds", () => {
+    const fields = normalizedFields({
+      type: "object",
+      properties: {
+        colour: {
+          type: "string",
+          oneOf: [{ const: "teal", title: "Teal" }],
+        },
+        subscribe: { type: "boolean" },
+        notes: { type: "string" },
+      },
+    });
+
+    expect(
+      summarizeMcpFormElicitation(
+        { serverName: "srv", message: "Pick", fields },
+        "accept",
+        { colour: "teal", subscribe: true },
+      ),
+    ).toEqual({
+      kind: "form",
+      serverName: "srv",
+      message: "Pick",
+      action: "accept",
+      answers: [
+        { label: "Colour", value: "Teal" },
+        { label: "Subscribe", value: "Yes" },
+      ],
+    });
+
+    const declined = summarizeMcpFormElicitation(
+      { serverName: "srv", message: "x".repeat(600), fields },
+      "decline",
+      { colour: "teal" },
+    );
+    expect(declined.answers).toBeUndefined();
+    expect(declined.message).toHaveLength(
+      MAX_MCP_ELICITATION_SUMMARY_MESSAGE_LENGTH,
+    );
   });
 });

@@ -112,6 +112,17 @@ describe("McpClientHub protocol negotiation", () => {
       const confirmed = await hub.callTool("fixture__confirm", {});
       expect(JSON.stringify(confirmed)).toContain("confirmed");
       expect(elicitations).toEqual(["Proceed?"]);
+      // The answer is recorded on the call for the transcript, not the model.
+      expect(confirmed.uiMeta?.mcpInteractions).toEqual([
+        {
+          kind: "form",
+          serverName: "fixture",
+          message: "Proceed?",
+          action: "accept",
+          answers: [{ label: "Confirm", value: "Yes" }],
+        },
+      ]);
+      expect(JSON.stringify(confirmed.content)).not.toContain("Proceed?");
 
       // Change notifications arrive over the subscriptions/listen stream.
       const refreshed = waitForStatus(hub, (infos) =>
@@ -168,6 +179,9 @@ describe("McpClientHub protocol negotiation", () => {
       });
       const refused = await hub.callTool("fixture__confirm", {});
       expect(JSON.stringify(refused)).toContain("refused");
+      expect(refused.uiMeta?.mcpInteractions).toMatchObject([
+        { kind: "form", action: "accept", answers: [{ value: "No" }] },
+      ]);
     },
     TEST_TIMEOUT_MS,
   );

@@ -683,6 +683,7 @@ await Promise.all([
         .replaceAll('"./compose.js"', '"./compose.cjs"')
         .replaceAll('"./contextDiagnostics.js"', '"./contextDiagnostics.cjs"')
         .replaceAll('"./finalStatus.js"', '"./finalStatus.cjs"')
+        .replaceAll('"./mcpElicitation.js"', '"./mcpElicitation.cjs"')
         .replaceAll('"./toolResult.js"', '"./toolResult.cjs"'),
     ),
   ),
@@ -868,7 +869,8 @@ await Promise.all([
       content
         .replaceAll('"./compose.js"', '"./compose.cjs"')
         .replaceAll('"./structuredQuestion.js"', '"./structuredQuestion.cjs"')
-        .replaceAll('"./mcpManager.js"', '"./mcpManager.cjs"'),
+        .replaceAll('"./mcpManager.js"', '"./mcpManager.cjs"')
+        .replaceAll('"./mcpElicitation.js"', '"./mcpElicitation.cjs"'),
     ),
   ),
   readFile("dist/webAccessPolicy.d.ts", "utf8").then((content) =>

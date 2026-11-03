@@ -61,7 +61,10 @@ import { ChatView } from "./components/ChatView";
 import { ContextUsageRow } from "./components/ContextUsageRow";
 import { EnvironmentPanel } from "./components/EnvironmentPanel";
 import { ModelSetupCard } from "./components/ModelSetupCard";
-import { ElicitationModal } from "./components/ElicitationModal";
+import {
+  McpFormElicitationCard,
+  McpUrlElicitationCard,
+} from "../../shared/ui/McpElicitationCard";
 import {
   InputArea,
   type ComposerContextMode,
@@ -83,8 +86,8 @@ import type {
   MemoryToolScope,
 } from "@agentlink/protocol/autonomous-memory";
 import type {
-  McpElicitationValues,
   McpFormElicitationRequest,
+  McpFormElicitationResponse,
 } from "@agentlink/protocol/mcp-elicitation";
 import type { McpUrlElicitationRequest } from "@agentlink/protocol/mcp-url-elicitation";
 import {
@@ -100,7 +103,7 @@ import { SessionHistory } from "./components/SessionHistory";
 import { StreamingStatusBar } from "./components/StreamingStatusBar";
 import { TodoPanel } from "./components/TodoPanel";
 import { TranscriptView } from "./components/TranscriptView";
-import { UrlElicitationModal } from "./components/UrlElicitationModal";
+
 import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBaselineMetrics";
 import { isForwardedBuiltinCommand } from "@agentlink/protocol/builtin-command-forwarding";
 import { deriveModelSetupState } from "@agentlink/protocol/model-setup";
@@ -1143,6 +1146,7 @@ export function App({
             parentCallId: msg.parentCallId,
             mcpApprovalPromotion: msg.mcpApprovalPromotion,
             composeTrace: msg.composeTrace,
+            mcpInteractions: msg.mcpInteractions,
           });
           break;
         case "agentTokenEstimate":
@@ -3167,24 +3171,13 @@ export function App({
     [vscodeApi, handleSelectModel, handleSwitchMode],
   );
 
-  const handleElicitSubmit = useCallback(
-    (id: string, values: McpElicitationValues) => {
+  const handleFormElicitResponse = useCallback(
+    (response: McpFormElicitationResponse) => {
       vscodeApi.postMessage({
         command: "agentFormElicitationResponse",
-        id,
-        action: "accept",
-        values,
-      });
-    },
-    [vscodeApi],
-  );
-
-  const handleElicitCancel = useCallback(
-    (id: string) => {
-      vscodeApi.postMessage({
-        command: "agentFormElicitationResponse",
-        id,
-        action: "cancel",
+        id: response.id,
+        action: response.action,
+        ...(response.action === "accept" ? { values: response.values } : {}),
       });
     },
     [vscodeApi],
@@ -3202,23 +3195,6 @@ export function App({
       });
     },
     [vscodeApi],
-  );
-
-  const handleUrlElicitAccept = useCallback(
-    (id: string, _url: string) => {
-      submitUrlElicitation(id, "accept");
-    },
-    [submitUrlElicitation],
-  );
-
-  const handleUrlElicitDecline = useCallback(
-    (id: string) => submitUrlElicitation(id, "decline"),
-    [submitUrlElicitation],
-  );
-
-  const handleUrlElicitCancel = useCallback(
-    (id: string) => submitUrlElicitation(id, "cancel"),
-    [submitUrlElicitation],
   );
 
   const handleForwardedApprovalSubmit = useCallback(
@@ -3806,22 +3782,6 @@ export function App({
 
   return (
     <>
-      {elicitation && (
-        <ElicitationModal
-          key={elicitation.id}
-          request={elicitation}
-          onSubmit={handleElicitSubmit}
-          onCancel={handleElicitCancel}
-        />
-      )}
-      {urlElicitation && (
-        <UrlElicitationModal
-          request={urlElicitation}
-          onAccept={handleUrlElicitAccept}
-          onDecline={handleUrlElicitDecline}
-          onCancel={handleUrlElicitCancel}
-        />
-      )}
       {chatTabConfirmation && (
         <ChatTabConfirmation
           request={chatTabConfirmation}
@@ -4066,11 +4026,14 @@ export function App({
               revealKey={
                 globalApproval?.id ??
                 state.approvalRequest?.id ??
+                elicitation?.id ??
+                urlElicitation?.id ??
                 (environmentPanelOpen ? "environment" : null)
               }
               revealMinHeight={Math.max(
                 approvalPanelHeight + 10,
                 environmentPanelOpen ? 320 : 0,
+                elicitation || urlElicitation ? 240 : 0,
               )}
             >
               <MessageQueuePanel
@@ -4490,6 +4453,21 @@ export function App({
                 />
               )}
               {state.todos.length > 0 && <TodoPanel todos={state.todos} />}
+
+              {elicitation && (
+                <McpFormElicitationCard
+                  key={elicitation.id}
+                  request={elicitation}
+                  onRespond={handleFormElicitResponse}
+                />
+              )}
+              {urlElicitation && (
+                <McpUrlElicitationCard
+                  key={urlElicitation.id}
+                  request={urlElicitation}
+                  onRespond={submitUrlElicitation}
+                />
+              )}
 
               {(globalApproval ?? state.approvalRequest) && (
                 <ApprovalPanelEmbed

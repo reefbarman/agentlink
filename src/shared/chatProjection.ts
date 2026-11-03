@@ -36,6 +36,7 @@ import type {
   ComposeChildStatus,
   ComposeTrace,
 } from "@agentlink/protocol/compose";
+import type { McpElicitationInteraction } from "@agentlink/protocol/mcp-elicitation";
 import type { BackgroundResultState } from "@agentlink/protocol/background-result";
 import type { ContextHealthSnapshot } from "@agentlink/protocol/context-health";
 import type { DetectedQuestion } from "@agentlink/protocol/question-detection";
@@ -1034,6 +1035,7 @@ export type AppAction =
       parentCallId?: string;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
       composeTrace?: ComposeTrace;
+      mcpInteractions?: McpElicitationInteraction[];
     }
   | { type: "TODO_UPDATE"; todos: TodoItem[] }
   | { type: "ADD_ANNOTATION"; text: string; badge: "follow-up" | "rejection" }
@@ -1273,6 +1275,7 @@ export function agentMessagesToChatMessages(
     {
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
       composeTrace?: ComposeTrace;
+      mcpInteractions?: McpElicitationInteraction[];
     }
   >();
   for (const msg of raw) {
@@ -1284,6 +1287,7 @@ export function agentMessagesToChatMessages(
         content?: unknown;
         mcpApprovalPromotion?: McpApprovalPromotionMeta;
         composeTrace?: ComposeTrace;
+        mcpInteractions?: McpElicitationInteraction[];
       }>) {
         if (block.type === "tool_result" && block.tool_use_id) {
           const content = block.content;
@@ -1335,10 +1339,18 @@ export function agentMessagesToChatMessages(
               toolResultDocuments.set(block.tool_use_id, documents);
             }
           }
-          if (block.mcpApprovalPromotion || block.composeTrace) {
+          const mcpInteractions = Array.isArray(block.mcpInteractions)
+            ? block.mcpInteractions
+            : undefined;
+          if (
+            block.mcpApprovalPromotion ||
+            block.composeTrace ||
+            mcpInteractions?.length
+          ) {
             toolResultUiMeta.set(block.tool_use_id, {
               mcpApprovalPromotion: block.mcpApprovalPromotion,
               composeTrace: block.composeTrace,
+              ...(mcpInteractions?.length ? { mcpInteractions } : {}),
             });
           }
         }
@@ -1766,6 +1778,12 @@ export function agentMessagesToChatMessages(
               mcpApprovalPromotion:
                 toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
               composeTrace: toolResultUiMeta.get(toolId)?.composeTrace,
+              ...(toolResultUiMeta.get(toolId)?.mcpInteractions
+                ? {
+                    mcpInteractions:
+                      toolResultUiMeta.get(toolId)!.mcpInteractions,
+                  }
+                : {}),
             });
           }
         }
@@ -2664,6 +2682,9 @@ export function reducer(state: AppState, action: AppAction): AppState {
               ? {
                   mcpApprovalPromotion: action.mcpApprovalPromotion,
                   composeTrace: action.composeTrace ?? b.composeTrace,
+                  ...(action.mcpInteractions?.length
+                    ? { mcpInteractions: action.mcpInteractions }
+                    : {}),
                 }
               : {}),
           };

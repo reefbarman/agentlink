@@ -1,6 +1,7 @@
 import type { ComposeTrace } from "./compose.js";
 import type { HumanQuestionAnswer } from "./structuredQuestion.js";
 import type { McpConfigMutationTarget } from "./mcpManager.js";
+import type { McpElicitationInteraction } from "./mcpElicitation.js";
 
 /** Durable MCP approval authority retained across transcript and UI round trips. */
 export interface McpApprovalPromotionMeta {
@@ -231,6 +232,8 @@ export interface ToolResult {
     mcpApprovalPromotion?: McpApprovalPromotionMeta;
     composeTrace?: ComposeTrace;
     authorizationAudit?: AuthorizationAudit;
+    /** Elicitations the user answered during this MCP call (display-only). */
+    mcpInteractions?: McpElicitationInteraction[];
   };
 }
 

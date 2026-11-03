@@ -15,13 +15,9 @@ import type {
 } from "@agentlink/protocol/chat-catalog";
 import type { UserQuestion as Question } from "@agentlink/protocol/structured-question";
 
-import {
-  createMcpElicitationInitialValues,
-  validateAndCoerceMcpElicitationValues,
-  type McpElicitationFieldErrors,
-  type McpElicitationValues,
-  type McpFormElicitationRequest,
-  type McpFormElicitationResponse,
+import type {
+  McpElicitationFieldErrors,
+  McpFormElicitationRequest,
 } from "@agentlink/protocol/mcp-elicitation";
 import type { McpUrlElicitationRequest } from "@agentlink/protocol/mcp-url-elicitation";
 import type {
@@ -152,7 +148,10 @@ import type { ReleaseUpdateState } from "../../updates/releaseUpdateTypes";
 import type { ReleaseInstallState } from "../../updates/releaseInstall";
 import { MemoryPanel } from "../../shared/ui/MemoryPanel";
 import { memoryMutationError } from "../../shared/memoryMutationError";
-import { McpElicitationFormControls } from "../../shared/ui/McpElicitationFormControls";
+import {
+  McpFormElicitationCard,
+  McpUrlElicitationCard,
+} from "../../shared/ui/McpElicitationCard";
 import type {
   ManageMemoryToolInput,
   ManageMemoryResult,
@@ -1048,164 +1047,6 @@ function buildAskAgentStatusNotice(params: {
   }
 
   return null;
-}
-
-function FormElicitationPanel({
-  request,
-  onRespond,
-}: {
-  request: McpFormElicitationRequest;
-  onRespond: (response: McpFormElicitationResponse) => Promise<{
-    ok: boolean;
-    errors?: McpElicitationFieldErrors;
-    error?: string;
-  }>;
-}) {
-  const [values, setValues] = useState<McpElicitationValues>(() =>
-    createMcpElicitationInitialValues(request.fields),
-  );
-  const [errors, setErrors] = useState<McpElicitationFieldErrors>({});
-  const [submitError, setSubmitError] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-
-  const respond = async (response: McpFormElicitationResponse) => {
-    setSubmitting(true);
-    setSubmitError("");
-    try {
-      const result = await onRespond(response);
-      if (!result.ok) {
-        setErrors(result.errors ?? {});
-        setSubmitError(result.error ?? "The response could not be submitted.");
-      }
-    } catch {
-      setSubmitError("The response could not be submitted.");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const accept = () => {
-    const validation = validateAndCoerceMcpElicitationValues(
-      request.fields,
-      values,
-    );
-    if (!validation.ok) {
-      setErrors(validation.errors);
-      setSubmitError("Check the highlighted fields and try again.");
-      return;
-    }
-    setErrors({});
-    void respond({
-      id: request.id,
-      action: "accept",
-      values: validation.values,
-    });
-  };
-
-  return (
-    <div class="approval-panel-embed mcp-elicitation-panel">
-      <div class="url-elicitation-header">
-        <i class="codicon codicon-list-selection" />
-        <span>MCP input requested by {request.serverName}</span>
-      </div>
-      <p>{request.message}</p>
-      <McpElicitationFormControls
-        fields={request.fields}
-        values={values}
-        errors={errors}
-        disabled={submitting}
-        idPrefix={`browser-mcp-elicitation-${request.id}`}
-        onChange={(name, value) => {
-          setValues((current) => ({ ...current, [name]: value }));
-          setErrors((current) => {
-            if (!current[name]) return current;
-            const next = { ...current };
-            delete next[name];
-            return next;
-          });
-          setSubmitError("");
-        }}
-      />
-      {submitError && (
-        <p class="mcp-elicitation-error" role="alert">
-          {submitError}
-        </p>
-      )}
-      <div class="url-elicitation-actions">
-        <button
-          type="button"
-          disabled={submitting}
-          onClick={() => void respond({ id: request.id, action: "cancel" })}
-        >
-          Cancel
-        </button>
-        <button type="button" disabled={submitting} onClick={accept}>
-          {submitting ? "Submitting…" : "Submit"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function UrlElicitationPanel({
-  request,
-  onAccept,
-  onDecline,
-  onCancel,
-  externalBrowserUnavailable = false,
-}: {
-  externalBrowserUnavailable?: boolean;
-  request: McpUrlElicitationRequest;
-  onAccept: (id: string, url: string) => void;
-  onDecline: (id: string) => void;
-  onCancel: (id: string) => void;
-}) {
-  return (
-    <div class="approval-panel-embed url-elicitation-panel">
-      <div class="url-elicitation-header">
-        <i class="codicon codicon-link-external" />
-        <span>MCP URL requested by {request.serverName}</span>
-      </div>
-      <p>{request.message}</p>
-      {externalBrowserUnavailable && (
-        <p role="status">
-          Complete this browser-opening request in VS Code or the browser
-          gateway. The embedded desktop view cannot open external windows.
-        </p>
-      )}
-      <div class="url-elicitation-warning">
-        Only continue if you trust this MCP server and expected this browser
-        flow.
-      </div>
-      {request.isLocalAddress && (
-        <div class="url-elicitation-warning danger">
-          This URL points at a local/private network address. Make sure the
-          server is trusted.
-        </div>
-      )}
-      <dl class="url-elicitation-details">
-        <dt>Origin</dt>
-        <dd>{request.origin}</dd>
-        <dt>Full URL</dt>
-        <dd>{request.url}</dd>
-      </dl>
-      <div class="url-elicitation-actions">
-        <button type="button" onClick={() => onCancel(request.id)}>
-          Cancel
-        </button>
-        <button type="button" onClick={() => onDecline(request.id)}>
-          Decline
-        </button>
-        <button
-          type="button"
-          disabled={externalBrowserUnavailable}
-          onClick={() => onAccept(request.id, request.url)}
-        >
-          Open URL
-        </button>
-      </div>
-    </div>
-  );
 }
 
 /**
@@ -11638,8 +11479,9 @@ export function BrowserGatewayApp({
                   (() => {
                     const originTabId = snapshotOriginRef.current.tabId;
                     return (
-                      <FormElicitationPanel
+                      <McpFormElicitationCard
                         key={`${originTabId}:${pendingFormElicitation.id}`}
+                        idPrefix="browser-mcp-elicitation"
                         request={pendingFormElicitation}
                         onRespond={async (response) => {
                           const result = await fetch(
@@ -11681,32 +11523,23 @@ export function BrowserGatewayApp({
                 {!isAskAgentSelected &&
                   pendingUrlElicitation &&
                   !mobileReviewOpen && (
-                    <UrlElicitationPanel
+                    <McpUrlElicitationCard
+                      key={pendingUrlElicitation.id}
                       request={pendingUrlElicitation}
                       externalBrowserUnavailable={externalBrowserUnavailable}
-                      onAccept={(id, url) => {
-                        if (externalBrowserUnavailable) return;
-                        window.open(url, "_blank", "noopener,noreferrer");
+                      onRespond={(id, action) => {
+                        if (action === "accept") {
+                          if (externalBrowserUnavailable) return;
+                          window.open(
+                            pendingUrlElicitation.url,
+                            "_blank",
+                            "noopener,noreferrer",
+                          );
+                        }
                         browserVscodeApi.postMessage({
                           command: "agentUrlElicitationResponse",
                           id,
-                          action: "accept",
-                          originTabId: snapshotOriginRef.current.tabId,
-                        });
-                      }}
-                      onDecline={(id) => {
-                        browserVscodeApi.postMessage({
-                          command: "agentUrlElicitationResponse",
-                          id,
-                          action: "decline",
-                          originTabId: snapshotOriginRef.current.tabId,
-                        });
-                      }}
-                      onCancel={(id) => {
-                        browserVscodeApi.postMessage({
-                          command: "agentUrlElicitationResponse",
-                          id,
-                          action: "cancel",
+                          action,
                           originTabId: snapshotOriginRef.current.tabId,
                         });
                       }}

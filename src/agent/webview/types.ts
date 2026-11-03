@@ -202,6 +202,7 @@ export type ExtensionMessage =
       parentCallId?: string;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
       composeTrace?: ComposeTrace;
+      mcpInteractions?: import("@agentlink/protocol/mcp-elicitation").McpElicitationInteraction[];
     }
   | {
       type: "agentUserAnnotation";

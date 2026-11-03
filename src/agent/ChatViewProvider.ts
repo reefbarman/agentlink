@@ -548,6 +548,7 @@ export type ExtensionToWebview =
       parentCallId?: string;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
       composeTrace?: ComposeTrace;
+      mcpInteractions?: import("@agentlink/protocol/mcp-elicitation").McpElicitationInteraction[];
     }
   | {
       type: "agentUserAnnotation";
@@ -1560,11 +1561,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       request,
       resolve,
       cancel,
+      decline,
     ) => {
       this.formElicitationCoordinator.enqueue(request, {
         sessionId: this.getAmbientSessionId(),
         resolve,
         cancel,
+        decline,
       });
     };
     this.mcpHub.onElicitation = handleMcpElicitation;
@@ -11438,6 +11441,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           parentCallId: extMsg.parentCallId,
           mcpApprovalPromotion: extMsg.mcpApprovalPromotion,
           composeTrace: extMsg.composeTrace,
+          mcpInteractions: extMsg.mcpInteractions,
         });
         break;
 
@@ -12051,6 +12055,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           parentCallId: event.parentCallId,
           mcpApprovalPromotion: event.mcpApprovalPromotion,
           composeTrace: event.composeTrace,
+          mcpInteractions: event.mcpInteractions,
         });
         // Send running token estimate so the context bar stays current
         // between API responses (tool results can add 10-100k+ tokens).

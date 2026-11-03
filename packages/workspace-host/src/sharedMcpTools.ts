@@ -527,7 +527,7 @@ export function createWorkspaceSharedMcpTools(
     session.active = request;
     hub.onStatusChange = (servers) =>
       options.onServerStatus?.(request.sessionId, servers);
-    hub.onElicitation = (elicitation, resolve, cancel) => {
+    hub.onElicitation = (elicitation, resolve, cancel, decline) => {
       const claim = pending.claim(elicitation.serverName);
       if (
         !claim ||
@@ -567,6 +567,10 @@ export function createWorkspaceSharedMcpTools(
                 response.content,
               );
               finish(validated.ok ? validated.values : undefined);
+            } else if (response.action === "decline" && !settled) {
+              settled = true;
+              claim.signal.removeEventListener("abort", onAbort);
+              decline();
             } else {
               finish();
             }

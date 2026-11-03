@@ -112,35 +112,41 @@ describe("McpElicitationFormControls", () => {
     expect(email.maxLength).toBe(100);
     expect(email.getAttribute("aria-describedby")).toContain("description");
 
-    expect((screen.getByLabelText("callback") as HTMLInputElement).type).toBe(
-      "url",
-    );
-    expect((screen.getByLabelText("startDate") as HTMLInputElement).type).toBe(
-      "date",
-    );
-    expect((screen.getByLabelText("recordedAt") as HTMLInputElement).type).toBe(
-      "text",
-    );
+    // Fields without a title get a readable label from their name, and
+    // optional fields say so instead of leaving the asterisk to imply it.
+    expect(
+      (screen.getByLabelText("CallbackOptional") as HTMLInputElement).type,
+    ).toBe("url");
+    expect(
+      (screen.getByLabelText("Start dateOptional") as HTMLInputElement).type,
+    ).toBe("date");
+    expect(
+      (screen.getByLabelText("Recorded atOptional") as HTMLInputElement).type,
+    ).toBe("text");
 
-    const ratio = screen.getByLabelText("ratio") as HTMLInputElement;
+    const ratio = screen.getByLabelText("RatioOptional") as HTMLInputElement;
     expect(ratio.type).toBe("number");
     expect(ratio.min).toBe("0");
     expect(ratio.max).toBe("1");
     expect(ratio.step).toBe("any");
 
-    const retries = screen.getByLabelText("retries") as HTMLInputElement;
+    const retries = screen.getByLabelText(
+      "RetriesOptional",
+    ) as HTMLInputElement;
     expect(retries.step).toBe("1");
 
-    const enabled = screen.getByLabelText("enabled") as HTMLInputElement;
+    const enabled = screen.getByLabelText(
+      "EnabledOptional",
+    ) as HTMLInputElement;
     expect(enabled.type).toBe("checkbox");
     expect(enabled.checked).toBe(false);
 
-    const role = screen.getByLabelText("role*") as HTMLSelectElement;
+    const role = screen.getByLabelText("Role*") as HTMLSelectElement;
     expect(role.value).toBe("ops");
     expect(screen.getByRole("option", { name: "Developer" })).toBeTruthy();
     expect(screen.getByRole("option", { name: "Operations" })).toBeTruthy();
 
-    const regions = screen.getByLabelText("regions*") as HTMLSelectElement;
+    const regions = screen.getByLabelText("Regions*") as HTMLSelectElement;
     expect(regions.multiple).toBe(true);
     expect(
       Array.from(regions.selectedOptions).map((option) => option.value),
@@ -160,17 +166,17 @@ describe("McpElicitationFormControls", () => {
     fireEvent.input(screen.getByLabelText("Email address*"), {
       target: { value: "next@example.com" },
     });
-    fireEvent.input(screen.getByLabelText("ratio"), {
+    fireEvent.input(screen.getByLabelText("RatioOptional"), {
       target: { value: "0.75" },
     });
-    fireEvent.input(screen.getByLabelText("enabled"), {
+    fireEvent.input(screen.getByLabelText("EnabledOptional"), {
       target: { checked: true },
     });
-    fireEvent.input(screen.getByLabelText("role*"), {
+    fireEvent.input(screen.getByLabelText("Role*"), {
       target: { value: "dev" },
     });
 
-    const regions = screen.getByLabelText("regions*") as HTMLSelectElement;
+    const regions = screen.getByLabelText("Regions*") as HTMLSelectElement;
     for (const option of Array.from(regions.options)) {
       option.selected = option.value === "apac";
     }

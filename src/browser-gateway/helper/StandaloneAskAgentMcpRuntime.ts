@@ -700,7 +700,7 @@ export class StandaloneAskAgentMcpRuntime {
               approved: approvedByCaller,
             }),
         });
-        hub.onElicitation = (elicitation, resolve, cancel) => {
+        hub.onElicitation = (elicitation, resolve, cancel, decline) => {
           const claim = operations.claim(elicitation.serverName);
           const turn = claim?.owner;
           if (
@@ -745,7 +745,11 @@ export class StandaloneAskAgentMcpRuntime {
                 )
                   finish();
                 else if (response.action === "accept") finish(response.content);
-                else finish();
+                else if (response.action === "decline" && !settled) {
+                  settled = true;
+                  signal.removeEventListener("abort", onAbort);
+                  decline();
+                } else finish();
               },
               () => finish(),
             );

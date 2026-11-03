@@ -44,7 +44,7 @@ Run each check against both servers unless marked otherwise.
 
 ## Elicitation
 
-- [ ] `elicit_form`: form shows text, enum, optional integer, and checkbox (default unticked). Accept, decline, and cancel each return the matching `action`.
+- [ ] `elicit_form`: a card opens in the Activity Shelf (not a pop-up) with text, enum, optional integer, and checkbox (default unticked), readable labels and "Optional" markers. Submit, Decline, and Cancel each return the matching `action`, and the tool row shows the matching outcome.
 - [ ] `elicit_confirm`: single checkbox; accept returns `confirm`.
 - [ ] `elicit_url`: URL prompt opens `https://modelcontextprotocol.io/`.
 - [ ] Legacy only: `elicit_url` with `complete_after_seconds: 5`: AgentLink clears the URL prompt after the completion notification.

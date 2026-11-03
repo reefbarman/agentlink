@@ -8312,75 +8312,246 @@ body.chat-activity-shelf-resizing * {
   }
 }
 
-/* ── Elicitation Modal ── */
+/* ── MCP elicitation card (Chat Activity Shelf) ── */
 
-.elicit-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 200;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-}
-
-.elicit-modal {
-  background: var(--vscode-editorWidget-background);
-  border: 1px solid
-    var(--vscode-editorWidget-border, var(--vscode-panel-border));
-  border-radius: 8px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-  padding: 16px;
-  width: 100%;
-  max-width: 400px;
-  max-height: 80vh;
-  overflow-y: auto;
+.mcp-elicit-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  margin: 0 8px 10px;
+  padding: 12px 14px;
+  min-width: 0;
+  flex-shrink: 0;
+  border: 1px solid
+    color-mix(in srgb, var(--vscode-panel-border) 82%, transparent);
+  border-left: 3px solid #4ec9b0;
+  border-radius: 8px;
+  background: var(--vscode-editor-background);
+  box-shadow: 0 1px 2px color-mix(in srgb, #000 18%, transparent);
 }
 
-.elicit-header {
+.mcp-elicit-card-header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  min-width: 0;
   font-size: 11px;
-  color: var(--vscode-descriptionForeground);
+}
+
+.mcp-elicit-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  color: #4ec9b0;
+  background: color-mix(in srgb, #4ec9b0 16%, transparent);
+}
+
+.mcp-elicit-card-eyebrow {
   font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
 }
 
-.elicit-server {
+.mcp-elicit-card-server {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  min-width: 0;
+  max-width: 50%;
+  padding: 2px 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
   font-family: var(--vscode-editor-font-family, monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.elicit-message {
+.mcp-elicit-card-server .codicon {
+  font-size: 11px;
+}
+
+.mcp-elicit-card-message {
   margin: 0;
   font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.mcp-elicit-card-error {
+  margin: 0;
+}
+
+.mcp-elicit-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid
+    color-mix(in srgb, var(--vscode-panel-border) 60%, transparent);
+}
+
+.mcp-elicit-card-actions-spacer {
+  flex: 1;
+}
+
+.mcp-elicit-btn {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  padding: 3px 12px;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.mcp-elicit-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.mcp-elicit-btn:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.mcp-elicit-btn-ghost {
+  background: none;
+  color: var(--vscode-descriptionForeground);
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.mcp-elicit-btn-ghost:hover:not(:disabled) {
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+.mcp-elicit-btn-secondary {
+  background: var(
+    --vscode-button-secondaryBackground,
+    var(--vscode-toolbar-hoverBackground)
+  );
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+}
+
+.mcp-elicit-btn-secondary:hover:not(:disabled) {
+  background: var(
+    --vscode-button-secondaryHoverBackground,
+    var(--vscode-toolbar-hoverBackground)
+  );
+}
+
+.mcp-elicit-btn-primary {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+.mcp-elicit-btn-primary:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.mcp-elicit-card-url-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  background: var(
+    --vscode-textCodeBlock-background,
+    var(--vscode-editor-background)
+  );
+}
+
+.mcp-elicit-card-url-origin {
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.mcp-elicit-card-url-full {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  overflow-wrap: anywhere;
+  max-height: 4.5em;
+  overflow-y: auto;
+}
+
+.mcp-elicit-card-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  font-size: 11px;
   line-height: 1.4;
+  color: var(--vscode-descriptionForeground);
+}
+
+.mcp-elicit-card-notice .codicon {
+  font-size: 13px;
+  margin-top: 1px;
+}
+
+.mcp-elicit-card-notice-danger {
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-inputValidation-errorBorder, #f14c4c);
+  border-radius: 6px;
+  background: var(
+    --vscode-inputValidation-errorBackground,
+    rgba(241, 76, 76, 0.12)
+  );
+  color: var(--vscode-foreground);
 }
 
 .mcp-elicitation-fields {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .mcp-elicitation-field {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
+  min-width: 0;
 }
 
-.elicit-label,
 .mcp-elicitation-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   font-size: 12px;
   font-weight: 600;
 }
 
 .mcp-elicitation-required {
   color: var(--vscode-errorForeground);
-  margin-left: 2px;
+  margin-left: -4px;
+}
+
+.mcp-elicitation-optional {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--vscode-descriptionForeground);
+}
+
+.mcp-elicitation-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
 }
 
 .mcp-elicitation-description,
@@ -8406,8 +8577,9 @@ body.chat-activity-shelf-resizing * {
   font-family: var(--vscode-font-family);
   font-size: 12px;
   min-width: 0;
-  padding: 4px 8px;
+  padding: 5px 8px;
   outline: none;
+  transition: border-color 0.15s;
 }
 
 .mcp-elicitation-select[multiple] {
@@ -8428,93 +8600,74 @@ body.chat-activity-shelf-resizing * {
   width: 16px;
   height: 16px;
   margin: 0;
+  flex-shrink: 0;
   accent-color: #4ec9b0;
 }
 
-.elicit-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.elicit-btn {
-  background: none;
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 4px;
-  color: var(--vscode-foreground);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 12px;
-  padding: 5px 14px;
-  transition: background 0.15s;
-}
-
-.elicit-btn:hover {
-  background: var(--vscode-toolbar-hoverBackground);
-}
-
-.elicit-btn-submit {
-  background: var(--vscode-button-background);
-  border-color: transparent;
-  color: var(--vscode-button-foreground);
-}
-
-.elicit-btn-submit:hover {
-  background: var(--vscode-button-hoverBackground);
-}
-
-.elicit-url-modal {
-  max-width: 520px;
-}
-
-.elicit-url-warning {
+/* Tool-row record of elicitations answered during an MCP call. */
+.tool-call-interactions {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  border: 1px solid var(--vscode-inputValidation-warningBorder, #cca700);
-  background: var(
-    --vscode-inputValidation-warningBackground,
-    rgba(204, 167, 0, 0.12)
-  );
-  color: var(--vscode-foreground);
-  border-radius: 6px;
-  padding: 10px;
-  font-size: 12px;
-  line-height: 1.35;
+  gap: 2px;
+  margin: 2px 0 0 22px;
 }
 
-.elicit-url-warning-danger {
-  border-color: var(--vscode-inputValidation-errorBorder, #f14c4c);
-  background: var(
-    --vscode-inputValidation-errorBackground,
-    rgba(241, 76, 76, 0.12)
-  );
-}
-
-.elicit-url-details {
+.tool-call-interaction {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.elicit-url-details > div {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.elicit-url-details code {
-  display: block;
-  overflow-wrap: anywhere;
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 4px;
-  padding: 6px;
-  background: var(
-    --vscode-textCodeBlock-background,
-    var(--vscode-editor-background)
-  );
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.tool-call-interaction-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-call-interaction-server {
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.tool-call-interaction-outcome {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+}
+
+.tool-call-interaction-accept .tool-call-interaction-outcome {
+  background: color-mix(in srgb, #4ec9b0 22%, transparent);
+  color: var(--vscode-foreground);
+}
+
+.tool-call-interaction-answers {
+  display: grid;
+  grid-template-columns: minmax(80px, max-content) 1fr;
+  gap: 2px 12px;
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+
+.tool-call-interaction-answers dt {
+  color: var(--vscode-descriptionForeground);
+}
+
+.tool-call-interaction-answers dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tool-call-interaction-omitted {
+  grid-column: 1 / -1;
+  color: var(--vscode-descriptionForeground);
 }
 
 /* ── Approval Panel (rich card components) ── */

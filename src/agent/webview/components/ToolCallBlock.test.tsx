@@ -222,6 +222,52 @@ describe("ToolCallBlock live progress", () => {
     );
     expect(screen.queryByRole("status")).toBeNull();
   });
+
+  it("shows only the server message when there is no total", () => {
+    render(
+      <ToolCallBlock
+        toolCall={{
+          ...running,
+          progress: { progress: 11, message: "step 11 of 20" },
+        }}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toBe("step 11 of 20");
+  });
+});
+
+describe("ToolCallBlock MCP interactions", () => {
+  it("summarizes the elicitation on the row and lists answers when expanded", () => {
+    render(
+      <ToolCallBlock
+        toolCall={{
+          type: "tool_call",
+          id: "call-2",
+          name: "testbed__elicit_form",
+          inputJson: "{}",
+          result: "ok",
+          complete: true,
+          mcpInteractions: [
+            {
+              kind: "form",
+              serverName: "testbed",
+              message: "Tell us about yourself",
+              action: "accept",
+              answers: [{ label: "Favourite colour", value: "Teal" }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/asked: Tell us about yourself/)).toBeTruthy();
+    expect(screen.getByText("Submitted")).toBeTruthy();
+    expect(screen.queryByText("Favourite colour")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /elicit_form/i }));
+    expect(screen.getByText("Favourite colour")).toBeTruthy();
+    expect(screen.getByText("Teal")).toBeTruthy();
+  });
 });
 
 describe("ToolCallBlock result documents", () => {
