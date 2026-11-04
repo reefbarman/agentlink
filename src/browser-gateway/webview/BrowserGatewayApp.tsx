@@ -8442,6 +8442,72 @@ export function BrowserGatewayApp({
         return;
       }
 
+      if (command === "agentCancelMcpPrompt") {
+        void fetch(buildApiPath("/api/mcp-prompts/cancel"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            sessionId: data.sessionId,
+            requestId: data.requestId,
+            projectId: selectedProjectId,
+          }),
+        }).catch(() => undefined);
+        return;
+      }
+      if (
+        command === "agentPrepareMcpPrompt" ||
+        command === "agentCompleteMcpPrompt"
+      ) {
+        const requestId = String(data.requestId ?? "");
+        if (!requestId) return;
+        const prepare = command === "agentPrepareMcpPrompt";
+        const replyType = prepare
+          ? "agentMcpPromptPrepared"
+          : "agentMcpPromptCompletions";
+        const failure = prepare
+          ? {
+              ok: false,
+              code: "failed",
+              error: "VS Code could not run the MCP prompt.",
+            }
+          : { values: [], hasMore: false };
+        void fetch(
+          buildApiPath(
+            prepare ? "/api/mcp-prompts/prepare" : "/api/mcp-prompts/complete",
+          ),
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({
+              requestId,
+              sessionId: data.sessionId,
+              projectId:
+                foreground?.project?.projectId ??
+                snapshot?.session.defaultProjectId,
+              ...(prepare
+                ? { invocation: data.invocation }
+                : { request: data.request }),
+            }),
+          },
+        )
+          .then(async (response) => {
+            const body = response.ok
+              ? ((await response.json()) as Record<string, unknown>)
+              : failure;
+            window.postMessage({ type: replyType, requestId, ...body });
+          })
+          .catch(() => {
+            window.postMessage({ type: replyType, requestId, ...failure });
+          });
+        return;
+      }
+
       if (command === "agentSearchFiles") {
         const query = String(data.query ?? "").trim();
         const requestId = String(data.requestId ?? "");
@@ -11885,6 +11951,9 @@ export function BrowserGatewayApp({
                     injection={composerInjection}
                     onInjectionConsumed={() => setComposerInjection(null)}
                     slashCommands={slashCommands}
+                    mcpSessionId={
+                      selectedLogicalTabRef.current?.sessionId ?? selectedTabId
+                    }
                     onExecuteBuiltinCommand={
                       isAskAgentSelected
                         ? handleAskAgentExecuteBuiltinCommand

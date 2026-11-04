@@ -35,6 +35,10 @@ export interface McpServerConfig {
   toolDisclosure?: "inline" | "deferred" | "auto";
   supportsParallelToolCalls?: boolean;
   allowedTools?: string[];
+  /** "allow" adds this server's prompts to a chat without an approval card. */
+  promptPolicy?: "ask" | "allow";
+  /** Prompts that may be added to a chat without an approval card. */
+  allowedPrompts?: string[];
   disabled?: boolean;
   /**
    * MCP protocol negotiation: `auto` (default) probes for 2026-07-28 and
@@ -182,6 +186,8 @@ export async function loadMcpConfigsFromSources(
         toolDisclosure: existing?.toolDisclosure ?? "auto",
         supportsParallelToolCalls: existing?.supportsParallelToolCalls ?? false,
         allowedTools: existing?.allowedTools,
+        promptPolicy: existing?.promptPolicy,
+        allowedPrompts: existing?.allowedPrompts,
         disabled: existing?.disabled ?? false,
         protocol: existing?.protocol,
       };
@@ -213,6 +219,13 @@ export async function loadMcpConfigsFromSources(
         next.protocol = normalizeMcpProtocolSetting(raw.protocol);
       if (Array.isArray(raw.allowedTools)) {
         next.allowedTools = [...raw.allowedTools];
+      }
+      if (raw.promptPolicy !== undefined)
+        next.promptPolicy = raw.promptPolicy === "allow" ? "allow" : "ask";
+      if (Array.isArray(raw.allowedPrompts)) {
+        next.allowedPrompts = raw.allowedPrompts.filter(
+          (item): item is string => typeof item === "string",
+        );
       }
       if (projectSource) {
         next.sourceServerName = name;

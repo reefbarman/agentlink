@@ -32,6 +32,7 @@ interface McpCardProps {
 export function McpCard({ request, submit, followUpRef }: McpCardProps) {
   const choices = request.mcpChoices ?? [];
   const isAgentTool = request.toolOrigin === "acp";
+  const isPrompt = request.toolOrigin === "mcp-prompt";
   const isAuthorization = request.mcpToolName === "OAuth authorization";
   const hasRuleChoices = choices.some((choice) =>
     choice.value.startsWith("always-"),
@@ -114,7 +115,11 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
                 !choiceValues.has(`always-${candidate}-${scope}`)
               }
             >
-              {TARGET_LABELS[candidate]}
+              {isPrompt
+                ? candidate === "tool"
+                  ? "This Prompt"
+                  : "All Prompts"
+                : TARGET_LABELS[candidate]}
             </button>
           ))}
         </div>
@@ -139,6 +144,8 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
         </div>
       </div>
       <p class="mcp-rule-scope-hint">
+        {isPrompt &&
+          "Only prompt text is approved, not tool calls or notifications. "}
         {scope === "global"
           ? "Save for future conversations in Desktop and VS Code. More-specific MCP settings can override this rule."
           : scope === "project"
@@ -161,7 +168,9 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
           ? `Connect ${serverName} to AgentLink`
           : isAgentTool
             ? "Let an external agent use one of its tools"
-            : "Use an external MCP tool"
+            : isPrompt
+              ? "Add server-written prompt text to this chat"
+              : "Use an external MCP tool"
       }
       rulesContent={isAgentTool || !hasRuleChoices ? undefined : rulesJsx}
       rulesModified={rulesModified}
@@ -169,9 +178,13 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
         isAuthorization
           ? (choices.find((choice) => choice.isPrimary)?.label ??
             "Open browser")
-          : "Allow Once"
+          : isPrompt
+            ? "Send Once"
+            : "Allow Once"
       }
-      primaryWithRulesLabel="Save Rule & Allow"
+      primaryWithRulesLabel={
+        isPrompt ? "Save Rule & Send" : "Save Rule & Allow"
+      }
       onAccept={handleAllowOnce}
       onSaveAndAccept={handleSaveAndAllow}
       onReject={handleReject}
@@ -183,14 +196,26 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
           ? "Connect account"
           : isAgentTool
             ? "External Agent Tool"
-            : "MCP Tool"}
+            : isPrompt
+              ? "MCP Prompt"
+              : "MCP Tool"}
       </div>
       <pre class="command-box">{`${serverName} / ${toolName}`}</pre>
-      {request.mcpDetail && (
-        <JsonHighlight
-          json={request.mcpDetail}
-          className="approval-detail-text"
-        />
+      {isPrompt && (
+        <p>
+          This text comes from the MCP server, not from you. Sending it does not
+          approve any actions it requests.
+        </p>
+      )}
+      {isPrompt && request.mcpDetail ? (
+        <pre class="approval-detail-text">{request.mcpDetail}</pre>
+      ) : (
+        request.mcpDetail && (
+          <JsonHighlight
+            json={request.mcpDetail}
+            className="approval-detail-text"
+          />
+        )
       )}
     </ApprovalLayout>
   );

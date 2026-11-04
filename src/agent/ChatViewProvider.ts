@@ -210,8 +210,15 @@ import {
   loadAskAgentMcpConfigs,
   loadWorkspaceMcpConfigs,
   mutateMcpConfigBatch,
+  persistMcpPromptApproval,
   persistMcpToolApproval,
 } from "./mcpConfig.js";
+import {
+  buildMcpPromptSlashCommands,
+  parseMcpPromptInvocation,
+  prepareMcpPrompt,
+  type PrepareMcpPromptResult,
+} from "./mcpPromptCommands.js";
 import { BUILT_IN_MODES } from "./modes.js";
 import {
   buildSystemPrompt,
@@ -2062,7 +2069,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!this.approvalManager) return 0;
     let accepted = 0;
     for (const [id, request] of this.activeApprovalRequests) {
-      if (request.kind !== "mcp" || !request.mcpServerName) continue;
+      if (
+        request.kind !== "mcp" ||
+        request.toolOrigin === "mcp-prompt" ||
+        !request.mcpServerName
+      )
+        continue;
       const sessionId = this.approvalSessionById.get(id);
       if (
         !sessionId ||
@@ -3906,7 +3918,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       detail?: string;
       mcpServerName?: string;
       mcpToolName?: string;
-      toolOrigin?: "mcp" | "acp";
+      toolOrigin?: "mcp" | "acp" | "mcp-prompt";
       choices: Array<{
         label: string;
         value: string;
@@ -4020,7 +4032,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       detail?: string;
       mcpServerName?: string;
       mcpToolName?: string;
-      toolOrigin?: "mcp" | "acp";
+      toolOrigin?: "mcp" | "acp" | "mcp-prompt";
       backgroundTask?: string;
       choices: Array<{
         label: string;
@@ -7182,7 +7194,231 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const session = this.sessionManager?.getForegroundSession();
     const mode =
       session?.projectScope.projectId === projectId ? session.mode : "code";
-    return this.projectCustomizationRegistry.getSlashCommands(scope, mode);
+    return this.withMcpPromptCommands(
+      await this.projectCustomizationRegistry.getSlashCommands(scope, mode),
+      scope,
+    );
+  }
+
+  /**
+   * Append connected MCP servers' prompts as `/<server>:<prompt>` commands.
+   * Read live from the project's hub, so a refresh picks up list changes.
+   */
+  private withMcpPromptCommands(
+    commands: SlashCommandInfo[],
+    scope: SessionProjectScope,
+  ): SlashCommandInfo[] {
+    const hub = this.getCurrentProjectMcpHub(scope);
+    if (!hub) return commands;
+    return [
+      ...commands,
+      ...buildMcpPromptSlashCommands(
+        hub.getAllPrompts(),
+        (serverName) => hub.supportsCompletions(serverName),
+        new Set(commands.map((command) => command.name)),
+      ),
+    ];
+  }
+
+  private resolveMcpPromptTarget(sessionId: string | undefined):
+    | {
+        session: AgentSession | undefined;
+        scope: SessionProjectScope;
+        hub: McpClientHub;
+      }
+    | undefined {
+    const session = sessionId
+      ? this.sessionManager?.getSession(sessionId)
+      : undefined;
+    const scope = session?.projectScope ?? this.getCurrentProjectScope();
+    if (!scope?.rootPath) return undefined;
+    const hub = this.getCurrentProjectMcpHub(scope);
+    return hub ? { session, scope, hub } : undefined;
+  }
+
+  /**
+   * Fetch a user-run MCP prompt and ask the user to approve adding its text
+   * to the chat. The composer then sends the returned text as a normal
+   * message, so queueing and interjection keep their usual behaviour.
+   */
+  private mcpPromptRequests = new Map<string, AbortController>();
+
+  public cancelMcpPromptForSession(sessionId: string, requestId: string): void {
+    const id = `mcp-prompt:${sessionId}:${requestId}`;
+    this.mcpPromptRequests?.get(id)?.abort();
+    this.pendingApprovals?.get(id)?.({ decision: "deny" });
+  }
+
+  public async prepareMcpPromptForSession(
+    sessionId: string | undefined,
+    invocationValue: unknown,
+    requestId: string = randomUUID(),
+  ): Promise<
+    PrepareMcpPromptResult | { ok: false; code: string; error: string }
+  > {
+    const id = `mcp-prompt:${sessionId}:${requestId}`;
+    const requests = (this.mcpPromptRequests ??= new Map());
+    if (requests.has(id))
+      return {
+        ok: false,
+        code: "duplicate",
+        error: "This prompt is already pending.",
+      };
+    const controller = new AbortController();
+    requests.set(id, controller);
+    const timer = setTimeout(
+      () => this.cancelMcpPromptForSession(sessionId ?? "", requestId),
+      9 * 60_000,
+    );
+    try {
+      return await this.prepareMcpPromptForSessionRequest(
+        sessionId,
+        invocationValue,
+        id,
+        controller.signal,
+      );
+    } finally {
+      clearTimeout(timer);
+      requests.delete(id);
+    }
+  }
+
+  private async prepareMcpPromptForSessionRequest(
+    sessionId: string | undefined,
+    invocationValue: unknown,
+    approvalId: string,
+    signal: AbortSignal,
+  ): Promise<
+    PrepareMcpPromptResult | { ok: false; code: string; error: string }
+  > {
+    const invocation = parseMcpPromptInvocation(invocationValue);
+    if (!invocation) {
+      return {
+        ok: false,
+        code: "invalid_request",
+        error: "The MCP prompt request was not readable.",
+      };
+    }
+    const target = this.resolveMcpPromptTarget(sessionId);
+    const session = target?.session;
+    if (!target || !session) {
+      return {
+        ok: false,
+        code: "no_session",
+        error:
+          "Send a message to start this chat first, then run the MCP prompt.",
+      };
+    }
+    const { hub } = target;
+    const config = hub.getServerConfig(invocation.serverName);
+    const sourceServerName = config?.sourceServerName ?? invocation.serverName;
+    const projectRoot =
+      config?.sourceProjectRoots?.[0] ?? target.scope.rootPath;
+    const configPaths = getMcpConfigFilePaths(projectRoot ?? os.homedir());
+    return prepareMcpPrompt(
+      {
+        getPromptMessages: (serverName, promptName, args, options) =>
+          hub.getPromptMessages(serverName, promptName, args, options),
+        getPromptArguments: (serverName, promptName) => {
+          const prompt = hub
+            .getAllPrompts()
+            .find(
+              (candidate) =>
+                candidate.serverName === serverName &&
+                candidate.name === promptName,
+            );
+          return prompt ? (prompt.arguments ?? []) : undefined;
+        },
+        getServerPolicy: (serverName) => hub.getServerConfig(serverName),
+        isSessionApproved: (serverName, promptName) =>
+          this.approvalManager?.isMcpPromptApproved(
+            session.id,
+            serverName,
+            promptName,
+          ) ?? false,
+        approveForSession: (serverName, promptName) =>
+          this.approvalManager?.approveMcpPrompt(
+            session.id,
+            serverName,
+            promptName,
+          ),
+        // Plugin-provided servers keep their policy in the plugin, so only
+        // session rules are offered for them.
+        persistScopes:
+          config?.provenance?.kind === "agent-plugin"
+            ? []
+            : projectRoot
+              ? ["project", "global"]
+              : ["global"],
+        persist: (_serverName, promptName, scope) =>
+          persistMcpPromptApproval(
+            sourceServerName,
+            promptName,
+            scope === "global" ? configPaths.global : configPaths.project,
+          ),
+        requestApproval: async (request) => {
+          const raw = await this.requestApproval(
+            {
+              id: approvalId,
+              kind: "mcp",
+              toolOrigin: "mcp-prompt",
+              title: request.title,
+              detail: request.detail,
+              mcpServerName: request.serverName,
+              mcpToolName: request.promptName,
+              choices: request.choices,
+            },
+            session.id,
+          );
+          return typeof raw === "string"
+            ? { decision: raw }
+            : {
+                decision: raw.decision,
+                ...(raw.followUp?.trim()
+                  ? { followUp: raw.followUp.trim() }
+                  : {}),
+              };
+        },
+        sessionContext: this.sessionManager?.getMcpSessionContext?.(session.id),
+        isActive: () =>
+          !signal.aborted &&
+          this.sessionManager?.getSession(session.id) === session,
+        log: (message) => this.log(message),
+      },
+      invocation,
+    );
+  }
+
+  /** Argument value suggestions from the server's `completion/complete`. */
+  public async completeMcpPromptForSession(
+    sessionId: string | undefined,
+    request: unknown,
+  ): Promise<{ values: string[]; hasMore: boolean }> {
+    const empty = { values: [], hasMore: false };
+    if (!request || typeof request !== "object") return empty;
+    const raw = request as Record<string, unknown>;
+    const invocation = parseMcpPromptInvocation(raw);
+    const argumentName =
+      typeof raw.argumentName === "string" ? raw.argumentName : "";
+    const value = typeof raw.value === "string" ? raw.value : "";
+    if (!invocation || !argumentName) return empty;
+    const target = this.resolveMcpPromptTarget(sessionId);
+    if (!target) return empty;
+    const context = { ...invocation.arguments };
+    delete context[argumentName];
+    return target.hub.completePromptArgument(
+      invocation.serverName,
+      invocation.promptName,
+      { name: argumentName, value },
+      context,
+      target.session
+        ? {
+            sessionContext: this.sessionManager?.getMcpSessionContext?.(
+              target.session.id,
+            ),
+          }
+        : undefined,
+    );
   }
 
   public async searchBrowserFiles(
@@ -7562,9 +7798,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     selection = this.getCustomizationSelection(),
   ): Promise<SlashCommandInfo[]> {
     return selection
-      ? this.projectCustomizationRegistry.getSlashCommands(
+      ? this.withMcpPromptCommands(
+          await this.projectCustomizationRegistry.getSlashCommands(
+            selection.scope,
+            selection.mode,
+          ),
           selection.scope,
-          selection.mode,
         )
       : [];
   }
@@ -9991,6 +10230,56 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           await this.sendSlashCommands();
         }
         this.log(`[slash] refreshed: ${commands.length} commands`);
+        break;
+      }
+
+      case "agentCancelMcpPrompt": {
+        const sessionId =
+          sourceSession?.id ??
+          (typeof msg.sessionId === "string" ? msg.sessionId : undefined);
+        if (sessionId && typeof msg.requestId === "string")
+          this.cancelMcpPromptForSession(sessionId, msg.requestId);
+        break;
+      }
+      case "agentPrepareMcpPrompt":
+      case "agentCompleteMcpPrompt": {
+        const requestId =
+          typeof msg.requestId === "string" ? msg.requestId : "";
+        if (!requestId) break;
+        const sessionId =
+          sourceSession?.id ??
+          (typeof msg.sessionId === "string" ? msg.sessionId : undefined);
+        const reply = (payload: Record<string, unknown>) => {
+          if (context?.connection) context.connection.postMessage(payload);
+          else this.postMessage(payload as unknown as ExtensionToWebview);
+        };
+        // Not awaited: preparing waits on an approval card whose decision
+        // arrives as another webview message.
+        if (msg.command === "agentPrepareMcpPrompt") {
+          void this.prepareMcpPromptForSession(
+            sessionId,
+            msg.invocation,
+            requestId,
+          )
+            .catch((error) => ({
+              ok: false as const,
+              code: "failed",
+              error: error instanceof Error ? error.message : String(error),
+            }))
+            .then((result) =>
+              reply({ type: "agentMcpPromptPrepared", requestId, ...result }),
+            );
+        } else {
+          void this.completeMcpPromptForSession(sessionId, msg.request)
+            .catch(() => ({ values: [], hasMore: false }))
+            .then((result) =>
+              reply({
+                type: "agentMcpPromptCompletions",
+                requestId,
+                ...result,
+              }),
+            );
+        }
         break;
       }
 

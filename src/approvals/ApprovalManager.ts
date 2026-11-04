@@ -41,7 +41,14 @@ interface SessionState {
   builtInToolApprovals: string[];
   mcpToolApprovals: string[];
   mcpServerApprovals: string[];
+  /** User-run MCP prompts approved for this session ({@link mcpPromptApprovalKey}). */
+  mcpPromptApprovals: string[];
   lastActivity: number;
+}
+
+/** Session approval key for one prompt, or every prompt from a server. */
+function mcpPromptApprovalKey(serverName: string, promptName?: string): string {
+  return JSON.stringify([serverName, promptName ?? null]);
 }
 
 interface SessionProjectBinding {
@@ -186,6 +193,40 @@ export class ApprovalManager {
     const session = this.sessions.get(sessionId)!;
     if (session.mcpServerApprovals.includes(serverName)) return;
     session.mcpServerApprovals.push(serverName);
+    session.lastActivity = Date.now();
+    this._onDidChange.fire();
+  }
+
+  // --- User-run MCP prompt approvals (runtime-only, session-scoped) ---
+
+  /** True if this prompt, or every prompt from its server, is approved. */
+  isMcpPromptApproved(
+    sessionId: string,
+    serverName: string,
+    promptName: string,
+  ): boolean {
+    const approvals = this.getSession(sessionId).mcpPromptApprovals;
+    return (
+      approvals.includes(mcpPromptApprovalKey(serverName, promptName)) ||
+      approvals.includes(mcpPromptApprovalKey(serverName))
+    );
+  }
+
+  /**
+   * Approve adding one prompt (or, without a name, every prompt from the
+   * server) to this session's chat without asking again. Does not approve
+   * any of the server's tools.
+   */
+  approveMcpPrompt(
+    sessionId: string,
+    serverName: string,
+    promptName?: string,
+  ): void {
+    this.touchSession(sessionId);
+    const session = this.sessions.get(sessionId)!;
+    const key = mcpPromptApprovalKey(serverName, promptName);
+    if (session.mcpPromptApprovals.includes(key)) return;
+    session.mcpPromptApprovals.push(key);
     session.lastActivity = Date.now();
     this._onDidChange.fire();
   }
@@ -520,6 +561,12 @@ export class ApprovalManager {
           ...source.mcpServerApprovals,
         ]),
       ];
+      destination.mcpPromptApprovals = [
+        ...new Set([
+          ...destination.mcpPromptApprovals,
+          ...source.mcpPromptApprovals,
+        ]),
+      ];
       destination.lastActivity = Math.max(
         destination.lastActivity,
         source.lastActivity,
@@ -535,6 +582,7 @@ export class ApprovalManager {
         builtInToolApprovals: [...source.builtInToolApprovals],
         mcpToolApprovals: [...source.mcpToolApprovals],
         mcpServerApprovals: [...source.mcpServerApprovals],
+        mcpPromptApprovals: [...source.mcpPromptApprovals],
         lastActivity: Date.now(),
       });
     }
@@ -656,6 +704,8 @@ export class ApprovalManager {
           builtInToolApprovals,
           mcpToolApprovals,
           mcpServerApprovals,
+          // User-run prompt approvals belong to the session that ran them.
+          mcpPromptApprovals: [...(destination?.mcpPromptApprovals ?? [])],
           lastActivity: now,
         });
         changed = true;
@@ -1201,7 +1251,8 @@ export class ApprovalManager {
           session.writeRules.length > 0 ||
           session.builtInToolApprovals.length > 0 ||
           session.mcpToolApprovals.length > 0 ||
-          session.mcpServerApprovals.length > 0,
+          session.mcpServerApprovals.length > 0 ||
+          session.mcpPromptApprovals.length > 0,
       )
       .map(([id, session]) => ({
         id,
@@ -1401,6 +1452,7 @@ export class ApprovalManager {
     builtInToolApprovals: [],
     mcpToolApprovals: [],
     mcpServerApprovals: [],
+    mcpPromptApprovals: [],
     lastActivity: 0,
   });
 
@@ -1416,6 +1468,7 @@ export class ApprovalManager {
       builtInToolApprovals: [],
       mcpToolApprovals: [],
       mcpServerApprovals: [],
+      mcpPromptApprovals: [],
       lastActivity: Date.now(),
     };
   }

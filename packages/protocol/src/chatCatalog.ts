@@ -90,7 +90,31 @@ export type ChatSlashCommandSource =
   | "project"
   | "global"
   | "agentlink"
-  | "skill";
+  | "skill"
+  | "mcp";
+
+/** One argument an MCP prompt declares. */
+export interface ChatMcpPromptArgument {
+  name: string;
+  description?: string;
+  required?: boolean;
+}
+
+/** MCP prompt identity behind a `/<server>:<prompt>` slash command. */
+export interface ChatMcpPromptCommand {
+  serverName: string;
+  promptName: string;
+  arguments: ChatMcpPromptArgument[];
+  /** The server supports `completion/complete` for argument values. */
+  completions?: boolean;
+}
+
+/** A user's request to run one MCP prompt with argument values. */
+export interface ChatMcpPromptInvocation {
+  serverName: string;
+  promptName: string;
+  arguments: Record<string, string>;
+}
 
 /** A slash command available for autocomplete and selection. */
 export interface ChatSlashCommandInfo {
@@ -121,6 +145,8 @@ export interface ChatSlashCommandInfo {
   rightLabel?: string;
   /** Show a checkmark for the current selection. */
   isCurrent?: boolean;
+  /** Present for source "mcp": the server prompt this command runs. */
+  mcpPrompt?: ChatMcpPromptCommand;
 }
 
 /**

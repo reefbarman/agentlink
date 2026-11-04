@@ -233,6 +233,24 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
   ),
   retainedHttp(
     "vscode_gateway",
+    "POST",
+    "/api/mcp-prompts/prepare",
+    "User-run MCP prompt fetch waits on the session's approval card and returns text the composer sends through session.send.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
+    "/api/mcp-prompts/cancel",
+    "Cancels a pending user prompt admission without sending a session message.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
+    "/api/mcp-prompts/complete",
+    "MCP prompt argument suggestions remain an authenticated HTTP read.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
     "GET",
     "/api/search-files*",
     "Bounded file search remains an authenticated HTTP read.",

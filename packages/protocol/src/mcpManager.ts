@@ -84,6 +84,10 @@ export interface McpManagerServerDraft {
   /** Explicit opt-in for concurrent tool calls to this server. */
   supportsParallelToolCalls?: boolean;
   allowedTools?: string[];
+  /** "allow" adds this server's prompts to a chat without an approval card. */
+  promptPolicy?: "ask" | "allow";
+  /** Prompts that may be added to a chat without an approval card. */
+  allowedPrompts?: string[];
   disabled?: boolean;
 }
 

@@ -28,6 +28,12 @@ import {
   wrapSlashCommandInBackticks,
 } from "../slashCommandInput";
 import {
+  applyMcpPromptCompletion,
+  formatMcpPromptSignature,
+  parseMcpPromptArguments,
+} from "../../../shared/mcpPromptArguments.js";
+import { useMcpPromptComposer } from "./useMcpPromptComposer.js";
+import {
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -284,6 +290,7 @@ interface InputAreaProps {
   injection: Injection | null;
   onInjectionConsumed: () => void;
   slashCommands?: SlashCommandInfo[];
+  mcpSessionId?: string | null;
   onExecuteBuiltinCommand?: (name: string, args: string) => void;
   modes?: ModeInfo[];
   currentMode?: string;
@@ -355,6 +362,7 @@ export function InputArea({
   injection,
   onInjectionConsumed,
   slashCommands = [],
+  mcpSessionId,
   onExecuteBuiltinCommand,
   modes = [],
   currentMode = "code",
@@ -720,6 +728,63 @@ export function InputArea({
     allowAttachments,
     allowMediaPaste,
   ]);
+  const mcp = useMcpPromptComposer(
+    (message) => vscodeApi.postMessage(message),
+    mcpSessionId,
+  );
+  const mcpSubmitRef = useRef({ onSend, onInterject, streaming });
+  mcpSubmitRef.current = { onSend, onInterject, streaming };
+  const [mcpError, setMcpError] = useState("");
+  const [mcpSuggestions, setMcpSuggestions] = useState<string[]>([]);
+  const mcpPrompt = matchedExecutableSlashCommand?.command.mcpPrompt;
+  const [mcpCursor, setMcpCursor] = useState<number | undefined>();
+  const mcpCommandOffset = mcpPrompt
+    ? text.indexOf(
+        `/${matchedExecutableSlashCommand!.command.displayName ?? matchedExecutableSlashCommand!.command.name}`,
+      )
+    : -1;
+  const mcpArgsOffset =
+    mcpCommandOffset < 0
+      ? text.length
+      : mcpCommandOffset +
+        (
+          matchedExecutableSlashCommand!.command.displayName ??
+          matchedExecutableSlashCommand!.command.name
+        ).length +
+        2;
+  const mcpArgsText = text.slice(mcpArgsOffset);
+  const mcpArgumentCursor = Math.max(
+    0,
+    (mcpCursor ?? text.length) - mcpArgsOffset,
+  );
+  useEffect(() => {
+    setMcpSuggestions([]);
+    setMcpError("");
+    if (!mcpPrompt?.completions) return;
+    const parsed = parseMcpPromptArguments(
+      mcpArgsText,
+      mcpPrompt.arguments,
+      mcpArgumentCursor,
+    );
+    if (!parsed.active) return;
+    let current = true;
+    const timer = setTimeout(() => {
+      void mcp
+        .complete(
+          { ...mcpPrompt, arguments: parsed.values },
+          parsed.active!.name,
+          parsed.active!.value,
+        )
+        .then((values) => {
+          if (current) setMcpSuggestions(values);
+        });
+    }, 300);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [mcpArgsText, mcpPrompt, mcpSessionId, mcpArgumentCursor]);
+
   const matchedLocalBuiltin =
     matchedExecutableSlashCommand?.command.builtin === true &&
     LOCAL_BUILTIN_COMMANDS.has(matchedExecutableSlashCommand.command.name);
@@ -836,6 +901,46 @@ export function InputArea({
           ? onInterject
           : onSend;
 
+      if (!contextMode && matchedExecutableSlashCommand?.command.mcpPrompt) {
+        if (mcp.pending) return;
+        const match = matchedExecutableSlashCommand;
+        const prompt = match.command.mcpPrompt!;
+        const parsed = parseMcpPromptArguments(match.args, prompt.arguments);
+        if (parsed.missing.length > 0) {
+          setMcpError(`Fill in: ${parsed.missing.join(", ")}`);
+          return;
+        }
+        void mcp
+          .prepare({ ...prompt, arguments: parsed.values })
+          .then((result) => {
+            if (result.error) setMcpError(result.error);
+            if (!result.text) return;
+            const current = mcpSubmitRef.current;
+            const send =
+              asInterjection && current.streaming && current.onInterject
+                ? current.onInterject
+                : current.onSend;
+            send(
+              [match.prefixText, result.text].filter(Boolean).join("\n\n"),
+              submitAttachments,
+              undefined,
+              match.displayText,
+              submitMedia,
+            );
+            // Don't erase a new draft typed while the approval card was open.
+            setText((current) => (current === text ? "" : current));
+            setAttachments((current) =>
+              current.filter((item) => !submitAttachments.includes(item)),
+            );
+            setMediaAttachments((current) =>
+              current.filter((item) => !mediaAttachments.includes(item)),
+            );
+            clearAttachmentPreviews();
+            closeSlash();
+          });
+        return;
+      }
+
       if (!contextMode && matchedExecutableSlashCommand) {
         setText("");
         setAttachments([]);
@@ -905,6 +1010,8 @@ export function InputArea({
     },
     [
       text,
+      mcpSessionId,
+      mcp.pending,
       attachments,
       mediaAttachments,
       allowAttachments,
@@ -1026,6 +1133,11 @@ export function InputArea({
             }
           });
         }
+      } else if (cmd.mcpPrompt) {
+        setText(selectionState.replacementText);
+        requestAnimationFrame(() =>
+          focusAndAutosizeTextarea(textareaRef.current),
+        );
       } else if (cmd.body) {
         if (selectionState.args) {
           setText(selectionState.replacementText);
@@ -2243,6 +2355,53 @@ export function InputArea({
                     onBack={backSlashView}
                   />
                 )}
+                {mcpPrompt && (
+                  <div
+                    class="slash-match-pill-row"
+                    aria-label="MCP prompt arguments"
+                  >
+                    <span>{formatMcpPromptSignature(mcpPrompt.arguments)}</span>
+                    {mcp.pending && (
+                      <span role="status">Waiting for MCP prompt approval</span>
+                    )}
+                    {mcpError && <span role="alert">{mcpError}</span>}
+                    {mcpSuggestions.map((value) => (
+                      <button
+                        type="button"
+                        key={value}
+                        onClick={() => {
+                          const parsed = parseMcpPromptArguments(
+                            mcpArgsText,
+                            mcpPrompt.arguments,
+                            mcpArgumentCursor,
+                          );
+                          if (!parsed.active || !matchedExecutableSlashCommand)
+                            return;
+                          const replaced = applyMcpPromptCompletion(
+                            mcpArgsText,
+                            parsed.active,
+                            value,
+                          );
+                          const match = matchedExecutableSlashCommand;
+                          setText(
+                            `${match.prefixText ? `${match.prefixText} ` : ""}/${match.command.name} ${replaced.text}`,
+                          );
+                          setMcpSuggestions([]);
+                          setMcpCursor(mcpArgsOffset + replaced.cursor);
+                          requestAnimationFrame(() => {
+                            textareaRef.current?.focus();
+                            textareaRef.current?.setSelectionRange(
+                              mcpArgsOffset + replaced.cursor,
+                              mcpArgsOffset + replaced.cursor,
+                            );
+                          });
+                        }}
+                      >
+                        {value}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {matchedExecutableSlashCommand && (
                   <div class="slash-match-pill-row">
                     <div
@@ -2322,6 +2481,9 @@ export function InputArea({
               }
               disabled={disabled}
               onInput={handleInput}
+              onSelect={(event) =>
+                setMcpCursor(event.currentTarget.selectionStart)
+              }
               onKeyDown={handleKeyDown}
               onKeyUp={handleVoiceShortcutKeyUp}
               onPaste={handlePaste}

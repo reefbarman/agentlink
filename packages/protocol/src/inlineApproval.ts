@@ -33,8 +33,11 @@ export interface InlineApprovalRequest {
   /** Structured MCP identity used by approval surfaces. */
   mcpServerName?: string;
   mcpToolName?: string;
-  /** Distinguishes an MCP call from an ACP-relayed external-agent tool call. */
-  toolOrigin?: "mcp" | "acp";
+  /**
+   * Distinguishes an MCP call from an ACP-relayed external-agent tool call,
+   * or a user-run MCP prompt ("mcp-prompt").
+   */
+  toolOrigin?: "mcp" | "acp" | "mcp-prompt";
   /** Identity for approvals whose decisions carry additional structured fields. */
   id?: string;
   /** User-visible attribution for a background task requesting approval. */

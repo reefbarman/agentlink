@@ -177,7 +177,7 @@ function approvalRequest(value: unknown): ApprovalRequest {
   copyOptional(result, "mcpServerName", source.mcpServerName, stringValue);
   copyOptional(result, "mcpToolName", source.mcpToolName, stringValue);
   copyOptional(result, "toolOrigin", source.toolOrigin, (item) =>
-    enumValue(item, ["mcp", "acp"] as const),
+    enumValue(item, ["mcp", "acp", "mcp-prompt"] as const),
   );
   copyOptional(result, "mcpChoices", source.mcpChoices, (item) =>
     arrayValue(item, approvalChoice),

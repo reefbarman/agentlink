@@ -55,6 +55,8 @@ describe("MCP config validation protocol", () => {
       | "invalid_tool_disclosure"
       | "invalid_parallel_tool_calls"
       | "invalid_allowed_tools"
+      | "invalid_prompt_policy"
+      | "invalid_allowed_prompts"
       | "invalid_disabled"
     >();
     const draft: McpCanonicalServerDraft = {
@@ -87,6 +89,8 @@ describe("MCP config validation protocol", () => {
       toolDisclosure: "deferred",
       supportsParallelToolCalls: true,
       allowedTools: ["search", "read"],
+      promptPolicy: "ask",
+      allowedPrompts: ["summarize"],
     });
 
     expect(result.valid).toBe(true);
@@ -101,6 +105,8 @@ describe("MCP config validation protocol", () => {
       toolDisclosure: "deferred",
       supportsParallelToolCalls: true,
       allowedTools: ["search", "read"],
+      promptPolicy: "ask",
+      allowedPrompts: ["summarize"],
     });
     expect(result.diagnostics.map(({ code }) => code)).toEqual([
       "name_normalized",
@@ -258,6 +264,18 @@ describe("MCP config validation protocol", () => {
       "server",
       { command: "mcp", allowedTools: ["read", null] },
       "invalid_allowed_tools",
+    ],
+    [
+      "invalid prompt policy",
+      "server",
+      { command: "mcp", promptPolicy: "always" },
+      "invalid_prompt_policy",
+    ],
+    [
+      "invalid allowed prompts",
+      "server",
+      { command: "mcp", allowedPrompts: [1] },
+      "invalid_allowed_prompts",
     ],
     [
       "both URL aliases",

@@ -195,6 +195,46 @@ function currentServerCapabilities(
   return client.getServerCapabilities();
 }
 
+/** Completion suggestions are shown inline, so keep them short and few. */
+const MCP_COMPLETION_MAX_VALUES = 20;
+const MCP_COMPLETION_VALUE_MAX_CHARS = 200;
+const MCP_COMPLETION_TIMEOUT_MS = 5_000;
+
+/** Result of {@link McpClientHub.getPromptMessages}. */
+export type McpPromptMessagesResult =
+  | {
+      ok: true;
+      description?: string;
+      messages: Array<{ role: "user" | "assistant"; text: string }>;
+    }
+  | { ok: false; error: string };
+
+function promptContentText(content: unknown): string {
+  if (!content || typeof content !== "object") return "";
+  const block = content as {
+    type?: unknown;
+    text?: unknown;
+    resource?: { uri?: unknown; text?: unknown };
+  };
+  if (block.type === "text" && typeof block.text === "string") {
+    return block.text;
+  }
+  if (block.type === "resource" && block.resource) {
+    if (typeof block.resource.text === "string") return block.resource.text;
+    return `[resource ${String(block.resource.uri ?? "")}]`;
+  }
+  return `[${typeof block.type === "string" ? block.type : "content"}]`;
+}
+
+function sessionContextMeta(
+  client: Client,
+  sessionContext: McpSessionContext | undefined,
+): Record<string, unknown> | undefined {
+  return sessionContext && serverAcceptsSessionContext(client)
+    ? { [MCP_SESSION_CONTEXT_EXTENSION]: { ...sessionContext } }
+    : undefined;
+}
+
 function serverAcceptsSessionContext(client: Client): boolean {
   const capabilities = currentServerCapabilities(client);
   return Boolean(
@@ -3798,6 +3838,113 @@ export class McpClientHub {
       return {
         content: [{ type: "text", text: JSON.stringify({ error: msg }) }],
       };
+    }
+  }
+
+  /**
+   * Fetch one prompt for a user-run slash command, keeping each message's
+   * role. Text and embedded text resources are kept; other content becomes a
+   * short placeholder, since the result is shown to the user for approval.
+   */
+  async getPromptMessages(
+    serverName: string,
+    promptName: string,
+    args: Record<string, string>,
+    options?: { readonly sessionContext?: McpSessionContext },
+  ): Promise<McpPromptMessagesResult> {
+    const server = this.servers.get(serverName);
+    if (!server || server.status !== "connected") {
+      return { ok: false, error: `Server '${serverName}' not connected` };
+    }
+    if (!server.prompts.some((prompt) => prompt.name === promptName)) {
+      return {
+        ok: false,
+        error: `Server '${serverName}' does not offer prompt '${promptName}'`,
+      };
+    }
+    const meta = sessionContextMeta(server.client, options?.sessionContext);
+    try {
+      const result = await this.withInteractiveAuthForUse(serverName, () =>
+        server.client.getPrompt({
+          name: promptName,
+          arguments: args,
+          ...(meta ? { _meta: meta } : {}),
+        }),
+      );
+      return {
+        ok: true,
+        ...(typeof result.description === "string"
+          ? { description: result.description }
+          : {}),
+        messages: result.messages.map((message) => ({
+          role: message.role === "assistant" ? "assistant" : "user",
+          text: promptContentText(message.content),
+        })),
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: await this.handleRuntimeAuthFailure(serverName, err),
+      };
+    }
+  }
+
+  /** True when a connected server advertises `completion/complete`. */
+  supportsCompletions(serverName: string): boolean {
+    const server = this.servers.get(serverName);
+    if (!server || server.status !== "connected") return false;
+    return Boolean(currentServerCapabilities(server.client)?.completions);
+  }
+
+  /**
+   * Ask a server to complete a prompt argument value. Best effort: returns no
+   * values when the server lacks the capability or the request fails.
+   */
+  async completePromptArgument(
+    serverName: string,
+    promptName: string,
+    argument: { name: string; value: string },
+    context: Record<string, string> = {},
+    options?: { readonly sessionContext?: McpSessionContext },
+  ): Promise<{ values: string[]; hasMore: boolean }> {
+    const empty = { values: [], hasMore: false };
+    const server = this.servers.get(serverName);
+    if (!server || !this.supportsCompletions(serverName)) return empty;
+    if (!server.prompts.some((prompt) => prompt.name === promptName)) {
+      return empty;
+    }
+    const meta = sessionContextMeta(server.client, options?.sessionContext);
+    try {
+      const result = await server.client.complete(
+        {
+          ref: { type: "ref/prompt", name: promptName },
+          argument,
+          ...(Object.keys(context).length > 0
+            ? { context: { arguments: context } }
+            : {}),
+          ...(meta ? { _meta: meta } : {}),
+        },
+        { timeout: MCP_COMPLETION_TIMEOUT_MS },
+      );
+      const values = result.completion.values
+        .filter(
+          (value): value is string =>
+            typeof value === "string" &&
+            value.length > 0 &&
+            value.length <= MCP_COMPLETION_VALUE_MAX_CHARS,
+        )
+        .slice(0, MCP_COMPLETION_MAX_VALUES);
+      return {
+        values,
+        hasMore:
+          result.completion.hasMore === true ||
+          result.completion.values.length > values.length,
+      };
+    } catch (err) {
+      this.log(
+        `[${serverName}] completion/complete failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return empty;
     }
   }
 

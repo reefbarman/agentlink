@@ -117,7 +117,7 @@ it("pins nested approval request members", () => {
     Array<{ path: string; changes: number }> | undefined
   >();
   expectTypeOf<ApprovalRequest["toolOrigin"]>().toEqualTypeOf<
-    "mcp" | "acp" | undefined
+    "mcp" | "acp" | "mcp-prompt" | undefined
   >();
   for (const choices of [
     null as unknown as ApprovalRequest["writeChoices"],

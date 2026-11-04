@@ -64,6 +64,8 @@ export type McpConfigDiagnosticCode =
   | "invalid_tool_disclosure"
   | "invalid_parallel_tool_calls"
   | "invalid_allowed_tools"
+  | "invalid_prompt_policy"
+  | "invalid_allowed_prompts"
   | "invalid_disabled";
 
 export interface McpConfigDiagnostic {
@@ -108,6 +110,8 @@ const SUPPORTED_FIELDS = new Set([
   "toolDisclosure",
   "supportsParallelToolCalls",
   "allowedTools",
+  "promptPolicy",
+  "allowedPrompts",
 ]);
 
 function diagnostic(
@@ -181,7 +185,7 @@ function validateName(
 function validateStringArray(
   value: unknown,
   path: string,
-  code: "invalid_args" | "invalid_allowed_tools",
+  code: "invalid_args" | "invalid_allowed_tools" | "invalid_allowed_prompts",
   diagnostics: McpConfigDiagnostic[],
 ): string[] | undefined {
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
@@ -529,6 +533,15 @@ export function validateMcpServerConfig(
     );
     if (allowedTools !== undefined) draft.allowedTools = allowedTools;
   }
+  if (configValue.allowedPrompts !== undefined) {
+    const allowedPrompts = validateStringArray(
+      configValue.allowedPrompts,
+      fieldPath(path, "allowedPrompts"),
+      "invalid_allowed_prompts",
+      diagnostics,
+    );
+    if (allowedPrompts !== undefined) draft.allowedPrompts = allowedPrompts;
+  }
   if (configValue.env !== undefined) {
     const env = validateStringRecord(
       configValue.env,
@@ -597,6 +610,24 @@ export function validateMcpServerConfig(
       );
     } else {
       draft.toolPolicy = configValue.toolPolicy;
+    }
+  }
+
+  if (configValue.promptPolicy !== undefined) {
+    if (
+      configValue.promptPolicy !== "ask" &&
+      configValue.promptPolicy !== "allow"
+    ) {
+      diagnostics.push(
+        diagnostic(
+          "error",
+          "invalid_prompt_policy",
+          fieldPath(path, "promptPolicy"),
+          'Prompt policy must be "ask" or "allow".',
+        ),
+      );
+    } else {
+      draft.promptPolicy = configValue.promptPolicy;
     }
   }
 

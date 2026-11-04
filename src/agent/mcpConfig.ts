@@ -181,6 +181,8 @@ function redactConfig(config: McpServerConfig): McpManagerServerDraft {
     toolDisclosure: config.toolDisclosure,
     supportsParallelToolCalls: config.supportsParallelToolCalls,
     allowedTools: config.allowedTools,
+    promptPolicy: config.promptPolicy,
+    allowedPrompts: config.allowedPrompts,
     disabled: config.disabled,
   };
 }
@@ -232,6 +234,8 @@ async function buildConfigEntries(
         supportsParallelToolCalls:
           existing?.config.supportsParallelToolCalls ?? false,
         allowedTools: existing?.config.allowedTools,
+        promptPolicy: existing?.config.promptPolicy,
+        allowedPrompts: existing?.config.allowedPrompts,
         disabled: existing?.config.disabled ?? false,
       };
 
@@ -261,6 +265,12 @@ async function buildConfigEntries(
       if (Array.isArray(entry.allowedTools)) {
         next.allowedTools = [...entry.allowedTools];
       }
+      if (raw.promptPolicy !== undefined)
+        next.promptPolicy = raw.promptPolicy === "allow" ? "allow" : "ask";
+      if (Array.isArray(raw.allowedPrompts))
+        next.allowedPrompts = raw.allowedPrompts.filter(
+          (value): value is string => typeof value === "string",
+        );
 
       const source = sources[index];
       const sourceIds = existing?.sourceIds ?? [];
@@ -534,6 +544,31 @@ export async function persistMcpToolApproval(
     const tools = (entry.allowedTools as string[] | undefined) ?? [];
     if (!tools.includes(bareToolName)) {
       entry.allowedTools = [...tools, bareToolName];
+    }
+  });
+}
+
+/**
+ * Persist a user-run prompt approval to the given mcp.json file. A prompt
+ * name adds it to `allowedPrompts`; omitting it sets `promptPolicy: "allow"`.
+ */
+export async function persistMcpPromptApproval(
+  serverName: string,
+  promptName: string | undefined,
+  filePath: string,
+): Promise<void> {
+  await patchMcpJson(filePath, serverName, (entry) => {
+    if (promptName === undefined) {
+      entry.promptPolicy = "allow";
+      return;
+    }
+    const prompts = Array.isArray(entry.allowedPrompts)
+      ? (entry.allowedPrompts as unknown[]).filter(
+          (item): item is string => typeof item === "string",
+        )
+      : [];
+    if (!prompts.includes(promptName)) {
+      entry.allowedPrompts = [...prompts, promptName];
     }
   });
 }

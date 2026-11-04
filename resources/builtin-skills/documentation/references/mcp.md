@@ -70,6 +70,19 @@ Standard `mcpServers` object:
 - MCP tools run concurrently only when the tool advertises the read-only annotation, or when the server opts in via `supportsParallelToolCalls: true`.
 - `protocol` chooses the MCP protocol version: `"auto"` (default), `"legacy"` or `"2026-07-28"`. See **Protocol versions** below. It has no MCP Manager control; set it by editing `mcp.json`. Saving the server from the MCP Manager keeps it.
 
+## Run MCP prompts from the composer
+
+In an existing VS Code workspace chat, type `/` to find connected servers' prompts alongside other slash commands. The browser remote view uses the same composer and approval card. A prompt named `ask` from server `agent-comms` appears as `/agent-comms:ask`. Existing commands take precedence if their names collide. Refreshing the slash picker reads the current prompt catalogue.
+
+- Type arguments in the order shown by the hint (`<required> [optional]`). The final positional argument takes the rest of the line: `/agent-comms:ask tab-2 can you check the build?`.
+- Use double quotes around an argument containing spaces, or `name=value` / `name="value with spaces"` to choose an argument explicitly and skip optional ones. Put named arguments before the final free-text argument; `name=value` inside that free text stays literal.
+- If the server advertises completions, AgentLink calls standard MCP `completion/complete` for the argument being edited and displays selectable suggestions. Requests are debounced, time out after five seconds, and show at most 20 suggestions of up to 200 characters. Completion failure does not prevent typing a value yourself.
+- Submitting fetches the prompt with `prompts/get` and shows its text in an **MCP Prompt** card in the Chat Activity Shelf. Nothing reaches the agent before you approve it. **Send Once** adds the server-written text to the chat with an MCP provenance block, not as words you typed. Tool calls it requests still pass through their normal approval/Guardian checks.
+- The card can save a rule for **This Prompt** or **All Prompts**, scoped to **Session**, **Project**, or **Global**. Session rules last only for that conversation and do not survive reload or pass to background agents. Project/global rules persist as `allowedPrompts` or `promptPolicy: "allow"` in the corresponding `.agentlink/mcp.json`. Rules for prompts are separate from `allowedTools` / `toolPolicy`, and do not approve notifications, tools, resource updates or idle wake. Plugin servers offer session prompt rules only.
+- Switching chats cancels the pending admission. A disconnected browser request or expired approval also cancels it, so an orphaned prompt card cannot later send into a different chat. Declining keeps your command in the composer. Prompts over 32,000 characters are refused rather than truncated.
+
+This slice supports text and embedded text resources. Other content types appear as labelled placeholders in the approval card, and assistant-role template messages retain their role label inside the server-content block rather than being injected as actual assistant history. Prompt slash commands are not yet exposed in standalone Desktop/Ask Agent, the CLI or Assistant. Agent-facing `list_mcp_prompts` and `get_mcp_prompt` remain available as before. This feature does not subscribe to resources or wake idle sessions.
+
 ## Protocol versions
 
 AgentLink speaks both MCP 2026-07-28 and the 2025-era protocol. With `protocol` unset or `"auto"`, it first asks the server which versions it supports (`server/discover`) and uses 2026-07-28 when offered, otherwise the 2025-era `initialize` handshake. For a `stdio` server this check starts a short-lived second copy of the server, and a server that does not answer within 10 seconds is treated as 2025-era. The answer is remembered per server for 7 days, and any change to the server's URL, command, arguments, working directory, environment or headers checks again, so later connections skip the check. On a remembered 2026-07-28 connection AgentLink still asks the live server for its current capabilities once (one request, no second copy of the server), so a server updated in place is noticed straight away; if its capabilities changed, AgentLink reconnects once to use them. VS Code keeps it across reloads and windows; Desktop and the CLI remember it until the process exits. If a remembered answer fails to connect, AgentLink forgets it and checks again on the next attempt. An HTTP server that rejects the check with a server error or an unreadable reply is treated as 2025-era, so the automatic retry uses the older handshake; a network failure is not. A `stdio` server run through `mcp-remote` is not checked and uses the 2025-era handshake, because a second copy would start a second sign-in or token refresh; set `protocol: "2026-07-28"` to force the newer version. While a server waits for browser sign-in, AgentLink checks again instead of reusing a remembered 2026-07-28 answer, so sign-in keeps its 10-minute window.
@@ -84,7 +97,7 @@ On a 2026-07-28 connection:
 
 ## Session context for servers that ask for it
 
-AgentLink offers an MCP extension, `dev.agentlink/session-context`, in its client capabilities (`capabilities.extensions`) on both protocol versions. A server that also lists it in its own `capabilities.extensions` (or `capabilities.experimental`, for older server SDKs) receives the calling chat's identity on each VS Code tool call, in the request's `_meta` under the same key:
+AgentLink offers an MCP extension, `dev.agentlink/session-context`, in its client capabilities (`capabilities.extensions`) on both protocol versions. A server that also lists it in its own `capabilities.extensions` (or `capabilities.experimental`, for older server SDKs) receives the calling chat's identity on each VS Code tool call, user-run prompt fetch and prompt-argument completion, in the request's `_meta` under the same key:
 
 ```json
 {
@@ -101,7 +114,7 @@ AgentLink offers an MCP extension, `dev.agentlink/session-context`, in its clien
 - `label` is `tab-N` for chat tab N, or `tab-N/bg-<short id>` for a background agent started from it. Background agents also send `parentSessionId`.
 - `sessionId` is AgentLink's stable session ID, so a later chat that reuses tab number 2 is a different identity.
 - AgentLink sets these values, not the model. They are still client-declared: a server must not treat them as authentication.
-- Servers that do not list the extension receive nothing. The context starts from a chat's first turn in a tab; before then, and in Desktop, the CLI and Ask Agent, calls carry no context. Resource reads and prompt requests do not carry it yet.
+- Servers that do not list the extension receive nothing. The context starts from a chat's first turn in a tab; before then, and in Desktop, the CLI and Ask Agent, calls carry no context. Resource reads and agent-fetched prompts do not carry it yet.
 
 ## MCP from Agent Plugins
 

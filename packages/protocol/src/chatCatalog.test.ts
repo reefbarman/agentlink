@@ -108,7 +108,7 @@ describe("chat catalog protocol", () => {
       "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
     >();
     expectTypeOf<ChatSlashCommandSource>().toEqualTypeOf<
-      "builtin" | "project" | "global" | "agentlink" | "skill"
+      "builtin" | "project" | "global" | "agentlink" | "skill" | "mcp"
     >();
   });
 });

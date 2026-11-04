@@ -184,8 +184,10 @@ export interface ApprovalRequest {
    * For kind "mcp": origin of the external tool call. "acp" marks a request
    * relayed from an external agent (Agent Client Protocol), not an MCP
    * server, so the card renders agent-tool copy instead of MCP copy.
+   * "mcp-prompt" marks a user-run MCP prompt whose server-written text is
+   * about to be added to the chat; `mcpToolName` then holds the prompt name.
    */
-  toolOrigin?: "mcp" | "acp";
+  toolOrigin?: "mcp" | "acp" | "mcp-prompt";
   /** For MCP: approval choices */
   mcpChoices?: Array<{
     label: string;

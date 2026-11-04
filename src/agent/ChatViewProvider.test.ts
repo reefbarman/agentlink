@@ -406,6 +406,118 @@ describe("tool terminal reveal messages", () => {
     );
   }, 15_000);
 
+  it("never applies tool-level server authority to prompt approval cards", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const prompt = vi.fn();
+    const tool = vi.fn();
+    const provider = Object.assign(Object.create(ChatViewProvider.prototype), {
+      approvalManager: { isMcpServerApproved: () => true },
+      activeApprovalRequests: new Map([
+        [
+          "prompt",
+          { kind: "mcp", toolOrigin: "mcp-prompt", mcpServerName: "fixture" },
+        ],
+        ["tool", { kind: "mcp", mcpServerName: "fixture" }],
+      ]),
+      approvalSessionById: new Map([
+        ["prompt", "owner"],
+        ["tool", "owner"],
+      ]),
+      pendingApprovals: new Map([
+        ["prompt", prompt],
+        ["tool", tool],
+      ]),
+    });
+    expect(provider.resolveMcpApprovalsCoveredByServerAuthority()).toBe(1);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(tool).toHaveBeenCalledWith({ decision: "allow-once" });
+  });
+
+  it("routes user MCP prompt context and approvals through the production composition", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const context = {
+      sessionId: "prompt-owner-marker",
+      label: "tab-7",
+      kind: "foreground",
+    };
+    const session = {
+      id: context.sessionId,
+      projectScope: { projectId: "p", rootPath: testHome },
+    };
+    const getPromptMessages = vi.fn(async () => ({
+      ok: true,
+      messages: [{ role: "user", text: "Prompt text marker" }],
+    }));
+    const completePromptArgument = vi.fn(async () => ({
+      values: ["tab-2"],
+      hasMore: false,
+    }));
+    const requestApproval = vi.fn(async () => "allow-once");
+    const hub = {
+      getServerConfig: () => ({ name: "fixture" }),
+      getAllPrompts: () => [
+        {
+          serverName: "fixture",
+          name: "ask",
+          arguments: [{ name: "to", required: true }],
+        },
+      ],
+      getPromptMessages,
+      completePromptArgument,
+    };
+    const provider = Object.assign(
+      Object.create(ChatViewProvider.prototype) as object,
+      {
+        sessionManager: {
+          getSession: () => session,
+          getMcpSessionContext: () => context,
+        },
+        getCurrentProjectMcpHub: () => hub,
+        requestApproval,
+        log: vi.fn(),
+      },
+    ) as unknown as InstanceType<typeof ChatViewProvider>;
+    const invocation = {
+      serverName: "fixture",
+      promptName: "ask",
+      arguments: { to: "tab-2" },
+    };
+    expect(
+      await provider.prepareMcpPromptForSession(session.id, invocation),
+    ).toMatchObject({
+      ok: true,
+      text: expect.stringContaining("Prompt text marker"),
+    });
+    expect(getPromptMessages).toHaveBeenCalledWith(
+      "fixture",
+      "ask",
+      { to: "tab-2" },
+      { sessionContext: context },
+    );
+    expect(requestApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "mcp",
+        toolOrigin: "mcp-prompt",
+        detail: "Prompt text marker",
+        mcpServerName: "fixture",
+        mcpToolName: "ask",
+      }),
+      session.id,
+    );
+    await provider.completeMcpPromptForSession(session.id, {
+      ...invocation,
+      argumentName: "to",
+      value: "tab",
+    });
+    expect(completePromptArgument).toHaveBeenCalledWith(
+      "fixture",
+      "ask",
+      { name: "to", value: "tab" },
+      {},
+      { sessionContext: context },
+    );
+  });
+
   it("projects MCP parallel opt-ins to Browser Ask Agent", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(

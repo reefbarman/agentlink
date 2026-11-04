@@ -4803,6 +4803,7 @@ export function App({
               injection={injection}
               onInjectionConsumed={() => setInjection(null)}
               slashCommands={state.slashCommands}
+              mcpSessionId={state.chatState.sessionId}
               onExecuteBuiltinCommand={handleExecuteBuiltinCommand}
               modes={state.modes}
               currentMode={state.chatState.mode}

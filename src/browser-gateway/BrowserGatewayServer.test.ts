@@ -2686,6 +2686,59 @@ describe("BrowserGatewayServer", () => {
       "project-a",
     );
 
+    const promptProvider = Object.assign(chatViewProvider, {
+      prepareMcpPromptForSession: vi.fn(async () => ({
+        ok: true,
+        text: "server provenance marker",
+      })),
+      completeMcpPromptForSession: vi.fn(async () => ({
+        values: ["tab-2"],
+        hasMore: false,
+      })),
+      cancelMcpPromptForSession: vi.fn(),
+    });
+    const invocation = {
+      serverName: "fixture",
+      promptName: "ask",
+      arguments: { to: "tab-2" },
+    };
+    for (const action of ["prepare", "complete", "cancel"]) {
+      const unauthorized = await fetch(`${baseUrl}/api/mcp-prompts/${action}`, {
+        method: "POST",
+        body: "{}",
+      });
+      expect(unauthorized.status).toBe(401);
+      const response = await fetch(`${baseUrl}/api/mcp-prompts/${action}`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sessionId: "session-1",
+          projectId: "project-a",
+          requestId: "prompt-request",
+          invocation,
+          request: { ...invocation, argumentName: "to", value: "tab" },
+        }),
+      });
+      expect(response.status).toBe(200);
+      await response.json();
+    }
+    expect(promptProvider.prepareMcpPromptForSession).toHaveBeenCalledWith(
+      "session-1",
+      invocation,
+      "prompt-request",
+    );
+    expect(promptProvider.completeMcpPromptForSession).toHaveBeenCalledWith(
+      "session-1",
+      { ...invocation, argumentName: "to", value: "tab" },
+    );
+    expect(promptProvider.cancelMcpPromptForSession).toHaveBeenCalledWith(
+      "session-1",
+      "prompt-request",
+    );
+
     const unauthorizedSlash = await fetch(`${baseUrl}/api/slash-commands`);
     expect(unauthorizedSlash.status).toBe(401);
 

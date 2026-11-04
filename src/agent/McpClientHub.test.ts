@@ -68,6 +68,8 @@ const mocks = vi.hoisted(() => ({
   listTools: vi.fn(),
   listResources: vi.fn(),
   listPrompts: vi.fn(),
+  getPrompt: vi.fn(),
+  complete: vi.fn(),
   request: vi.fn(),
   callTool: vi.fn<(...args: unknown[]) => Promise<CallToolResult>>(
     async () => ({ content: [] }),
@@ -149,6 +151,12 @@ vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
     }
     async listPrompts(params?: { cursor?: string }): Promise<unknown> {
       return mocks.listPrompts(params);
+    }
+    async getPrompt(...args: unknown[]): Promise<unknown> {
+      return mocks.getPrompt(...args);
+    }
+    async complete(...args: unknown[]): Promise<unknown> {
+      return mocks.complete(...args);
     }
     async callTool(...args: unknown[]): Promise<unknown> {
       return mocks.callTool(...args);
@@ -290,6 +298,102 @@ describe("McpClientHub protocol correctness", () => {
     setCatalogPages(mocks.listPrompts, "prompts", {
       first: { items: [] },
     });
+  });
+
+  it.each([true, false])(
+    "fetches user prompts and completes arguments, session extension=%s",
+    async (extension) => {
+      mocks.serverCapabilities = {
+        prompts: {},
+        completions: {},
+        ...(extension
+          ? { extensions: { [MCP_SESSION_CONTEXT_EXTENSION]: {} } }
+          : {}),
+      };
+      setCatalogPages(mocks.listPrompts, "prompts", {
+        first: { items: [prompt("ask")] },
+      });
+      mocks.getPrompt.mockResolvedValue({
+        messages: [
+          { role: "user", content: { type: "text", text: "Question marker" } },
+          {
+            role: "assistant",
+            content: {
+              type: "resource",
+              resource: { uri: "test://data", text: "Resource marker" },
+            },
+          },
+        ],
+      });
+      mocks.complete.mockResolvedValue({
+        completion: { values: ["tab-2"], hasMore: false },
+      });
+      const hub = new McpClientHub(new FakeMemento(), "9.8.7");
+      await hub.connect([config]);
+      const sessionContext = {
+        sessionId: "prompt-boundary-marker",
+        label: "tab-1",
+        kind: "foreground" as const,
+      };
+      expect(
+        await hub.getPromptMessages(
+          "fixture",
+          "ask",
+          { to: "tab-2" },
+          { sessionContext },
+        ),
+      ).toMatchObject({
+        ok: true,
+        messages: [
+          { role: "user", text: "Question marker" },
+          { role: "assistant", text: "Resource marker" },
+        ],
+      });
+      expect(
+        await hub.completePromptArgument(
+          "fixture",
+          "ask",
+          { name: "to", value: "tab" },
+          { question: "marker" },
+          { sessionContext },
+        ),
+      ).toEqual({ values: ["tab-2"], hasMore: false });
+      const meta = extension
+        ? { _meta: { [MCP_SESSION_CONTEXT_EXTENSION]: sessionContext } }
+        : {};
+      expect(mocks.getPrompt).toHaveBeenCalledWith({
+        name: "ask",
+        arguments: { to: "tab-2" },
+        ...meta,
+      });
+      expect(mocks.complete).toHaveBeenCalledWith(
+        {
+          ref: { type: "ref/prompt", name: "ask" },
+          argument: { name: "to", value: "tab" },
+          context: { arguments: { question: "marker" } },
+          ...meta,
+        },
+        { timeout: 5_000 },
+      );
+      await hub.disconnectAll();
+    },
+  );
+
+  it("does not send completion requests without the capability or for unknown prompts", async () => {
+    const hub = new McpClientHub(new FakeMemento(), "9.8.7");
+    await hub.connect([config]);
+    expect(
+      await hub.completePromptArgument("fixture", "missing", {
+        name: "to",
+        value: "",
+      }),
+    ).toEqual({ values: [], hasMore: false });
+    expect(await hub.getPromptMessages("fixture", "missing", {})).toMatchObject(
+      { ok: false },
+    );
+    expect(mocks.complete).not.toHaveBeenCalled();
+    expect(mocks.getPrompt).not.toHaveBeenCalled();
+    await hub.disconnectAll();
   });
 
   it("uses installed identity, truthful capabilities, and complete paginated catalogs", async () => {

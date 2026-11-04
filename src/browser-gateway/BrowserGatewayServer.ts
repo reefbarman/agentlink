@@ -561,6 +561,24 @@ export class BrowserGatewayServer implements vscode.Disposable {
         internal("provider usage request failed"),
       ),
       route(
+        "POST",
+        pathExact("/api/mcp-prompts/prepare"),
+        ({ req, res }) => this.handleMcpPromptRequest(req, res, "prepare"),
+        internal("MCP prompt prepare request failed"),
+      ),
+      route(
+        "POST",
+        pathExact("/api/mcp-prompts/cancel"),
+        ({ req, res }) => this.handleMcpPromptRequest(req, res, "cancel"),
+        internal("MCP prompt cancellation failed"),
+      ),
+      route(
+        "POST",
+        pathExact("/api/mcp-prompts/complete"),
+        ({ req, res }) => this.handleMcpPromptRequest(req, res, "complete"),
+        internal("MCP prompt completion request failed"),
+      ),
+      route(
         "GET",
         match("raw-prefix", "/api/search-files"),
         ({ req, rawUrl, res }) =>
@@ -1886,6 +1904,79 @@ export class BrowserGatewayServer implements vscode.Disposable {
       "Cache-Control": "no-store",
     });
     res.end(JSON.stringify(usage));
+  }
+
+  /**
+   * User-run MCP prompts: `prepare` fetches the prompt and waits on the
+   * approval card; `complete` returns argument suggestions. Both are bound
+   * to an existing session in the requested project.
+   */
+  private async handleMcpPromptRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    action: "prepare" | "complete" | "cancel",
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const body = (await readJsonBody(req)) as {
+      sessionId?: unknown;
+      projectId?: unknown;
+      invocation?: unknown;
+      request?: unknown;
+      requestId?: unknown;
+    } | null;
+    const sessionId =
+      typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
+    if (!sessionId) {
+      this.writeJson(
+        res,
+        200,
+        action === "prepare"
+          ? {
+              ok: false,
+              code: "no_session",
+              error:
+                "Send a message to start this chat first, then run the MCP prompt.",
+            }
+          : { values: [], hasMore: false },
+      );
+      return;
+    }
+    const projectId = this.resolveRequestedProjectId(
+      typeof body?.projectId === "string" ? body.projectId : undefined,
+      res,
+    );
+    if (!projectId || !this.validateSessionProject(sessionId, projectId, res)) {
+      return;
+    }
+    const requestId =
+      typeof body?.requestId === "string" ? body.requestId : undefined;
+    if (action === "cancel") {
+      if (requestId)
+        this.chatViewProvider.cancelMcpPromptForSession(sessionId, requestId);
+      this.writeJson(res, 200, { ok: true });
+      return;
+    }
+    const onClose = () => {
+      if (requestId)
+        this.chatViewProvider.cancelMcpPromptForSession(sessionId, requestId);
+    };
+    res.on("close", onClose);
+    const result =
+      action === "prepare"
+        ? await this.chatViewProvider.prepareMcpPromptForSession(
+            sessionId,
+            body?.invocation,
+            requestId,
+          )
+        : await this.chatViewProvider.completeMcpPromptForSession(
+            sessionId,
+            body?.request,
+          );
+    res.off("close", onClose);
+    this.writeJson(res, 200, result);
   }
 
   private async handleSearchFilesRequest(
