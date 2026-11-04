@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.78.0
+
 - In VS Code, each chat's agent now knows which tab it is in. Its system prompt ends with one line naming the chat tab number and a short session ID (for example "You are AgentLink chat tab 2 (session `1a2b3c4d`)"), and background agents name the tab they were started from. Before, an agent had no way to refer to its own tab, so you had to tell it which one it was. The line is set by AgentLink rather than chosen by the model, is added from the first turn after the chat is in a tab, and sits at the end of the prompt so prompt caching is unaffected. `/environment` shows it in VS Code and the browser view.
 
 ## 1.77.0

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "44325230043c4d71b46f3a503362faf561c16996",
-  "createdAt": "2026-11-03T23:42:28.248Z",
+  "sourceSha": "ffb9f30442795107710db7d604af9086577ff72b",
+  "createdAt": "2026-11-04T00:10:36.941Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,221 +10,107 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.76.0",
-      "baselineRef": "v1.76.0",
-      "reserved": "1.76.1",
-      "commits": [
-        "003db8b0d2b0442c157b71fff9f2ed3a1256d55c",
-        "ac5f2434ba7aec8402416a03bf7be0f3850d1027",
-        "44325230043c4d71b46f3a503362faf561c16996"
-      ],
+      "published": "1.77.0",
+      "baselineRef": "v1.77.0",
+      "reserved": "1.77.0",
+      "commits": ["ffb9f30442795107710db7d604af9086577ff72b"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.77.0",
+      "version": "1.78.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.77.0",
+      "tag": "v1.78.0",
       "notes": [
         {
-          "sha": "003db8b0d2b0442c157b71fff9f2ed3a1256d55c",
-          "subject": "fix(mcp): show 2026-07-28 URL elicitation instead of silently declining",
-          "summary": "MCP URL elicitation requests on the 2026-07-28 revision, which carry no elicitationId, are now shown to the user instead of being silently declined.",
-          "breaking": false
-        },
-        {
-          "sha": "ac5f2434ba7aec8402416a03bf7be0f3850d1027",
-          "subject": "feat(agent): ask with ask_user instead of ending turns waiting for input",
-          "summary": "Where ask_user is available, the agent now asks with an ask_user card instead of ending turns with waiting_for_user, which is no longer offered and is rejected there; hosts like the Assistant keep waiting_for_user.",
-          "breaking": false
-        },
-        {
-          "sha": "44325230043c4d71b46f3a503362faf561c16996",
-          "subject": "fix(webview): show attached documents and accept dropped media in Ask Agent",
-          "summary": "Attached documents now appear as named chips in user messages, and the composer accepts dropped images and documents when media paste is allowed without workspace attachments.",
+          "sha": "ffb9f30442795107710db7d604af9086577ff72b",
+          "subject": "feat(agent): tell each chat which tab it is in",
+          "summary": "Each VS Code chat's agent now sees a Session Identity line at the end of its system prompt naming its chat tab number and short session id, and /environment displays it.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.76.1",
-      "baselineRef": "desktop-v0.76.1",
-      "reserved": "0.76.1",
-      "commits": [
-        "003db8b0d2b0442c157b71fff9f2ed3a1256d55c",
-        "ac5f2434ba7aec8402416a03bf7be0f3850d1027",
-        "44325230043c4d71b46f3a503362faf561c16996"
-      ],
+      "published": "0.77.0",
+      "baselineRef": "desktop-v0.77.0",
+      "reserved": "0.77.0",
+      "commits": ["ffb9f30442795107710db7d604af9086577ff72b"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.77.0",
+      "version": "0.78.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.77.0",
+      "tag": "desktop-v0.78.0",
       "notes": [
         {
-          "sha": "003db8b0d2b0442c157b71fff9f2ed3a1256d55c",
-          "subject": "fix(mcp): show 2026-07-28 URL elicitation instead of silently declining",
-          "summary": "MCP URL elicitation requests on the 2026-07-28 revision, which carry no elicitationId, are now shown to the user instead of being silently declined.",
-          "breaking": false
-        },
-        {
-          "sha": "ac5f2434ba7aec8402416a03bf7be0f3850d1027",
-          "subject": "feat(agent): ask with ask_user instead of ending turns waiting for input",
-          "summary": "Where ask_user is available, the agent now asks with an ask_user card instead of ending turns with waiting_for_user, which is no longer offered and is rejected there; hosts like the Assistant keep waiting_for_user.",
-          "breaking": false
-        },
-        {
-          "sha": "44325230043c4d71b46f3a503362faf561c16996",
-          "subject": "fix(webview): show attached documents and accept dropped media in Ask Agent",
-          "summary": "Attached documents now appear as named chips in user messages, and the composer accepts dropped images and documents when media paste is allowed without workspace attachments.",
+          "sha": "ffb9f30442795107710db7d604af9086577ff72b",
+          "subject": "feat(agent): tell each chat which tab it is in",
+          "summary": "Each VS Code chat's agent now sees a Session Identity line at the end of its system prompt naming its chat tab number and short session id, and /environment displays it.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.54.1",
-      "baselineRef": "cli-v0.54.1",
-      "reserved": "0.54.1",
-      "commits": [
-        "003db8b0d2b0442c157b71fff9f2ed3a1256d55c",
-        "ac5f2434ba7aec8402416a03bf7be0f3850d1027"
-      ],
+      "published": "0.55.0",
+      "baselineRef": "cli-v0.55.0",
+      "reserved": "0.55.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.55.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.55.0",
-      "notes": [
-        {
-          "sha": "003db8b0d2b0442c157b71fff9f2ed3a1256d55c",
-          "subject": "fix(mcp): show 2026-07-28 URL elicitation instead of silently declining",
-          "summary": "MCP URL elicitation requests on the 2026-07-28 revision, which carry no elicitationId, are now shown to the user instead of being silently declined.",
-          "breaking": false
-        },
-        {
-          "sha": "ac5f2434ba7aec8402416a03bf7be0f3850d1027",
-          "subject": "feat(agent): ask with ask_user instead of ending turns waiting for input",
-          "summary": "Where ask_user is available, the agent now asks with an ask_user card instead of ending turns with waiting_for_user, which is no longer offered and is rejected there; hosts like the Assistant keep waiting_for_user.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.44.0",
-      "baselineRef": "sdk-v0.44.0",
-      "reserved": "0.44.0",
-      "commits": [
-        "003db8b0d2b0442c157b71fff9f2ed3a1256d55c",
-        "ac5f2434ba7aec8402416a03bf7be0f3850d1027"
-      ],
+      "published": "0.45.0",
+      "baselineRef": "sdk-v0.45.0",
+      "reserved": "0.45.0",
+      "commits": [],
       "unknownPaths": [],
-      "breakingCommits": ["ac5f2434ba7aec8402416a03bf7be0f3850d1027"],
-      "bump": "breaking",
-      "status": "release",
-      "version": "0.45.0",
-      "effectiveBump": "minor",
-      "breaking": true,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.45.0",
-      "notes": [
-        {
-          "sha": "003db8b0d2b0442c157b71fff9f2ed3a1256d55c",
-          "subject": "fix(mcp): show 2026-07-28 URL elicitation instead of silently declining",
-          "summary": "MCP URL elicitation requests on the 2026-07-28 revision, which carry no elicitationId, are now shown to the user instead of being silently declined.",
-          "breaking": false
-        },
-        {
-          "sha": "ac5f2434ba7aec8402416a03bf7be0f3850d1027",
-          "subject": "feat(agent): ask with ask_user instead of ending turns waiting for input",
-          "summary": "Where ask_user is available, the agent now asks with an ask_user card instead of ending turns with waiting_for_user, which is no longer offered and is rejected there; hosts like the Assistant keep waiting_for_user.",
-          "breaking": true
-        }
-      ]
+      "breakingCommits": [],
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.48.0",
-      "baselineRef": "assistant-v0.48.0",
-      "reserved": "0.48.0",
-      "commits": [
-        "003db8b0d2b0442c157b71fff9f2ed3a1256d55c",
-        "ac5f2434ba7aec8402416a03bf7be0f3850d1027",
-        "44325230043c4d71b46f3a503362faf561c16996"
-      ],
+      "published": "0.49.0",
+      "baselineRef": "assistant-v0.49.0",
+      "reserved": "0.49.0",
+      "commits": ["ffb9f30442795107710db7d604af9086577ff72b"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.49.0",
+      "version": "0.50.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.49.0",
+      "tag": "assistant-v0.50.0",
       "notes": [
         {
-          "sha": "003db8b0d2b0442c157b71fff9f2ed3a1256d55c",
-          "subject": "fix(mcp): show 2026-07-28 URL elicitation instead of silently declining",
-          "summary": "MCP URL elicitation requests on the 2026-07-28 revision, which carry no elicitationId, are now shown to the user instead of being silently declined.",
-          "breaking": false
-        },
-        {
-          "sha": "ac5f2434ba7aec8402416a03bf7be0f3850d1027",
-          "subject": "feat(agent): ask with ask_user instead of ending turns waiting for input",
-          "summary": "Where ask_user is available, the agent now asks with an ask_user card instead of ending turns with waiting_for_user, which is no longer offered and is rejected there; hosts like the Assistant keep waiting_for_user.",
-          "breaking": false
-        },
-        {
-          "sha": "44325230043c4d71b46f3a503362faf561c16996",
-          "subject": "fix(webview): show attached documents and accept dropped media in Ask Agent",
-          "summary": "Attached documents now appear as named chips in user messages, and the composer accepts dropped images and documents when media paste is allowed without workspace attachments.",
+          "sha": "ffb9f30442795107710db7d604af9086577ff72b",
+          "subject": "feat(agent): tell each chat which tab it is in",
+          "summary": "Each VS Code chat's agent now sees a Session Identity line at the end of its system prompt naming its chat tab number and short session id, and /environment displays it.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "2c6b7f14c283298ef49073f0a2f75a6700f4a38c": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The VS Code extension is now packaged with @vscode/vsce 4.1.0 instead of 4.0.0, with no change to extension behaviour.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "003db8b0d2b0442c157b71fff9f2ed3a1256d55c": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "MCP URL elicitation requests on the 2026-07-28 revision, which carry no elicitationId, are now shown to the user instead of being silently declined.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "ac5f2434ba7aec8402416a03bf7be0f3850d1027": {
+    "ffb9f30442795107710db7d604af9086577ff72b": {
       "bump": "minor",
-      "breakingUnits": ["sdk"],
-      "summary": "Where ask_user is available, the agent now asks with an ask_user card instead of ending turns with waiting_for_user, which is no longer offered and is rejected there; hosts like the Assistant keep waiting_for_user.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "44325230043c4d71b46f3a503362faf561c16996": {
-      "bump": "patch",
       "breakingUnits": [],
-      "summary": "Attached documents now appear as named chips in user messages, and the composer accepts dropped images and documents when media paste is allowed without workspace attachments.",
+      "summary": "Each VS Code chat's agent now sees a Session Identity line at the end of its system prompt naming its chat tab number and short session id, and /environment displays it.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
