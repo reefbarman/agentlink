@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.80.1
+
 - MCP prompt argument completions now refresh when you move the cursor into an earlier argument of a pasted command. Suggestions use a labelled, keyboard-accessible popup with the argument description and required/optional guidance, replacing the unstyled inline buttons in VS Code and the browser. Up/Down navigates, Tab or Enter selects without submitting, and Escape closes the popup; selecting a recipient preserves the question text.
 
 ## 1.80.0
