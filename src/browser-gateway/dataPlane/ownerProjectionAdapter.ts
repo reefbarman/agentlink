@@ -165,6 +165,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
   private readonly finalResults: boolean;
   private readonly finalElapsed: boolean;
   private readonly toolProgress: boolean;
+  private readonly queueInterjection: boolean;
   private historySessionId: string | null = null;
   private readonly historyMessages = new Map<string, ChatMessage>();
   private demanded = false;
@@ -220,6 +221,8 @@ export class BrowserGatewayOwnerProjectionAdapter {
     this.toolProgress =
       options.dataPlaneFeatures?.includes("transcript-tool-progress-v1") ??
       false;
+    this.queueInterjection =
+      options.dataPlaneFeatures?.includes("queue-interjection-v1") ?? false;
     this.sourceSubscription = sources.onDidChange((source) => {
       this.handleSourceChange(source);
     });
@@ -425,7 +428,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
           readSet.interaction,
         );
         const interaction = interactionProjection.interaction;
-        const queue = projectQueue(readSet.foreground);
+        const queue = projectQueue(readSet.foreground, this.queueInterjection);
         const todos = projectTodos(readSet.foreground);
         this.publishIfChanged(
           "foreground.control.updated",
@@ -685,7 +688,12 @@ export class BrowserGatewayOwnerProjectionAdapter {
       finalElapsed: this.finalElapsed,
       toolProgress: this.toolProgress,
     };
-    const state = projectReadSet(readSet, context, this.commandCapabilities);
+    const state = projectReadSet(
+      readSet,
+      context,
+      this.commandCapabilities,
+      this.queueInterjection,
+    );
     const referencedDetails = [...details.values()];
     assertProjectedDetailBudget(referencedDetails);
     return {
@@ -963,6 +971,7 @@ function projectReadSet(
   readSet: BrowserGatewayOwnerProjectionReadSet,
   context: ProjectionContext,
   commandCapabilities: readonly BrowserGatewayOwnerCommandKind[],
+  queueInterjection: boolean,
 ): ProjectedOwnerState {
   return {
     catalog: projectCatalog(readSet),
@@ -970,7 +979,7 @@ function projectReadSet(
     transcript: projectTranscript(readSet.foreground, context),
     ui: {
       interaction: context.interaction(readSet.interaction),
-      queue: projectQueue(readSet.foreground),
+      queue: projectQueue(readSet.foreground, queueInterjection),
       todos: projectTodos(readSet.foreground),
       operations: [],
     },
@@ -1876,6 +1885,8 @@ function interactionLabel(
 
 function projectQueue(
   foreground: BrowserGatewayOwnerForegroundSource | null,
+  /** Receiver accepts `interjectionReady` on queue items. */
+  queueInterjection: boolean,
 ): BrowserGatewayQueueItem[] {
   return (foreground?.queue ?? []).map((item) => ({
     itemId: bounded(item.id, 256),
@@ -1894,6 +1905,9 @@ function projectQueue(
               : {}),
           },
         }
+      : {}),
+    ...(queueInterjection && item.interjectionReady
+      ? { interjectionReady: true as const }
       : {}),
   }));
 }

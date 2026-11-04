@@ -22,6 +22,7 @@ import {
   RelaySnapshotProjector,
 } from "./relaySnapshotProjection";
 import { parseSessionDetail } from "../sessionDetailTransport";
+import { ASK_AGENT_QUEUE_INTERJECT_CAPABILITY } from "../../askAgentCapabilities";
 import type {
   TranscriptBlockDetailRequest,
   TranscriptBlockDetailResponse,
@@ -383,7 +384,7 @@ export async function commitRelayCheckpoint(options: {
   if (!interaction || !handle) {
     options.hydratedInteractions.delete(key);
     current.commitSnapshot(
-      projector.project(options.checkpoint),
+      withOwnerQueueCapabilities(projector.project(options.checkpoint), owner),
       current.selectedTabId,
       current.selectedTabGeneration,
       options.sourceEventPaint,
@@ -406,7 +407,10 @@ export async function commitRelayCheckpoint(options: {
       ? hydrated.payload
       : null;
   current.commitSnapshot(
-    projector.project(options.checkpoint, reusablePayload),
+    withOwnerQueueCapabilities(
+      projector.project(options.checkpoint, reusablePayload),
+      owner,
+    ),
     current.selectedTabId,
     current.selectedTabGeneration,
   );
@@ -473,7 +477,10 @@ export async function commitRelayCheckpoint(options: {
       return;
     }
     latest.commitSnapshot(
-      projector.project(options.checkpoint, payload),
+      withOwnerQueueCapabilities(
+        projector.project(options.checkpoint, payload),
+        latestOwner,
+      ),
       latest.selectedTabId,
       latest.selectedTabGeneration,
       options.sourceEventPaint,
@@ -592,6 +599,35 @@ function detailMatchesCheckpoint(
     handle.ownerGenerationId === checkpoint.ownerGenerationId &&
     handle.expiresAt > Date.now()
   );
+}
+
+/**
+ * The relay checkpoint has no field for owner-level queue features, so read
+ * "Interject at next break" support from the owner's catalog capabilities, as
+ * the direct snapshot path does with `queueInterjectionAvailable`.
+ */
+export function withOwnerQueueCapabilities(
+  snapshot: GatewaySnapshot,
+  owner: RelayCatalogOwner,
+): GatewaySnapshot {
+  const foreground = snapshot.session.foreground;
+  if (
+    !foreground ||
+    !owner.capabilities.some(
+      (capability) =>
+        capability.capabilityId === ASK_AGENT_QUEUE_INTERJECT_CAPABILITY &&
+        capability.state === "enabled",
+    )
+  ) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    session: {
+      ...snapshot.session,
+      foreground: { ...foreground, queueInterjectionAvailable: true },
+    },
+  };
 }
 
 export function resolveOwnerForTab(

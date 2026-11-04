@@ -19,4 +19,10 @@ export interface BrowserGatewayQueueItem {
   state: BrowserGatewayQueueItemState;
   skillSelection?: ExplicitSkillSelection;
   skillSelectionError?: SkillSelectionFailure;
+  /**
+   * The running turn takes this item in at its next break. Sent only to
+   * helpers advertising `queue-interjection-v1`, so older strict validators
+   * never see it.
+   */
+  interjectionReady?: true;
 }

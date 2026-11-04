@@ -2783,7 +2783,18 @@ function parseQueue(value: unknown, path: string): BrowserGatewayQueueItem[] {
       "state",
       "skillSelection",
       "skillSelectionError",
+      "interjectionReady",
     ]);
+    if (
+      object.interjectionReady !== undefined &&
+      object.interjectionReady !== true
+    ) {
+      fail(
+        "invalid_value",
+        `${itemPath}.interjectionReady`,
+        "interjectionReady must be true when present",
+      );
+    }
     const skillSelection = parseExplicitSkillSelection(object.skillSelection);
     if (skillSelection === null) {
       fail(
@@ -2806,6 +2817,9 @@ function parseQueue(value: unknown, path: string): BrowserGatewayQueueItem[] {
       ) as BrowserGatewayQueueItem["state"],
       ...(skillSelection ? { skillSelection } : {}),
       ...(skillSelectionError ? { skillSelectionError } : {}),
+      ...(object.interjectionReady === true
+        ? { interjectionReady: true as const }
+        : {}),
     };
   });
 }

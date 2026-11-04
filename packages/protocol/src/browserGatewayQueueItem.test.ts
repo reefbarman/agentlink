@@ -34,6 +34,7 @@ describe("browser gateway queue item", () => {
       state: BrowserGatewayQueueItemState;
       skillSelection?: ExplicitSkillSelection;
       skillSelectionError?: SkillSelectionFailure;
+      interjectionReady?: true;
     }>();
   });
 });

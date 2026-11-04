@@ -18,6 +18,7 @@ describe("browser gateway helper lifecycle", () => {
       "transcript-final-elapsed-v1",
       "transcript-final-result-v1",
       "transcript-tool-progress-v1",
+      "queue-interjection-v1",
     ];
 
     expect(BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION).toBe(2);

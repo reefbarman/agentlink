@@ -18,6 +18,7 @@ import {
   type TranscriptBlockDetailRequest,
 } from "../../dataPlane/transcriptBlockDetail";
 import { loadRemoteDisplayImage } from "../toolDetailTransport";
+import { withOwnerQueueCapabilities } from "./useRelayGatewayConnection";
 
 const identity = {
   helperGenerationId: "helper-1",
@@ -864,5 +865,55 @@ describe("RelaySnapshotProjector", () => {
     expect(nextGeneration.session.foreground!.projectedMessages[0]).not.toBe(
       nextRevision.session.foreground!.projectedMessages[0],
     );
+  });
+
+  it("keeps queue interjection state for relay browsers", () => {
+    const base = checkpoint();
+    const projected = new RelaySnapshotProjector().project(
+      checkpoint({
+        ui: {
+          ...base.ui,
+          queue: [
+            {
+              itemId: "ready",
+              summary: "Take this in",
+              state: "queued",
+              interjectionReady: true,
+            },
+            { itemId: "waiting", summary: "After the turn", state: "queued" },
+          ],
+        },
+      }),
+    );
+    expect(projected.session.foreground!.messageQueue).toEqual([
+      { id: "ready", text: "Take this in", interjectionReady: true },
+      { id: "waiting", text: "After the turn" },
+    ]);
+
+    // The arrow button and queue toggle need the owner's queue.interject
+    // capability, which only the relay catalog carries.
+    const owner = (state: "enabled" | "disabled") => ({
+      ownerId: "owner-1",
+      ownerGenerationId: "generation-1",
+      instanceId: "instance-1",
+      displayName: "Ask Agent",
+      ownerKind: "browser-gateway",
+      scope: {
+        kind: "projectless" as const,
+        scopeId: "ask-agent",
+        displayName: "Ask Agent",
+      },
+      status: "connected",
+      capabilities: [{ capabilityId: "queue.interject", state }],
+      lastHeartbeatAt: null,
+    });
+    expect(
+      withOwnerQueueCapabilities(projected, owner("enabled")).session
+        .foreground!.queueInterjectionAvailable,
+    ).toBe(true);
+    expect(
+      withOwnerQueueCapabilities(projected, owner("disabled")).session
+        .foreground!.queueInterjectionAvailable,
+    ).toBeUndefined();
   });
 });

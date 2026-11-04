@@ -129,8 +129,11 @@ class AskAgentProjectionSources implements BrowserGatewayOwnerProjectionSources 
 
   setSnapshot(snapshot: AskAgentControllerSnapshot): void {
     this.snapshot = snapshot;
+    // "foreground" is the only source that publishes queue and todo changes;
+    // without it relay browsers never saw messages queued mid-turn.
     for (const source of [
       "sessions",
+      "foreground",
       "ui",
       "theme",
       "model_catalog",
@@ -194,6 +197,8 @@ export class AskAgentOwnerAdapter {
           "transcript-block-detail-v1",
           "transcript-display-media-v1",
           "transcript-image-attribution-v1",
+          // Same-process helper parser, so no version skew to guard.
+          "queue-interjection-v1",
         ],
       },
     );

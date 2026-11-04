@@ -96,6 +96,9 @@ export class RelaySnapshotProjector {
                   ...(item.skillSelectionError
                     ? { skillSelectionError: item.skillSelectionError }
                     : {}),
+                  ...(item.interjectionReady
+                    ? { interjectionReady: true }
+                    : {}),
                 };
               }),
             questionRequest: interactionPayload?.question ?? null,

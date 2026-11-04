@@ -546,6 +546,27 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     ).toBe(252_000);
   });
 
+  it("forwards queue interjection state only to helpers that advertise it", () => {
+    const source = readSet();
+    source.foreground = {
+      ...source.foreground!,
+      queue: [{ id: "queued-1", text: "Next", interjectionReady: true }],
+    };
+
+    const legacy = makeAdapter(new ProjectionSources(source)).getCheckpoint();
+    expect(legacy.ui.queue[0]).not.toHaveProperty("interjectionReady");
+
+    const adapter = makeAdapter(new ProjectionSources(source), {
+      dataPlaneFeatures: ["queue-interjection-v1"],
+    });
+    expect(adapter.getCheckpoint().ui.queue[0]).toEqual({
+      itemId: "queued-1",
+      summary: "Next",
+      state: "queued",
+      interjectionReady: true,
+    });
+  });
+
   it("forwards running tool progress only to helpers that advertise it", () => {
     const source = readSet();
     source.foreground = {

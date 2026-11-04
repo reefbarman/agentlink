@@ -101,6 +101,8 @@ export interface BrowserGatewayOwnerQueueSource {
   text: string;
   skillSelection?: ExplicitSkillSelection;
   skillSelectionError?: SkillSelectionFailure;
+  /** The running turn takes this message in at its next break. */
+  interjectionReady?: boolean;
 }
 
 export interface BrowserGatewayOwnerForegroundSource {

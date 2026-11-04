@@ -340,6 +340,67 @@ describe("AskAgentOwnerAdapter", () => {
     await harness.controller.dispose();
   });
 
+  it("publishes queued messages and their interjection state to relay consumers", async () => {
+    // Regression: queue changes never reached relay browsers, so a message
+    // queued mid-turn vanished from the queue panel until the turn ended.
+    const harness = createHarness();
+    harness.adapter.setDemanded(true);
+    await harness.adapter.drain();
+    harness.batches.length = 0;
+
+    const publish = async () => {
+      await harness.controller.publishSnapshot(
+        harness.controller.projectState({
+          now: 1_100,
+          theme,
+          modelCredentialStatus: missingCredential,
+        }).snapshot,
+      );
+      await harness.adapter.drain();
+    };
+    const queueEvents = () =>
+      harness.batches
+        .flatMap((batch) => batch.events)
+        .filter((event) => event.kind === "queue.updated");
+
+    expect(
+      harness.controller.sessionStore.enqueueMessage({
+        id: "queued-1",
+        text: "Also check the tests",
+        source: "browser",
+      }),
+    ).toBe(true);
+    await publish();
+    expect(queueEvents().at(-1)?.payload).toEqual({
+      queue: [
+        {
+          itemId: "queued-1",
+          summary: "Also check the tests",
+          state: "queued",
+        },
+      ],
+    });
+
+    harness.controller.sessionStore.setQueuedMessageInterjectionReady(
+      "queued-1",
+      true,
+    );
+    await publish();
+    expect(queueEvents().at(-1)?.payload).toEqual({
+      queue: [
+        {
+          itemId: "queued-1",
+          summary: "Also check the tests",
+          state: "queued",
+          interjectionReady: true,
+        },
+      ],
+    });
+
+    await harness.adapter.dispose();
+    await harness.controller.dispose();
+  });
+
   it("stores projected transcript details locally before publication", async () => {
     const harness = createHarness();
     harness.controller.sessionStore.appendUserMessage({
