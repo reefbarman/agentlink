@@ -9188,4 +9188,41 @@ describe("session identity", () => {
     (mgr as any).applySessionIdentity(untabbed);
     expect(untabbed.setSessionIdentity).not.toHaveBeenCalled();
   });
+
+  it("builds MCP session context only once a session has its tab identity", async () => {
+    const { mgr } = makeIdentityManager(() => 4);
+    // AgentSession is mocked in this file; keep the identity it is given.
+    const withIdentityStore = (session: any) => {
+      let identity: unknown;
+      session.setSessionIdentity = (next: unknown) => {
+        identity = next;
+      };
+      session.getSessionIdentity = () => identity;
+      return session;
+    };
+    const foreground = withIdentityStore(await mgr.createSession("code"));
+    expect(mgr.getMcpSessionContext(foreground.id)).toBeUndefined();
+
+    (mgr as any).applySessionIdentity(foreground);
+    expect(mgr.getMcpSessionContext(foreground.id)).toEqual({
+      sessionId: foreground.id,
+      label: "tab-4",
+      kind: "foreground",
+    });
+
+    const background = withIdentityStore(await mgr.createSession("code"));
+    background.background = true;
+    background.fleetMetadata = {
+      rootSessionId: foreground.id,
+      parentSessionId: foreground.id,
+    };
+    (mgr as any).applySessionIdentity(background);
+    expect(mgr.getMcpSessionContext(background.id)).toEqual({
+      sessionId: background.id,
+      label: `tab-4/bg-${background.id.replace(/-/g, "").slice(0, 8)}`,
+      kind: "background",
+      parentSessionId: foreground.id,
+    });
+    expect(mgr.getMcpSessionContext("missing")).toBeUndefined();
+  });
 });

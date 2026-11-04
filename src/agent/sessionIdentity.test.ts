@@ -1,5 +1,6 @@
 import {
   buildSessionIdentitySection,
+  buildSessionLabel,
   sessionIdentitiesEqual,
   shortSessionId,
 } from "./sessionIdentity.js";
@@ -37,6 +38,15 @@ describe("sessionIdentity", () => {
       background: false,
     });
     expect(text).not.toMatch(/messag|coordinat|agent-comms/i);
+  });
+
+  it("builds short labels for MCP session context", () => {
+    expect(
+      buildSessionLabel(SESSION_ID, { tabNumber: 2, background: false }),
+    ).toBe("tab-2");
+    expect(
+      buildSessionLabel(SESSION_ID, { tabNumber: 2, background: true }),
+    ).toBe("tab-2/bg-1a2b3c4d");
   });
 
   it("compares identities by value", () => {

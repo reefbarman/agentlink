@@ -70,6 +70,8 @@ import type {
   BackgroundAgentResultsRequest,
 } from "../core/capabilities/background.js";
 import type { NativeWebToolExecutionRequest } from "../core/capabilities/web.js";
+import type { McpSessionContext } from "../core/capabilities/mcp.js";
+import { buildSessionLabel } from "./sessionIdentity.js";
 import type { AutomaticMemoryContext } from "@agentlink/protocol/autonomous-memory";
 import type {
   PendingQuestionRecoveryState,
@@ -13228,6 +13230,25 @@ export class AgentSessionManager {
     const tabNumber = this.chatTabNumberForSession(rootSessionId);
     if (tabNumber === undefined) return;
     session.setSessionIdentity({ tabNumber, background: session.background });
+  }
+
+  /**
+   * Host-set identity sent to MCP servers that opt in to session context.
+   * Undefined until the session has a tab identity (its first run).
+   */
+  getMcpSessionContext(sessionId: string): McpSessionContext | undefined {
+    const session = this.sessions.get(sessionId);
+    const identity = session?.getSessionIdentity();
+    if (!session || !identity) return undefined;
+    const parentSessionId = session.background
+      ? session.fleetMetadata?.parentSessionId
+      : undefined;
+    return {
+      sessionId: session.id,
+      label: buildSessionLabel(session.id, identity),
+      kind: session.background ? "background" : "foreground",
+      ...(parentSessionId ? { parentSessionId } : {}),
+    };
   }
 
   steerAuthorizedBackground(

@@ -8725,6 +8725,53 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  it("forwards the host session context for the calling session to the hub", async () => {
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "comms__list_sessions",
+          description: "List sessions",
+          input_schema: { type: "object" },
+        },
+      ]),
+      getServerConfig: vi.fn().mockReturnValue({ toolPolicy: "allow" }),
+      isToolReadOnly: vi.fn().mockReturnValue(false),
+      callTool: vi.fn(async () => ({
+        content: [{ type: "text", text: "ok" }],
+      })),
+    };
+    const sessionContext = {
+      sessionId: "session-context-marker-7",
+      label: "tab-7",
+      kind: "foreground" as const,
+    };
+    const getMcpSessionContext = vi.fn((sessionId: string) =>
+      sessionId === sessionContext.sessionId ? sessionContext : undefined,
+    );
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      approvalManager: {
+        ...mockCtx.approvalManager,
+        isMcpApproved: vi.fn().mockReturnValue(true),
+      } as any,
+      mcpHub: mcpHub as any,
+      getMcpSessionContext,
+    });
+
+    await runtime.executeTool({
+      name: "comms__list_sessions",
+      input: {},
+      context: { sessionId: sessionContext.sessionId, mode: "code" },
+    });
+
+    expect(getMcpSessionContext).toHaveBeenCalledWith(sessionContext.sessionId);
+    expect(mcpHub.callTool).toHaveBeenCalledWith(
+      "comms__list_sessions",
+      {},
+      expect.objectContaining({ sessionContext }),
+    );
+  });
+
   it("uses invocation provider for call_mcp_tool target lookup and execution", async () => {
     const mcpHub = {
       getToolDefs: vi.fn(),

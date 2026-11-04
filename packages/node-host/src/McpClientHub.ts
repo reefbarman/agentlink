@@ -153,6 +153,37 @@ export interface McpHubRequestContext {
   readonly turnId: string;
 }
 
+/**
+ * AgentLink's `dev.agentlink/session-context` MCP extension. The client
+ * advertises it in `capabilities.extensions`; a server that also advertises
+ * it (in `extensions`, or `experimental` for older server SDKs) receives the
+ * calling session's host-assigned context in request `_meta` under this key.
+ * Servers that do not advertise it receive nothing.
+ */
+export const MCP_SESSION_CONTEXT_EXTENSION = "dev.agentlink/session-context";
+
+/**
+ * Host-set identity of the session making an MCP request. Set by AgentLink,
+ * never by the model; it is client-declared and is not authentication.
+ */
+export interface McpSessionContext {
+  /** Stable AgentLink session id. Survives tab display-number reuse. */
+  readonly sessionId: string;
+  /** Short display label, for example `tab-2` or `tab-2/bg-1a2b3c4d`. */
+  readonly label: string;
+  readonly kind: "foreground" | "background";
+  /** Session that started a background agent. */
+  readonly parentSessionId?: string;
+}
+
+function serverAcceptsSessionContext(client: Client): boolean {
+  const capabilities = client.getServerCapabilities();
+  return Boolean(
+    capabilities?.extensions?.[MCP_SESSION_CONTEXT_EXTENSION] ??
+    capabilities?.experimental?.[MCP_SESSION_CONTEXT_EXTENSION],
+  );
+}
+
 export interface McpToolAuthorizationRequest {
   readonly context?: Readonly<McpHubRequestContext>;
   readonly serverName: string;
@@ -1743,6 +1774,7 @@ export class McpClientHub {
       {
         capabilities: {
           elicitation: { form: { applyDefaults: true }, url: {} },
+          extensions: { [MCP_SESSION_CONTEXT_EXTENSION]: {} },
         },
         versionNegotiation: protocolPlan.negotiation,
         // 2026-07-28 servers ask for input (elicitation) by answering a
@@ -3286,6 +3318,8 @@ export class McpClientHub {
         total?: number;
         message?: string;
       }) => void;
+      /** Sent only to servers advertising {@link MCP_SESSION_CONTEXT_EXTENSION}. */
+      readonly sessionContext?: McpSessionContext;
     },
   ): Promise<ToolResult> {
     const parsed = parseMcpToolName(prefixedName);
@@ -3438,9 +3472,14 @@ export class McpClientHub {
             total?: number;
             message?: string;
           }) => void;
+          readonly sessionContext?: McpSessionContext;
         }
       | undefined,
   ): Promise<ToolResult> {
+    const sessionContext =
+      options?.sessionContext && serverAcceptsSessionContext(server.client)
+        ? options.sessionContext
+        : undefined;
     const configuredTimeout = server.config.timeout;
     const timeout =
       typeof configuredTimeout === "number" &&
@@ -3454,6 +3493,13 @@ export class McpClientHub {
           {
             name: toolName,
             arguments: input,
+            ...(sessionContext
+              ? {
+                  _meta: {
+                    [MCP_SESSION_CONTEXT_EXTENSION]: { ...sessionContext },
+                  },
+                }
+              : {}),
           },
           {
             signal: options?.signal,

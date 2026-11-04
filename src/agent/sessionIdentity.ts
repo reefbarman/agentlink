@@ -26,6 +26,18 @@ export function sessionIdentitiesEqual(
 }
 
 /**
+ * Short host-assigned label for MCP session context: `tab-2` for a chat tab,
+ * `tab-2/bg-1a2b3c4d` for a background agent started from it.
+ */
+export function buildSessionLabel(
+  sessionId: string,
+  identity: SessionIdentity,
+): string {
+  const tab = `tab-${identity.tabNumber}`;
+  return identity.background ? `${tab}/bg-${shortSessionId(sessionId)}` : tab;
+}
+
+/**
  * One static section appended after the cached system prompt. It changes only
  * when the owning tab changes, so it does not disturb prompt caching.
  */

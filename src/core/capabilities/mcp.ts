@@ -22,6 +22,22 @@ export interface McpToolInvocationRequest {
   authorizedByCaller?: boolean;
   /** Receives the server's live progress notifications for this call. */
   onProgress?: (progress: McpToolProgress) => void;
+  /**
+   * Host-set identity of the calling session. Forwarded only to servers that
+   * opt in to the session-context extension.
+   */
+  sessionContext?: McpSessionContext;
+}
+
+/** Host-assigned identity of a session, never chosen by the model. */
+export interface McpSessionContext {
+  /** Stable session id. */
+  readonly sessionId: string;
+  /** Short display label assigned by the host surface. */
+  readonly label: string;
+  readonly kind: "foreground" | "background";
+  /** Session that started a background session. */
+  readonly parentSessionId?: string;
 }
 
 /** One MCP `notifications/progress` update for an in-flight request. */

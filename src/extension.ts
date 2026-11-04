@@ -3416,6 +3416,8 @@ export async function activate(
       const session = agentSessionManager.getSession(sessionId);
       return Boolean(session && !session.isAborted);
     },
+    getMcpSessionContext: (sessionId) =>
+      agentSessionManager.getMcpSessionContext(sessionId),
     getCommandReviewObjective: (sessionId) => {
       const messages = agentSessionManager
         .getSession(sessionId)

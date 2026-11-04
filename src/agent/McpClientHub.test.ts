@@ -14,6 +14,7 @@ import {
 } from "@modelcontextprotocol/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MCP_SESSION_CONTEXT_EXTENSION } from "@agentlink/node-host";
 import { McpClientHub } from "./McpClientHub.js";
 import type { McpServerConfig } from "./mcpConfig.js";
 import { PassThrough } from "node:stream";
@@ -73,6 +74,7 @@ const mocks = vi.hoisted(() => ({
   ),
   connect: vi.fn(async () => {}),
   close: vi.fn(async () => {}),
+  serverCapabilities: undefined as Record<string, unknown> | undefined,
   stdioTransports: [] as Array<{ onclose?: () => void; stderr: PassThrough }>,
   fetch: vi.fn<typeof fetch>(),
 }));
@@ -134,6 +136,9 @@ vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
     }
     getDiscoverResult(): undefined {
       return undefined;
+    }
+    getServerCapabilities(): Record<string, unknown> | undefined {
+      return mocks.serverCapabilities;
     }
     readonly autoOpenedSubscription = undefined;
     async listTools(params?: { cursor?: string }): Promise<unknown> {
@@ -267,6 +272,7 @@ describe("McpClientHub protocol correctness", () => {
     vi.clearAllMocks();
     mocks.clientInfo = undefined;
     mocks.clientOptions = undefined;
+    mocks.serverCapabilities = undefined;
     mocks.sseTransportOptions = undefined;
     mocks.httpTransportOptions = undefined;
     mocks.pluginSseUrl = undefined;
@@ -310,6 +316,7 @@ describe("McpClientHub protocol correctness", () => {
     });
     expect(mocks.clientOptions?.capabilities).toEqual({
       elicitation: { form: { applyDefaults: true }, url: {} },
+      extensions: { [MCP_SESSION_CONTEXT_EXTENSION]: {} },
     });
     expect(mocks.clientOptions?.capabilities).not.toHaveProperty("roots");
     expect(mocks.clientOptions?.capabilities).not.toHaveProperty("sampling");
@@ -1159,6 +1166,54 @@ describe("McpClientHub protocol correctness", () => {
         resetTimeoutOnProgress: true,
       },
     );
+  });
+
+  describe("session-context extension", () => {
+    const sessionContext = {
+      sessionId: "1a2b3c4d-session-context-marker",
+      label: "tab-2/bg-1a2b3c4d",
+      kind: "background" as const,
+      parentSessionId: "parent-session",
+    };
+
+    it.each([
+      ["extensions", { extensions: { [MCP_SESSION_CONTEXT_EXTENSION]: {} } }],
+      [
+        "experimental",
+        { experimental: { [MCP_SESSION_CONTEXT_EXTENSION]: {} } },
+      ],
+    ])(
+      "attaches the session context to servers advertising it in %s",
+      async (_where, capabilities) => {
+        mocks.serverCapabilities = { tools: {}, ...capabilities };
+        const hub = new McpClientHub(new FakeMemento());
+        await hub.connect([config]);
+
+        await hub.callTool("fixture__echo", { a: 1 }, { sessionContext });
+
+        expect(mocks.callTool).toHaveBeenCalledWith(
+          {
+            name: "echo",
+            arguments: { a: 1 },
+            _meta: { [MCP_SESSION_CONTEXT_EXTENSION]: sessionContext },
+          },
+          expect.any(Object),
+        );
+      },
+    );
+
+    it("sends nothing to servers that do not advertise it", async () => {
+      mocks.serverCapabilities = { tools: {}, extensions: { other: {} } };
+      const hub = new McpClientHub(new FakeMemento());
+      await hub.connect([config]);
+
+      await hub.callTool("fixture__echo", {}, { sessionContext });
+
+      expect(mocks.callTool).toHaveBeenCalledWith(
+        { name: "echo", arguments: {} },
+        expect.any(Object),
+      );
+    });
   });
 
   it("forwards bounded server progress to the caller without failing the call", async () => {

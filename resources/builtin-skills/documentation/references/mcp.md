@@ -82,6 +82,27 @@ On a 2026-07-28 connection:
 - Change notifications (`list_changed`) arrive on a stream AgentLink opens to the server. If that stream drops while the server stays connected, AgentLink reopens it with backoff (1, 2, 4, 8, 16, then 30 seconds; it stops after six quick failures in a row) and refreshes the affected lists, because notifications sent during the gap were lost. A stream that stayed open for 60 seconds resets that budget.
 - A server asks for input by answering a tool call, resource read or prompt request with a request for input instead of sending a separate request. AgentLink shows the same form or link prompt as before and retries the original call with your answer, for at most 10 rounds per call. A server's URL prompt does not tell AgentLink when the browser step finishes on this protocol version, so close the prompt yourself when you are done.
 
+## Session context for servers that ask for it
+
+AgentLink offers an MCP extension, `dev.agentlink/session-context`, in its client capabilities (`capabilities.extensions`) on both protocol versions. A server that also lists it in its own `capabilities.extensions` (or `capabilities.experimental`, for older server SDKs) receives the calling chat's identity on each VS Code tool call, in the request's `_meta` under the same key:
+
+```json
+{
+  "_meta": {
+    "dev.agentlink/session-context": {
+      "sessionId": "1a2b3c4d-…",
+      "label": "tab-2",
+      "kind": "foreground"
+    }
+  }
+}
+```
+
+- `label` is `tab-N` for chat tab N, or `tab-N/bg-<short id>` for a background agent started from it. Background agents also send `parentSessionId`.
+- `sessionId` is AgentLink's stable session ID, so a later chat that reuses tab number 2 is a different identity.
+- AgentLink sets these values, not the model. They are still client-declared: a server must not treat them as authentication.
+- Servers that do not list the extension receive nothing. The context starts from a chat's first turn in a tab; before then, and in Desktop, the CLI and Ask Agent, calls carry no context. Resource reads and prompt requests do not carry it yet.
+
 ## MCP from Agent Plugins
 
 Canonical Agent Plugins 1.0.0 may declare `stdio`, Streamable HTTP, and legacy SSE servers. These definitions are immutable package content rather than ordinary `mcp.json` sources: connection details are shown in the Agent Plugin install/update review and cannot be edited in the MCP Manager. AgentLink-owned overlays can disable a plugin server or change its tool policy, allowlist, disclosure, and parallel-call setting without modifying the package.

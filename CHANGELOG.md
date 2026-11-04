@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- MCP servers can now ask AgentLink which chat a tool call comes from. AgentLink offers a `dev.agentlink/session-context` extension in its MCP client capabilities, and a server that also advertises it receives the session's ID, a short label such as `tab-2` (or `tab-2/bg-1a2b3c4d` for a background agent) and, for background agents, the parent session ID in each VS Code tool call's `_meta`. Before, a server could only tell callers apart by a name the model typed in, which it could mistype or reuse. AgentLink sets the values, not the model, but they are still client-declared and not authentication. Servers that do not advertise the extension receive nothing.
+
 ## 1.78.1
 
 - Condense operations now log the session, trigger and finished-turn state, and aborted condenses are logged, making stray post-turn compactions easier to diagnose.

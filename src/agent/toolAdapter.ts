@@ -270,6 +270,7 @@ import type {
   McpToolDiscoveryProvider,
   McpToolDiscoveryRequest,
   McpToolInvocationProvider,
+  McpSessionContext,
 } from "../core/capabilities/mcp.js";
 import type {
   ToolUsageOutcome,
@@ -1605,6 +1606,7 @@ function createMcpToolInvocationProvider(
         signal: request.signal,
         authorizedByCaller: request.authorizedByCaller,
         onProgress: request.onProgress,
+        sessionContext: request.sessionContext,
       });
     },
   };
@@ -1726,6 +1728,8 @@ export interface ToolDispatchContext {
   commandReviewTurnCircuit?: import("../approvals/commandApprovalReview.js").CommandReviewTurnCircuit;
   retainedCommandReviewDenials?: import("../approvals/commandApprovalReview.js").RetainedCommandReviewDenials;
   isSessionActive?: (sessionId: string) => boolean;
+  /** Host-set identity sent to MCP servers that opt in to session context. */
+  getMcpSessionContext?: (sessionId: string) => McpSessionContext | undefined;
   getCommandReviewObjective?: (sessionId: string) => string | undefined;
   getCommandReviewContext?: (
     sessionId: string,
@@ -3819,12 +3823,14 @@ async function dispatchToolCallWithTrackedApprovals(
 
     const progressToolCallId = ctx.toolCallId;
     const onToolProgress = ctx.onToolProgress;
+    const sessionContext = ctx.getMcpSessionContext?.(sessionId);
     const result = await mcpToolInvocationProvider
       .callTool({
         toolName,
         input,
         signal: toolAbortSignal,
         authorizedByCaller: true,
+        ...(sessionContext ? { sessionContext } : {}),
         ...(progressToolCallId && onToolProgress
           ? {
               onProgress: (progress) =>

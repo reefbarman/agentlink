@@ -28,12 +28,16 @@ function json(body: unknown, headers: Record<string, string> = {}): Response {
   });
 }
 
-function fakeStreamableHttpServer() {
+function fakeStreamableHttpServer(
+  serverCapabilities: Record<string, unknown> = { tools: {} },
+) {
   const state = {
     session: undefined as string | undefined,
     sessionsCreated: 0,
     requests: [] as ObservedRequest[],
     toolCalls: 0,
+    clientCapabilities: undefined as unknown,
+    toolCallParams: [] as unknown[],
   };
   mocks.fetch.mockImplementation(async (_input, init) => {
     const method = init?.method ?? "GET";
@@ -44,10 +48,11 @@ function fakeStreamableHttpServer() {
     const body = JSON.parse(String(init?.body)) as {
       id?: number;
       method: string;
-      params?: { protocolVersion?: string };
+      params?: { protocolVersion?: string; capabilities?: unknown };
     };
     state.requests.push({ method: body.method, session });
     if (body.method === "initialize") {
+      state.clientCapabilities = body.params?.capabilities;
       state.sessionsCreated += 1;
       state.session = `session-${state.sessionsCreated}`;
       return json(
@@ -56,7 +61,7 @@ function fakeStreamableHttpServer() {
           id: body.id,
           result: {
             protocolVersion: body.params?.protocolVersion,
-            capabilities: { tools: {} },
+            capabilities: serverCapabilities,
             serverInfo: { name: "fixture", version: "1.0.0" },
           },
         },
@@ -89,6 +94,7 @@ function fakeStreamableHttpServer() {
         return json({ jsonrpc: "2.0", id: body.id, result: { prompts: [] } });
       case "tools/call":
         state.toolCalls += 1;
+        state.toolCallParams.push(body.params);
         return json({
           jsonrpc: "2.0",
           id: body.id,
@@ -128,6 +134,59 @@ async function waitForConnected(hub: McpClientHub, sessionsCreated: number) {
   });
   expect(sessionsCreated).toBeGreaterThan(0);
 }
+
+describe("McpClientHub session-context extension on the wire", () => {
+  const extension = "dev.agentlink/session-context";
+  const sessionContext = {
+    sessionId: "wire-session-context-marker",
+    label: "tab-3",
+    kind: "foreground" as const,
+  };
+  let hub: McpClientHub | undefined;
+
+  afterEach(async () => {
+    await hub?.disconnectAll();
+    hub = undefined;
+    mocks.fetch.mockReset();
+  });
+
+  it("advertises the extension and sends _meta only to a server that also advertises it", async () => {
+    const server = fakeStreamableHttpServer({
+      tools: {},
+      extensions: { [extension]: {} },
+    });
+    hub = new McpClientHub();
+    await hub.connect([serverConfig]);
+    await waitForConnected(hub, server.state.sessionsCreated);
+
+    await hub.callTool("fixture__echo", { a: 1 }, { sessionContext });
+
+    expect(server.state.clientCapabilities).toMatchObject({
+      extensions: { [extension]: {} },
+    });
+    expect(server.state.toolCallParams).toEqual([
+      expect.objectContaining({
+        name: "echo",
+        arguments: { a: 1 },
+        _meta: expect.objectContaining({ [extension]: sessionContext }),
+      }),
+    ]);
+  });
+
+  it("omits the context for servers that do not advertise the extension", async () => {
+    const server = fakeStreamableHttpServer();
+    hub = new McpClientHub();
+    await hub.connect([serverConfig]);
+    await waitForConnected(hub, server.state.sessionsCreated);
+
+    await hub.callTool("fixture__echo", {}, { sessionContext });
+
+    const params = server.state.toolCallParams[0] as {
+      _meta?: Record<string, unknown>;
+    };
+    expect(params._meta?.[extension]).toBeUndefined();
+  });
+});
 
 describe("McpClientHub Streamable HTTP session recovery", () => {
   let hub: McpClientHub | undefined;
