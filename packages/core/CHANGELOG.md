@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.46.1 — 2026-11-04
+
+- MCP connections that reuse a remembered 2026-07-28 protocol verdict now refresh the server's capabilities once and reconnect if they changed, so servers updated in place are noticed immediately instead of after 7 days.
+
 ## 0.46.0 — 2026-11-04
 
 - AgentLink now advertises an MCP session-context extension and sends session id, label, kind and parent session id in tool call _meta to servers that opt in; the VS Code extension supplies the context and the SDK node-host exposes new exports.

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "53aeef42a76e431ea6ad0a81edaba455f7c0fd42",
-  "createdAt": "2026-11-04T05:26:22.669Z",
+  "sourceSha": "a486e272192ee78d3dd558fd6d0f687a5ca057ea",
+  "createdAt": "2026-11-04T06:47:32.397Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,147 +10,131 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.78.1",
-      "baselineRef": "v1.78.1",
-      "reserved": "1.78.1",
-      "commits": ["53aeef42a76e431ea6ad0a81edaba455f7c0fd42"],
+      "published": "1.79.0",
+      "baselineRef": "v1.79.0",
+      "reserved": "1.79.0",
+      "commits": ["a486e272192ee78d3dd558fd6d0f687a5ca057ea"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.79.0",
-      "effectiveBump": "minor",
+      "version": "1.79.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.79.0",
+      "tag": "v1.79.1",
       "notes": [
         {
-          "sha": "53aeef42a76e431ea6ad0a81edaba455f7c0fd42",
-          "subject": "feat(mcp): send host session context to servers that opt in",
-          "summary": "AgentLink now advertises an MCP session-context extension and sends session id, label, kind and parent session id in tool call _meta to servers that opt in; the VS Code extension supplies the context and the SDK node-host exposes new exports.",
+          "sha": "a486e272192ee78d3dd558fd6d0f687a5ca057ea",
+          "subject": "fix(mcp): refresh remembered capabilities on 2026-07-28 connections",
+          "summary": "MCP connections that reuse a remembered 2026-07-28 protocol verdict now refresh the server's capabilities once and reconnect if they changed, so servers updated in place are noticed immediately instead of after 7 days.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.78.1",
-      "baselineRef": "desktop-v0.78.1",
-      "reserved": "0.78.1",
-      "commits": ["53aeef42a76e431ea6ad0a81edaba455f7c0fd42"],
+      "published": "0.79.0",
+      "baselineRef": "desktop-v0.79.0",
+      "reserved": "0.79.0",
+      "commits": ["a486e272192ee78d3dd558fd6d0f687a5ca057ea"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.79.0",
-      "effectiveBump": "minor",
+      "version": "0.79.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.79.0",
+      "tag": "desktop-v0.79.1",
       "notes": [
         {
-          "sha": "53aeef42a76e431ea6ad0a81edaba455f7c0fd42",
-          "subject": "feat(mcp): send host session context to servers that opt in",
-          "summary": "AgentLink now advertises an MCP session-context extension and sends session id, label, kind and parent session id in tool call _meta to servers that opt in; the VS Code extension supplies the context and the SDK node-host exposes new exports.",
+          "sha": "a486e272192ee78d3dd558fd6d0f687a5ca057ea",
+          "subject": "fix(mcp): refresh remembered capabilities on 2026-07-28 connections",
+          "summary": "MCP connections that reuse a remembered 2026-07-28 protocol verdict now refresh the server's capabilities once and reconnect if they changed, so servers updated in place are noticed immediately instead of after 7 days.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.55.0",
-      "baselineRef": "cli-v0.55.0",
-      "reserved": "0.55.0",
-      "commits": ["53aeef42a76e431ea6ad0a81edaba455f7c0fd42"],
+      "published": "0.56.0",
+      "baselineRef": "cli-v0.56.0",
+      "reserved": "0.56.0",
+      "commits": ["a486e272192ee78d3dd558fd6d0f687a5ca057ea"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.56.0",
-      "effectiveBump": "minor",
+      "version": "0.56.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.56.0",
+      "tag": "cli-v0.56.1",
       "notes": [
         {
-          "sha": "53aeef42a76e431ea6ad0a81edaba455f7c0fd42",
-          "subject": "feat(mcp): send host session context to servers that opt in",
-          "summary": "AgentLink now advertises an MCP session-context extension and sends session id, label, kind and parent session id in tool call _meta to servers that opt in; the VS Code extension supplies the context and the SDK node-host exposes new exports.",
+          "sha": "a486e272192ee78d3dd558fd6d0f687a5ca057ea",
+          "subject": "fix(mcp): refresh remembered capabilities on 2026-07-28 connections",
+          "summary": "MCP connections that reuse a remembered 2026-07-28 protocol verdict now refresh the server's capabilities once and reconnect if they changed, so servers updated in place are noticed immediately instead of after 7 days.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.45.0",
-      "baselineRef": "sdk-v0.45.0",
-      "reserved": "0.45.0",
-      "commits": ["53aeef42a76e431ea6ad0a81edaba455f7c0fd42"],
+      "published": "0.46.0",
+      "baselineRef": "sdk-v0.46.0",
+      "reserved": "0.46.0",
+      "commits": ["a486e272192ee78d3dd558fd6d0f687a5ca057ea"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.46.0",
-      "effectiveBump": "minor",
+      "version": "0.46.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.46.0",
+      "tag": "sdk-v0.46.1",
       "notes": [
         {
-          "sha": "53aeef42a76e431ea6ad0a81edaba455f7c0fd42",
-          "subject": "feat(mcp): send host session context to servers that opt in",
-          "summary": "AgentLink now advertises an MCP session-context extension and sends session id, label, kind and parent session id in tool call _meta to servers that opt in; the VS Code extension supplies the context and the SDK node-host exposes new exports.",
+          "sha": "a486e272192ee78d3dd558fd6d0f687a5ca057ea",
+          "subject": "fix(mcp): refresh remembered capabilities on 2026-07-28 connections",
+          "summary": "MCP connections that reuse a remembered 2026-07-28 protocol verdict now refresh the server's capabilities once and reconnect if they changed, so servers updated in place are noticed immediately instead of after 7 days.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.50.0",
-      "baselineRef": "assistant-v0.50.0",
-      "reserved": "0.50.0",
-      "commits": ["53aeef42a76e431ea6ad0a81edaba455f7c0fd42"],
+      "published": "0.51.0",
+      "baselineRef": "assistant-v0.51.0",
+      "reserved": "0.51.0",
+      "commits": ["a486e272192ee78d3dd558fd6d0f687a5ca057ea"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.51.0",
-      "effectiveBump": "minor",
+      "version": "0.51.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.51.0",
+      "tag": "assistant-v0.51.1",
       "notes": [
         {
-          "sha": "53aeef42a76e431ea6ad0a81edaba455f7c0fd42",
-          "subject": "feat(mcp): send host session context to servers that opt in",
-          "summary": "AgentLink now advertises an MCP session-context extension and sends session id, label, kind and parent session id in tool call _meta to servers that opt in; the VS Code extension supplies the context and the SDK node-host exposes new exports.",
+          "sha": "a486e272192ee78d3dd558fd6d0f687a5ca057ea",
+          "subject": "fix(mcp): refresh remembered capabilities on 2026-07-28 connections",
+          "summary": "MCP connections that reuse a remembered 2026-07-28 protocol verdict now refresh the server's capabilities once and reconnect if they changed, so servers updated in place are noticed immediately instead of after 7 days.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "ffb9f30442795107710db7d604af9086577ff72b": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Each VS Code chat's agent now sees a Session Identity line at the end of its system prompt naming its chat tab number and short session id, and /environment displays it.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "6b3bde6c03a0d9d80b9a63f8481556f30c56d203": {
+    "a486e272192ee78d3dd558fd6d0f687a5ca057ea": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Condense operations now log the session, trigger and finished-turn state, and aborted condenses are logged, making stray post-turn compactions easier to diagnose.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "53aeef42a76e431ea6ad0a81edaba455f7c0fd42": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "AgentLink now advertises an MCP session-context extension and sends session id, label, kind and parent session id in tool call _meta to servers that opt in; the VS Code extension supplies the context and the SDK node-host exposes new exports.",
+      "summary": "MCP connections that reuse a remembered 2026-07-28 protocol verdict now refresh the server's capabilities once and reconnect if they changed, so servers updated in place are noticed immediately instead of after 7 days.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

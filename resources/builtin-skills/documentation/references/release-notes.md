@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.79.1
+
 - Fixes AgentLink using out-of-date capabilities for an MCP server on protocol version 2026-07-28 that was updated in place. AgentLink remembers each server's protocol check for 7 days, and that memory included the capabilities the server had at the time, so a server that started offering something new (change notifications, or the `dev.agentlink/session-context` extension) was treated as not offering it until the week was up or its command or URL changed. AgentLink now asks the live server for its capabilities once per connection (one request, no extra process) and reconnects once if they changed.
 
 ## 1.79.0
