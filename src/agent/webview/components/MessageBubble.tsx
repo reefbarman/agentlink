@@ -38,6 +38,8 @@ import { QuestionAnswerBlock } from "./QuestionAnswerBlock";
 import { useRemoteDisplayImage } from "./RemoteToolDetail";
 import { RemoteFinalMarkerResult } from "./RemoteFinalMarkerResult";
 import { SkillLoadBlock } from "./SkillLoadBlock";
+import { McpPromptBlock } from "./McpPromptBlock";
+import { parseMcpPromptPresentation } from "../../../shared/mcpPromptPresentation.js";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { getLatestThinkingSummary, ThinkingContent } from "./ThinkingContent";
@@ -386,6 +388,10 @@ export function MessageBubble({
     const displayMedia = message.displayMedia;
     const slashLabel = message.slashCommandLabel;
     const hasSlashLabel = Boolean(message.isSlashCommand && slashLabel);
+    const mcpPrompt = parseMcpPromptPresentation(
+      cleanText,
+      hasSlashLabel ? slashLabel : undefined,
+    );
     const skillActivations = message.blocks.filter(
       (block) =>
         block.type === "skill_load" && block.origin === "user_selection",
@@ -421,7 +427,7 @@ export function MessageBubble({
     const showAttachmentRow =
       files.length > 0 ||
       mediaLabel !== null ||
-      hasSlashLabel ||
+      (hasSlashLabel && !mcpPrompt) ||
       message.origin === "browser" ||
       Boolean(displayMedia);
 
@@ -439,13 +445,25 @@ export function MessageBubble({
               files={files}
               mediaLabel={mediaLabel}
               displayMedia={displayMedia}
-              slashLabel={hasSlashLabel ? slashLabel : undefined}
+              slashLabel={hasSlashLabel && !mcpPrompt ? slashLabel : undefined}
               remote={message.origin === "browser"}
               onOpenFile={onOpenFile}
               onOpenImageInEditor={onOpenImageInEditor}
             />
           )}
-          <UserText text={cleanText} onOpenFile={onOpenFile} />
+          {mcpPrompt ? (
+            <>
+              {mcpPrompt.before && (
+                <UserText text={mcpPrompt.before} onOpenFile={onOpenFile} />
+              )}
+              <McpPromptBlock prompt={mcpPrompt} />
+              {mcpPrompt.after && (
+                <UserText text={mcpPrompt.after} onOpenFile={onOpenFile} />
+              )}
+            </>
+          ) : (
+            <UserText text={cleanText} onOpenFile={onOpenFile} />
+          )}
         </div>
         {activationCards}
         {onEditInFork && (
@@ -460,7 +478,15 @@ export function MessageBubble({
             <i class="codicon codicon-edit" />
           </button>
         )}
-        <CopyButton text={message.content} />
+        <CopyButton
+          text={
+            mcpPrompt
+              ? [mcpPrompt.before, mcpPrompt.body, mcpPrompt.after]
+                  .filter(Boolean)
+                  .join("\n\n")
+              : message.content
+          }
+        />
       </div>
     );
   }

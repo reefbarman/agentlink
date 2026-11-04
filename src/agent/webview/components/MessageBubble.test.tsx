@@ -13,6 +13,7 @@ import { agentMessagesToChatMessages, initialState, reducer } from "../App";
 
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import { MessageBubble } from "./MessageBubble";
+import { formatMcpPromptMessage } from "../../../agent/mcpPromptCommands.js";
 
 const TOOL_GROUP_SETTLE_MS_FOR_TEST = 350;
 
@@ -23,6 +24,113 @@ vi.mock("./mermaidRenderer", () => ({
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
+});
+
+describe("user-selected MCP prompt cards", () => {
+  it.each([undefined, "browser"] as const)(
+    "renders a compact prompt card without envelope text (origin=%s)",
+    (origin) => {
+      const modelText = formatMcpPromptMessage({
+        serverName: "agent-comms",
+        promptName: "status",
+        body: "Check the current status.",
+        followUp: "My additional request.",
+      });
+      const [projected] = agentMessagesToChatMessages([
+        {
+          role: "user",
+          content: `My introduction.\n\n${modelText}`,
+          uiHint: {
+            userMessage: {
+              isSlashCommand: true,
+              slashCommandLabel: "/agent-comms:status",
+            },
+          },
+        },
+      ]);
+      const message = { ...projected!, origin };
+      const original = message.content;
+      const { container, getByRole, getByText, queryByText } = render(
+        <MessageBubble message={message} streaming={false} />,
+      );
+      expect(getByText("MCP prompt")).toBeTruthy();
+      expect(getByText("agent-comms / status")).toBeTruthy();
+      expect(getByText("My introduction.")).toBeTruthy();
+      expect(getByText("My additional request.")).toBeTruthy();
+      expect(queryByText("Check the current status.")).toBeNull();
+      expect(container.textContent).not.toContain("<mcp_prompt");
+      expect(container.textContent).not.toContain(
+        "The user ran this MCP prompt",
+      );
+      const toggle = getByRole("button", { name: /MCP prompt/ });
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      fireEvent.click(toggle);
+      expect(getByText("Check the current status.")).toBeTruthy();
+      expect(container.textContent).not.toContain("</mcp_prompt>");
+      expect(message.content).toBe(original);
+      expect(message.content).toContain('<mcp_prompt server="agent-comms"');
+    },
+  );
+
+  it("copies readable prompt text without altering the stored message", async () => {
+    const originalClipboard = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    try {
+      const content = formatMcpPromptMessage({
+        serverName: "agent-comms",
+        promptName: "status",
+        body: "Readable template.",
+        followUp: "My follow-up.",
+      });
+      const [message] = agentMessagesToChatMessages([
+        {
+          role: "user",
+          content,
+          uiHint: {
+            userMessage: {
+              isSlashCommand: true,
+              slashCommandLabel: "/agent-comms:status",
+            },
+          },
+        },
+      ]);
+      const view = render(
+        <MessageBubble message={message!} streaming={false} />,
+      );
+      await act(async () => {
+        fireEvent.click(view.getByRole("button", { name: "Copy as Markdown" }));
+      });
+      expect(writeText).toHaveBeenCalledWith(
+        "Readable template.\n\nMy follow-up.",
+      );
+      expect(message!.content).toBe(content);
+    } finally {
+      if (originalClipboard)
+        Object.defineProperty(navigator, "clipboard", originalClipboard);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("leaves arbitrary user-written tags visible instead of presenting them as a selected prompt", () => {
+    const [message] = agentMessagesToChatMessages([
+      {
+        role: "user",
+        content: '<mcp_prompt server="fake">user-written text</mcp_prompt>',
+      },
+    ]);
+    const { container } = render(
+      <MessageBubble message={message!} streaming={false} />,
+    );
+    expect(container.querySelector(".mcp-prompt-block")).toBeNull();
+    expect(container.textContent).toContain("<mcp_prompt");
+  });
 });
 
 describe("host skill activation cards", () => {
