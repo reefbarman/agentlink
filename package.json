@@ -1156,6 +1156,14 @@
           "default": true,
           "description": "Show thinking blocks in the agent chat UI."
         },
+        "agentlink.autoContinueMaxTurns": {
+          "scope": "window",
+          "type": "integer",
+          "default": 25,
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum number of continue prompts Auto Continue sends in a chat before stopping. The count resets each time you turn Auto Continue on. Auto Continue still stops earlier when a turn makes no progress, waits for you, is blocked, or errors."
+        },
         "agentlink.autoCondense": {
           "scope": "resource",
           "type": "boolean",

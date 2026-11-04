@@ -4,6 +4,7 @@ import * as path from "path";
 
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { AUTO_CONTINUE_MAX_TURNS } from "./SessionAutoContinueController.js";
 import type { AgentMessage } from "./types.js";
 import type { AppAction } from "../shared/chatProjection.js";
 import type { ChatStateSnapshot as ChatState } from "@agentlink/protocol/chat-state";
@@ -6298,7 +6299,10 @@ describe("ChatViewProvider session state sync", () => {
       );
       expect(
         provider.getBrowserDetachedSessionState(session.id).autoContinue,
-      ).toEqual({ enabled: true, status: "Auto Continue sent 1/10." });
+      ).toEqual({
+        enabled: true,
+        status: `Auto Continue sent 1/${AUTO_CONTINUE_MAX_TURNS}.`,
+      });
 
       // The browser can turn it off for both surfaces.
       expect(
@@ -6374,7 +6378,10 @@ describe("ChatViewProvider session state sync", () => {
       );
       expect(
         provider.getBrowserDetachedSessionState(session.id).autoContinue,
-      ).toEqual({ enabled: true, status: "Auto Continue sent 1/10." });
+      ).toEqual({
+        enabled: true,
+        status: `Auto Continue sent 1/${AUTO_CONTINUE_MAX_TURNS}.`,
+      });
     } finally {
       vi.useRealTimers();
     }

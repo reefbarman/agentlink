@@ -272,6 +272,7 @@ import {
 } from "../shared/chatProjection.js";
 import { stripMemoryCandidateReminders } from "../shared/memoryCandidates.js";
 import {
+  normalizeAutoContinueMaxTurns,
   SessionAutoContinueController,
   type SessionAutoContinueSendRequest,
   type SessionAutoContinueState,
@@ -1502,6 +1503,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return getLatestTurnFinalMarker(session.getAllMessages());
     },
     log: (message) => this.log(message),
+    getMaxTurns: () =>
+      normalizeAutoContinueMaxTurns(
+        vscode.workspace
+          .getConfiguration("agentlink")
+          .get<number>("autoContinueMaxTurns"),
+      ),
   });
   private projectedDetectRequest: {
     requestId: string;

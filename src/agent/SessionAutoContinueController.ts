@@ -9,7 +9,20 @@ import {
 } from "@agentlink/protocol/auto-continue-progress";
 import type { AutoContinueTranscriptAction } from "../shared/chatProjection.js";
 
-export const AUTO_CONTINUE_MAX_TURNS = 10;
+/** Default for `agentlink.autoContinueMaxTurns`; keep in sync with package.json. */
+export const AUTO_CONTINUE_MAX_TURNS = 25;
+export const AUTO_CONTINUE_MAX_TURNS_LIMIT = 500;
+
+/** Clamp a configured continue limit to a whole number in range. */
+export function normalizeAutoContinueMaxTurns(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return AUTO_CONTINUE_MAX_TURNS;
+  }
+  return Math.min(
+    AUTO_CONTINUE_MAX_TURNS_LIMIT,
+    Math.max(1, Math.floor(value)),
+  );
+}
 
 /** What a surface needs to render the Auto Continue toggle for a session. */
 export interface SessionAutoContinueState {
@@ -60,6 +73,8 @@ export interface SessionAutoContinueControllerOptions {
   getIdleFinalMarker?(sessionId: string): FinalMessageMarker | null;
   /** Record why a continue was or was not sent, for diagnosing skips. */
   log?(message: string): void;
+  /** Configured continue limit, read on each decision. Defaults to AUTO_CONTINUE_MAX_TURNS. */
+  getMaxTurns?(): number;
 }
 
 interface SessionAutoContinueRecord extends SessionAutoContinueState {
@@ -107,7 +122,7 @@ export class SessionAutoContinueController {
     const record = this.ensure(sessionId);
     record.enabled = enabled;
     record.status = enabled
-      ? `Auto Continue enabled (max ${AUTO_CONTINUE_MAX_TURNS} turns).`
+      ? `Auto Continue enabled (max ${this.maxTurns()} turns).`
       : "Auto Continue disabled.";
     record.count = 0;
     record.awaitingProgress = false;
@@ -225,11 +240,12 @@ export class SessionAutoContinueController {
       this.stop(sessionId, record, AUTO_CONTINUE_NO_PROGRESS_REASON);
       return;
     }
-    if (record.count >= AUTO_CONTINUE_MAX_TURNS) {
+    const maxTurns = this.maxTurns();
+    if (record.count >= maxTurns) {
       this.stop(
         sessionId,
         record,
-        `Auto Continue stopped after ${AUTO_CONTINUE_MAX_TURNS} turns to avoid an infinite loop.`,
+        `Auto Continue stopped after ${maxTurns} turns to avoid an infinite loop.`,
       );
       return;
     }
@@ -241,11 +257,8 @@ export class SessionAutoContinueController {
 
     record.count += 1;
     record.awaitingProgress = true;
-    record.status = `Auto Continue sent ${record.count}/${AUTO_CONTINUE_MAX_TURNS}.`;
-    this.log(
-      sessionId,
-      `sending continue ${record.count}/${AUTO_CONTINUE_MAX_TURNS}`,
-    );
+    record.status = `Auto Continue sent ${record.count}/${maxTurns}.`;
+    this.log(sessionId, `sending continue ${record.count}/${maxTurns}`);
     this.publish(sessionId, record, { kind: "continued" });
     const generation = record.generation;
     this.options.sendPrompt({
@@ -294,6 +307,12 @@ export class SessionAutoContinueController {
       this.sessions.set(sessionId, record);
     }
     return record;
+  }
+
+  private maxTurns(): number {
+    return normalizeAutoContinueMaxTurns(
+      this.options.getMaxTurns?.() ?? AUTO_CONTINUE_MAX_TURNS,
+    );
   }
 
   private log(sessionId: string, message: string): void {

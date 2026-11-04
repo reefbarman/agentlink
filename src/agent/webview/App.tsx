@@ -144,7 +144,7 @@ import { addressChatWebviewMessage } from "./chatTabActions";
 import { useWebviewMessageConnection } from "./useWebviewMessageConnection";
 
 const DEFAULT_MAX_TOKENS = 200_000;
-const AUTO_CONTINUE_MAX_TURNS = 10;
+
 const MCP_CONFIG_MUTATION_TIMEOUT_MS = 30_000;
 const PROMPT_POLISH_TIMEOUT_MS = 60_000;
 
@@ -2659,13 +2659,12 @@ export function App({
     (enabled: boolean) => {
       const sessionId = stateRef.current.sessionId;
       if (!sessionId) return;
-      // Show the change now; the host confirms with its own state.
+      // Show the change now; the host confirms with its own state, including
+      // the configured turn limit.
       applyAutoContinueState({
         sessionId,
         enabled,
-        status: enabled
-          ? `Auto Continue enabled (max ${AUTO_CONTINUE_MAX_TURNS} turns).`
-          : "Auto Continue disabled.",
+        status: enabled ? "Auto Continue enabled." : "Auto Continue disabled.",
       });
       vscodeApi.postMessage({
         command: "agentSetAutoContinue",

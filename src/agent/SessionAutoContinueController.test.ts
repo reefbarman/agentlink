@@ -6,6 +6,8 @@ import {
 } from "@agentlink/protocol/final-status";
 import {
   AUTO_CONTINUE_MAX_TURNS,
+  AUTO_CONTINUE_MAX_TURNS_LIMIT,
+  normalizeAutoContinueMaxTurns,
   SessionAutoContinueController,
   type SessionAutoContinueSendRequest,
   type SessionAutoContinueUpdate,
@@ -14,6 +16,7 @@ import {
 function makeController(
   queued = false,
   idleMarker: Record<string, { status: string } | null> = {},
+  getMaxTurns?: () => number,
 ) {
   const logs: string[] = [];
   const sent: SessionAutoContinueSendRequest[] = [];
@@ -25,6 +28,7 @@ function makeController(
     hasQueuedUserMessages: hasQueued,
     getIdleFinalMarker: (sessionId) => (idleMarker[sessionId] as never) ?? null,
     log: (message) => logs.push(message),
+    ...(getMaxTurns ? { getMaxTurns } : {}),
   });
   const finishTurn = (
     sessionId: string,
@@ -164,6 +168,49 @@ describe("SessionAutoContinueController", () => {
 
     expect(sent).toHaveLength(AUTO_CONTINUE_MAX_TURNS);
     expect(controller.getState("session-a").enabled).toBe(false);
+  });
+
+  it("uses the configured turn limit, read on each decision", () => {
+    let maxTurns = 3;
+    const { controller, sent, finishTurn } = makeController(
+      false,
+      {},
+      () => maxTurns,
+    );
+    controller.setEnabled("session-a", true);
+    expect(controller.getState("session-a").status).toBe(
+      "Auto Continue enabled (max 3 turns).",
+    );
+
+    finishTurn("session-a", "completed", true);
+    expect(controller.getState("session-a").status).toBe(
+      "Auto Continue sent 1/3.",
+    );
+
+    // A changed setting applies to an already-running Auto Continue.
+    maxTurns = 2;
+    for (let turn = 0; turn < 5; turn += 1) {
+      finishTurn("session-a", "completed", true);
+    }
+    expect(sent).toHaveLength(2);
+    expect(controller.getState("session-a")).toEqual({
+      enabled: false,
+      status: "Auto Continue stopped after 2 turns to avoid an infinite loop.",
+    });
+  });
+
+  it("clamps an invalid configured limit", () => {
+    expect(normalizeAutoContinueMaxTurns(undefined)).toBe(
+      AUTO_CONTINUE_MAX_TURNS,
+    );
+    expect(normalizeAutoContinueMaxTurns(Number.NaN)).toBe(
+      AUTO_CONTINUE_MAX_TURNS,
+    );
+    expect(normalizeAutoContinueMaxTurns(0)).toBe(1);
+    expect(normalizeAutoContinueMaxTurns(7.9)).toBe(7);
+    expect(normalizeAutoContinueMaxTurns(10_000)).toBe(
+      AUTO_CONTINUE_MAX_TURNS_LIMIT,
+    );
   });
 
   it("lets queued messages run first and skips a turn the user stopped", () => {

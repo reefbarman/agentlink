@@ -210,7 +210,6 @@ import {
 } from "./browserGatewayNotifications";
 
 const DEFAULT_MAX_TOKENS = 200_000;
-const AUTO_CONTINUE_MAX_TURNS = 10;
 
 /** How often the Assistant refreshes chat and project status. */
 const ASSISTANT_STATUS_REFRESH_MS = 5_000;
@@ -5283,9 +5282,7 @@ export function BrowserGatewayApp({
       // Show the change now; the host's answer replaces it.
       rememberAutoContinue(sessionId, {
         enabled,
-        status: enabled
-          ? `Auto Continue enabled (max ${AUTO_CONTINUE_MAX_TURNS} turns).`
-          : "Auto Continue disabled.",
+        status: enabled ? "Auto Continue enabled." : "Auto Continue disabled.",
       });
       void requestAutoContinue(sessionId, autoContinueProjectId, enabled)
         .then((state) => {
