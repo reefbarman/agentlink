@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- MCP prompt argument completions now refresh when you move the cursor into an earlier argument of a pasted command. Suggestions use a labelled, keyboard-accessible popup with the argument description and required/optional guidance, replacing the unstyled inline buttons in VS Code and the browser. Up/Down navigates, Tab or Enter selects without submitting, and Escape closes the popup; selecting a recipient preserves the question text.
+
 ## 1.80.0
 
 - User-selected MCP prompts now render as compact, expandable **MCP prompt** cards in VS Code and the browser remote view, labelled with the server and prompt name. The transcript no longer shows raw `<mcp_prompt>` tags or the model-facing provenance paragraph; your own surrounding text remains visible, and Copy gives the readable text. The stored message and model context keep the original provenance and approval boundaries unchanged.

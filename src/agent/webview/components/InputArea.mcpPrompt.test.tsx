@@ -131,6 +131,53 @@ describe("shared composer MCP prompts", () => {
     expect(test.onSend).not.toHaveBeenCalled();
   });
 
+  it.each(["click", "keyup", "selectionchange"])(
+    "refreshes completions when the caret moves into pasted arguments (%s)",
+    async (eventName) => {
+      const test = setup();
+      const draft = "/fixture:ask tab can you check the build?";
+      fireEvent.input(test.input, { target: { value: draft } });
+      test.input.focus();
+      const cursor = draft.indexOf("tab") + 3;
+      test.input.setSelectionRange(cursor, cursor);
+      if (eventName === "click") fireEvent.click(test.input);
+      else if (eventName === "keyup")
+        fireEvent.keyUp(test.input, { key: "ArrowLeft" });
+      else fireEvent(document, new Event("selectionchange"));
+      await waitFor(() =>
+        expect(
+          request(test.postMessage, "agentCompleteMcpPrompt")?.request,
+        ).toMatchObject({
+          argumentName: "to",
+          value: "tab",
+          arguments: { question: "can you check the build?" },
+        }),
+      );
+      const sent = request(test.postMessage, "agentCompleteMcpPrompt");
+      fireEvent(
+        window,
+        new MessageEvent("message", {
+          data: {
+            type: "agentMcpPromptCompletions",
+            requestId: sent.requestId,
+            values: ["tab-1", "tab-2"],
+          },
+        }),
+      );
+      await test.findByRole("listbox", { name: "Suggestions for to" });
+      expect(test.getByText("Choose to")).toBeTruthy();
+      fireEvent.keyDown(test.input, { key: "ArrowDown" });
+      fireEvent.keyDown(test.input, { key: "Tab" });
+      expect(test.input.value).toBe(
+        "/fixture:ask tab-2 can you check the build?",
+      );
+      expect(test.onSend).not.toHaveBeenCalled();
+      expect(
+        request(test.postMessage, "agentPrepareMcpPrompt"),
+      ).toBeUndefined();
+    },
+  );
+
   it("requests argument completions with context and inserts a selected suggestion", async () => {
     const test = setup();
     fireEvent.input(test.input, { target: { value: "/fixture:ask tab" } });
@@ -149,7 +196,7 @@ describe("shared composer MCP prompts", () => {
         },
       }),
     );
-    fireEvent.click(await test.findByRole("button", { name: "tab-2" }));
+    fireEvent.click(await test.findByRole("option", { name: "tab-2" }));
     expect(test.input.value).toBe("/fixture:ask tab-2 ");
   });
 });

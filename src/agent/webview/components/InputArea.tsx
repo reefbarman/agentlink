@@ -29,10 +29,10 @@ import {
 } from "../slashCommandInput";
 import {
   applyMcpPromptCompletion,
-  formatMcpPromptSignature,
   parseMcpPromptArguments,
 } from "../../../shared/mcpPromptArguments.js";
 import { useMcpPromptComposer } from "./useMcpPromptComposer.js";
+import { McpPromptArgumentPicker } from "./McpPromptArgumentPicker.js";
 import {
   useCallback,
   useEffect,
@@ -738,6 +738,18 @@ export function InputArea({
   const [mcpSuggestions, setMcpSuggestions] = useState<string[]>([]);
   const mcpPrompt = matchedExecutableSlashCommand?.command.mcpPrompt;
   const [mcpCursor, setMcpCursor] = useState<number | undefined>();
+  const [mcpSelectedIndex, setMcpSelectedIndex] = useState(0);
+  const [mcpDismissed, setMcpDismissed] = useState(false);
+  const syncMcpCursor = useCallback(() => {
+    setMcpCursor(textareaRef.current?.selectionStart);
+  }, []);
+  useEffect(() => {
+    const syncSelection = () => {
+      if (document.activeElement === textareaRef.current) syncMcpCursor();
+    };
+    document.addEventListener("selectionchange", syncSelection);
+    return () => document.removeEventListener("selectionchange", syncSelection);
+  }, [syncMcpCursor]);
   const mcpCommandOffset = mcpPrompt
     ? text.indexOf(
         `/${matchedExecutableSlashCommand!.command.displayName ?? matchedExecutableSlashCommand!.command.name}`,
@@ -759,6 +771,8 @@ export function InputArea({
   );
   useEffect(() => {
     setMcpSuggestions([]);
+    setMcpSelectedIndex(0);
+    setMcpDismissed(false);
     setMcpError("");
     if (!mcpPrompt?.completions) return;
     const parsed = parseMcpPromptArguments(
@@ -1191,8 +1205,78 @@ export function InputArea({
     ],
   );
 
+  const mcpActiveArgument = mcpPrompt
+    ? parseMcpPromptArguments(
+        mcpArgsText,
+        mcpPrompt.arguments,
+        mcpArgumentCursor,
+      ).active
+    : undefined;
+  const mcpArgumentIndex =
+    mcpPrompt?.arguments.findIndex(
+      (argument) => argument.name === mcpActiveArgument?.name,
+    ) ?? -1;
+  const mcpSuggestionsVisible =
+    !shouldShowSlashPopup &&
+    !mcpDismissed &&
+    !mcp.pending &&
+    mcpSuggestions.length > 0;
+  const selectMcpCompletion = useCallback(
+    (value: string) => {
+      if (!mcpActiveArgument || !matchedExecutableSlashCommand) return;
+      const replaced = applyMcpPromptCompletion(
+        mcpArgsText,
+        mcpActiveArgument,
+        value,
+      );
+      // Retain the exact prefix and trailing question, including when the
+      // user moves back into an earlier argument of a pasted command.
+      setText(`${text.slice(0, mcpArgsOffset)}${replaced.text}`);
+      setMcpSuggestions([]);
+      setMcpCursor(mcpArgsOffset + replaced.cursor);
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(
+          mcpArgsOffset + replaced.cursor,
+          mcpArgsOffset + replaced.cursor,
+        );
+      });
+    },
+    [
+      mcpActiveArgument,
+      matchedExecutableSlashCommand,
+      mcpArgsText,
+      text,
+      mcpArgsOffset,
+    ],
+  );
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
+      if (mcpSuggestionsVisible) {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          setMcpSelectedIndex(
+            (index) =>
+              (index +
+                (e.key === "ArrowDown" ? 1 : -1) +
+                mcpSuggestions.length) %
+              mcpSuggestions.length,
+          );
+          return;
+        }
+        if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+          e.preventDefault();
+          const selected = mcpSuggestions[mcpSelectedIndex];
+          if (selected !== undefined) selectMcpCompletion(selected);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setMcpDismissed(true);
+          return;
+        }
+      }
       // Handle emoji popup navigation
       if (shouldShowEmojiPopup) {
         if (e.key === "ArrowDown") {
@@ -1341,6 +1425,10 @@ export function InputArea({
     },
     [
       handleSubmit,
+      mcpSuggestionsVisible,
+      mcpSuggestions,
+      mcpSelectedIndex,
+      selectMcpCompletion,
       submitOnEnter,
       contextMode,
       submitQuestionAction,
@@ -1624,6 +1712,7 @@ export function InputArea({
       const target = e.target as HTMLTextAreaElement;
       const value = target.value;
       const cursor = target.selectionStart ?? value.length;
+      setMcpCursor(cursor);
       setText(value);
 
       // Auto-resize textarea
@@ -2327,7 +2416,7 @@ export function InputArea({
           )}
           <ComposerBox
             ref={inputWrapperRef}
-            className={`input-wrapper ${dragOver ? "drag-over" : ""} ${pickerOpen ? "picker-active" : ""} ${shouldShowSlashPopup ? "slash-popup-open" : ""} ${matchedExecutableSlashCommand ? "slash-match-active" : ""}`}
+            className={`input-wrapper ${dragOver ? "drag-over" : ""} ${pickerOpen ? "picker-active" : ""} ${shouldShowSlashPopup || mcpSuggestionsVisible ? "slash-popup-open" : ""} ${matchedExecutableSlashCommand ? "slash-match-active" : ""}`}
             mainAlign="center"
             accessory={
               <>
@@ -2356,51 +2445,17 @@ export function InputArea({
                   />
                 )}
                 {mcpPrompt && (
-                  <div
-                    class="slash-match-pill-row"
-                    aria-label="MCP prompt arguments"
-                  >
-                    <span>{formatMcpPromptSignature(mcpPrompt.arguments)}</span>
-                    {mcp.pending && (
-                      <span role="status">Waiting for MCP prompt approval</span>
-                    )}
-                    {mcpError && <span role="alert">{mcpError}</span>}
-                    {mcpSuggestions.map((value) => (
-                      <button
-                        type="button"
-                        key={value}
-                        onClick={() => {
-                          const parsed = parseMcpPromptArguments(
-                            mcpArgsText,
-                            mcpPrompt.arguments,
-                            mcpArgumentCursor,
-                          );
-                          if (!parsed.active || !matchedExecutableSlashCommand)
-                            return;
-                          const replaced = applyMcpPromptCompletion(
-                            mcpArgsText,
-                            parsed.active,
-                            value,
-                          );
-                          const match = matchedExecutableSlashCommand;
-                          setText(
-                            `${match.prefixText ? `${match.prefixText} ` : ""}/${match.command.name} ${replaced.text}`,
-                          );
-                          setMcpSuggestions([]);
-                          setMcpCursor(mcpArgsOffset + replaced.cursor);
-                          requestAnimationFrame(() => {
-                            textareaRef.current?.focus();
-                            textareaRef.current?.setSelectionRange(
-                              mcpArgsOffset + replaced.cursor,
-                              mcpArgsOffset + replaced.cursor,
-                            );
-                          });
-                        }}
-                      >
-                        {value}
-                      </button>
-                    ))}
-                  </div>
+                  <McpPromptArgumentPicker
+                    argument={mcpPrompt.arguments[mcpArgumentIndex]}
+                    argumentIndex={mcpArgumentIndex}
+                    argumentCount={mcpPrompt.arguments.length}
+                    values={mcpSuggestionsVisible ? mcpSuggestions : []}
+                    selectedIndex={mcpSelectedIndex}
+                    onSelect={selectMcpCompletion}
+                    onHover={setMcpSelectedIndex}
+                    pending={mcp.pending}
+                    error={mcpError}
+                  />
                 )}
                 {matchedExecutableSlashCommand && (
                   <div class="slash-match-pill-row">
@@ -2455,19 +2510,29 @@ export function InputArea({
               // Preact 11 limits <textarea> to role="textbox"; the slash
               // picker intentionally uses the ARIA combobox pattern.
               role={
-                (shouldShowSlashPopup ? "combobox" : undefined) as unknown as
-                  | "textbox"
-                  | undefined
+                (shouldShowSlashPopup || mcpSuggestionsVisible
+                  ? "combobox"
+                  : undefined) as unknown as "textbox" | undefined
               }
-              aria-autocomplete={shouldShowSlashPopup ? "list" : undefined}
-              aria-expanded={shouldShowSlashPopup}
+              aria-autocomplete={
+                shouldShowSlashPopup || mcpSuggestionsVisible
+                  ? "list"
+                  : undefined
+              }
+              aria-expanded={shouldShowSlashPopup || mcpSuggestionsVisible}
               aria-controls={
-                shouldShowSlashPopup ? "slash-command-picker" : undefined
+                shouldShowSlashPopup
+                  ? "slash-command-picker"
+                  : mcpSuggestionsVisible
+                    ? "mcp-argument-picker"
+                    : undefined
               }
               aria-activedescendant={
                 shouldShowSlashPopup && filteredSlashCommands.length > 0
                   ? `slash-command-picker-option-${slashSelectedIdx}`
-                  : undefined
+                  : mcpSuggestionsVisible
+                    ? `mcp-argument-option-${mcpSelectedIndex}`
+                    : undefined
               }
               placeholder={
                 disabled
@@ -2485,7 +2550,12 @@ export function InputArea({
                 setMcpCursor(event.currentTarget.selectionStart)
               }
               onKeyDown={handleKeyDown}
-              onKeyUp={handleVoiceShortcutKeyUp}
+              onClick={syncMcpCursor}
+              onFocus={syncMcpCursor}
+              onKeyUp={(event) => {
+                syncMcpCursor();
+                handleVoiceShortcutKeyUp(event);
+              }}
               onPaste={handlePaste}
               rows={1}
               onDragOver={handleDragOver}
