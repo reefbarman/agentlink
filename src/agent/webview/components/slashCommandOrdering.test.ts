@@ -8,6 +8,12 @@ import type { ChatSlashCommandInfo as SlashCommandInfo } from "@agentlink/protoc
 
 const commands: SlashCommandInfo[] = [
   {
+    name: "agent-comms:status",
+    description: "Check peer status",
+    source: "mcp",
+    builtin: false,
+  },
+  {
     name: "help",
     description: "Help",
     source: "builtin",
@@ -37,7 +43,7 @@ describe("slash command picker ordering", () => {
   it("uses the grouped presentation order as the selection order", () => {
     expect(
       orderSlashCommandsForPicker(commands).map(({ name }) => name),
-    ).toEqual(["review", "plan", "help", "skill:smoke"]);
+    ).toEqual(["review", "plan", "help", "skill:smoke", "agent-comms:status"]);
   });
 
   it("groups the ordered commands without dropping or duplicating them", () => {
@@ -51,6 +57,7 @@ describe("slash command picker ordering", () => {
       { label: "Global", commands: ["plan"] },
       { label: "Built-in", commands: ["help"] },
       { label: "Skills", commands: ["skill:smoke"] },
+      { label: "MCP Prompts", commands: ["agent-comms:status"] },
     ]);
   });
 });

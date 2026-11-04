@@ -9,6 +9,7 @@ export const SLASH_COMMAND_SECTIONS: ReadonlyArray<{
   { source: "agentlink", label: "AgentLink" },
   { source: "builtin", label: "Built-in" },
   { source: "skill", label: "Skills" },
+  { source: "mcp", label: "MCP Prompts" },
 ];
 
 /**

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixes MCP prompt commands missing from slash-picker search results in VS Code and the browser remote view. The picker now includes an **MCP Prompts** group, so typing a prefix such as `/age` finds `agent-comms` prompts instead of requiring the complete command to be pasted.
+
 - Connected MCP servers' prompts now appear as `/<server>:<prompt>` slash commands in VS Code workspace chat and its browser remote view. Arguments support positional values, quoted text and `name=value`, with server suggestions through `completion/complete`. Before server-written prompt text reaches the agent, a shared approval card shows it and offers one-time approval or prompt-only session/project/global rules. Prompt rules do not approve tools, notifications or idle wake. Switching chats cancels a pending prompt admission. Prompt fetches and completions also carry host session context to servers that opt in.
 
 - **Auto Continue** now sends up to 25 continue prompts before stopping, up from 10, and the limit is configurable with the new `agentlink.autoContinueMaxTurns` setting (0 for unlimited, or any positive integer). The count still restarts each time you turn Auto Continue on, and it still stops earlier when a turn changes nothing, waits for you, is blocked or errors. Changing the setting applies to chats that already have Auto Continue on from their next continue.

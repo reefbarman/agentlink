@@ -24,7 +24,7 @@ const command: ChatSlashCommandInfo = {
     ],
   },
 };
-function setup() {
+function setup(slashCommands: ChatSlashCommandInfo[] = [command]) {
   const onSend = vi.fn();
   const postMessage = vi.fn();
   const props = {
@@ -38,7 +38,7 @@ function setup() {
     vscodeApi: { postMessage },
     injection: null,
     onInjectionConsumed: vi.fn(),
-    slashCommands: [command],
+    slashCommands,
     mcpSessionId: "owner-a",
   };
   const view = render(<InputArea {...props} />);
@@ -54,6 +54,29 @@ function request(post: ReturnType<typeof vi.fn>, name: string) {
 }
 
 describe("shared composer MCP prompts", () => {
+  it("finds MCP prompts by a server-name prefix and selects them without sending", () => {
+    const test = setup([
+      {
+        ...command,
+        name: "agent-comms:status",
+        mcpPrompt: {
+          serverName: "agent-comms",
+          promptName: "status",
+          arguments: [],
+        },
+      },
+    ]);
+    fireEvent.input(test.input, { target: { value: "/", selectionStart: 1 } });
+    fireEvent.input(test.input, {
+      target: { value: "/age", selectionStart: 4 },
+    });
+    const option = test.getByRole("option", { name: /agent-comms:status/ });
+    fireEvent.click(option);
+    expect(test.input.value).toBe("/agent-comms:status ");
+    expect(test.onSend).not.toHaveBeenCalled();
+    expect(request(test.postMessage, "agentPrepareMcpPrompt")).toBeUndefined();
+  });
+
   it("sends no text until the host returns the approved prompt", async () => {
     const test = setup();
     fireEvent.input(test.input, {

@@ -72,7 +72,7 @@ Standard `mcpServers` object:
 
 ## Run MCP prompts from the composer
 
-In an existing VS Code workspace chat, type `/` to find connected servers' prompts alongside other slash commands. The browser remote view uses the same composer and approval card. A prompt named `ask` from server `agent-comms` appears as `/agent-comms:ask`. Existing commands take precedence if their names collide. Refreshing the slash picker reads the current prompt catalogue.
+In an existing VS Code workspace chat, type `/` to find connected servers' prompts alongside other slash commands. The browser remote view uses the same composer and approval card. A prompt named `ask` from server `agent-comms` appears as `/agent-comms:ask` in the **MCP Prompts** group. Search by server or prompt name, for example `/age` finds `agent-comms` prompts. Existing commands take precedence if their names collide. Refreshing the slash picker reads the current prompt catalogue.
 
 - Type arguments in the order shown by the hint (`<required> [optional]`). The final positional argument takes the rest of the line: `/agent-comms:ask tab-2 can you check the build?`.
 - Use double quotes around an argument containing spaces, or `name=value` / `name="value with spaces"` to choose an argument explicitly and skip optional ones. Put named arguments before the final free-text argument; `name=value` inside that free text stays literal.
