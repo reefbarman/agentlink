@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.80.0
+
 - User-selected MCP prompts now render as compact, expandable **MCP prompt** cards in VS Code and the browser remote view, labelled with the server and prompt name. The transcript no longer shows raw `<mcp_prompt>` tags or the model-facing provenance paragraph; your own surrounding text remains visible, and Copy gives the readable text. The stored message and model context keep the original provenance and approval boundaries unchanged.
 
 - Fixes MCP prompt commands missing from slash-picker search results in VS Code and the browser remote view. The picker now includes an **MCP Prompts** group, so typing a prefix such as `/age` finds `agent-comms` prompts instead of requiring the complete command to be pasted.

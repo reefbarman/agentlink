@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "a486e272192ee78d3dd558fd6d0f687a5ca057ea",
-  "createdAt": "2026-11-04T06:47:32.397Z",
+  "sourceSha": "3b012ab2b8e958577202f5e18e3a76c2f5f49e15",
+  "createdAt": "2026-11-04T12:34:07.043Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,131 +10,409 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.79.0",
-      "baselineRef": "v1.79.0",
-      "reserved": "1.79.0",
-      "commits": ["a486e272192ee78d3dd558fd6d0f687a5ca057ea"],
+      "published": "1.79.1",
+      "baselineRef": "v1.79.1",
+      "reserved": "1.79.3",
+      "commits": [
+        "72b6e339c1a966b275f578b2f009c2b3b8dbf6f1",
+        "d8d65ed55867bfaf175171caf493107e19c595f4",
+        "c27d308238116db77328501b9d6ee1356fe5e4b5",
+        "4b6dde2bfa08cd089a412663eb71b8ec86723f42",
+        "cb2683eceab9c1ce06f630150ac7563015663707",
+        "0bd694700a25c5d9929813a04581c54ccec6b89b",
+        "3f5369cab4b8951f77556ec0afb2e4bb7a4acb17",
+        "64ff846667cde2430f9d963335829bd418a34f91",
+        "4e6cdab1df7f1938c669b18574d0c3b31f885b9b",
+        "3b012ab2b8e958577202f5e18e3a76c2f5f49e15"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.79.1",
-      "effectiveBump": "patch",
+      "version": "1.80.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.79.1",
+      "tag": "v1.80.0",
       "notes": [
         {
-          "sha": "a486e272192ee78d3dd558fd6d0f687a5ca057ea",
-          "subject": "fix(mcp): refresh remembered capabilities on 2026-07-28 connections",
-          "summary": "MCP connections that reuse a remembered 2026-07-28 protocol verdict now refresh the server's capabilities once and reconnect if they changed, so servers updated in place are noticed immediately instead of after 7 days.",
+          "sha": "72b6e339c1a966b275f578b2f009c2b3b8dbf6f1",
+          "subject": "fix(ask-agent): keep queued messages visible and restore interjection over the relay",
+          "summary": "Ask Agent messages queued mid-turn now stay visible in the browser relay view, and the interject-at-next-break controls work again over the relay.",
+          "breaking": false
+        },
+        {
+          "sha": "d8d65ed55867bfaf175171caf493107e19c595f4",
+          "subject": "feat(chat): let the activity shelf resize to any height",
+          "summary": "The chat activity shelf can now be dragged to any height, keeps the chosen size as content changes, and can shrink the composer's question card to show more transcript.",
+          "breaking": false
+        },
+        {
+          "sha": "c27d308238116db77328501b9d6ee1356fe5e4b5",
+          "subject": "feat(agent): raise Auto Continue limit to 25 and add agentlink.autoContinueMaxTurns setting",
+          "summary": "Auto Continue's default limit rises from 10 to 25 continues, and a new agentlink.autoContinueMaxTurns setting lets you change it.",
+          "breaking": false
+        },
+        {
+          "sha": "4b6dde2bfa08cd089a412663eb71b8ec86723f42",
+          "subject": "fix(agent): classify auto-continue limit as a window setting",
+          "summary": "The agentlink.autoContinueMaxTurns setting is now classified as a window-scoped setting so it is handled consistently.",
+          "breaking": false
+        },
+        {
+          "sha": "cb2683eceab9c1ce06f630150ac7563015663707",
+          "subject": "feat(agent): support unlimited auto-continue with a zero limit",
+          "summary": "Setting agentlink.autoContinueMaxTurns to 0 now allows unlimited Auto Continue turns, and the upper limit of 500 is removed.",
+          "breaking": false
+        },
+        {
+          "sha": "0bd694700a25c5d9929813a04581c54ccec6b89b",
+          "subject": "feat(mcp): expose prompts as approval-gated slash commands",
+          "summary": "Connected MCP servers' prompts now appear as /server:prompt slash commands with argument parsing and completions, and their text is added to the chat only after approval, with optional saved rules.",
+          "breaking": false
+        },
+        {
+          "sha": "3f5369cab4b8951f77556ec0afb2e4bb7a4acb17",
+          "subject": "fix(mcp): preserve prompt grants when editing servers",
+          "summary": "Editing an MCP server in the MCP Manager no longer drops its saved prompt policy and allowed-prompt rules.",
+          "breaking": false
+        },
+        {
+          "sha": "64ff846667cde2430f9d963335829bd418a34f91",
+          "subject": "fix(mcp): cancel prompt cards after pane session changes",
+          "summary": "Pending MCP prompt approval cards are now cancelled correctly when the pane switches to a different chat session.",
+          "breaking": false
+        },
+        {
+          "sha": "4e6cdab1df7f1938c669b18574d0c3b31f885b9b",
+          "subject": "fix(mcp): show prompt commands in slash picker search",
+          "summary": "MCP prompt commands now show in their own MCP Prompts group in the slash picker and are found when searching by server or prompt name.",
+          "breaking": false
+        },
+        {
+          "sha": "3b012ab2b8e958577202f5e18e3a76c2f5f49e15",
+          "subject": "feat(mcp): render selected prompts as compact transcript cards",
+          "summary": "Selected MCP prompts now appear in the chat transcript as compact, expandable cards labelled with the server and prompt name instead of raw wrapper tags and provenance text, and Copy returns the readable text.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.79.0",
-      "baselineRef": "desktop-v0.79.0",
-      "reserved": "0.79.0",
-      "commits": ["a486e272192ee78d3dd558fd6d0f687a5ca057ea"],
+      "published": "0.79.1",
+      "baselineRef": "desktop-v0.79.1",
+      "reserved": "0.79.1",
+      "commits": [
+        "72b6e339c1a966b275f578b2f009c2b3b8dbf6f1",
+        "d8d65ed55867bfaf175171caf493107e19c595f4",
+        "c27d308238116db77328501b9d6ee1356fe5e4b5",
+        "4b6dde2bfa08cd089a412663eb71b8ec86723f42",
+        "cb2683eceab9c1ce06f630150ac7563015663707",
+        "0bd694700a25c5d9929813a04581c54ccec6b89b",
+        "3f5369cab4b8951f77556ec0afb2e4bb7a4acb17",
+        "64ff846667cde2430f9d963335829bd418a34f91",
+        "4e6cdab1df7f1938c669b18574d0c3b31f885b9b",
+        "3b012ab2b8e958577202f5e18e3a76c2f5f49e15"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.79.1",
-      "effectiveBump": "patch",
+      "version": "0.80.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.79.1",
+      "tag": "desktop-v0.80.0",
       "notes": [
         {
-          "sha": "a486e272192ee78d3dd558fd6d0f687a5ca057ea",
-          "subject": "fix(mcp): refresh remembered capabilities on 2026-07-28 connections",
-          "summary": "MCP connections that reuse a remembered 2026-07-28 protocol verdict now refresh the server's capabilities once and reconnect if they changed, so servers updated in place are noticed immediately instead of after 7 days.",
+          "sha": "72b6e339c1a966b275f578b2f009c2b3b8dbf6f1",
+          "subject": "fix(ask-agent): keep queued messages visible and restore interjection over the relay",
+          "summary": "Ask Agent messages queued mid-turn now stay visible in the browser relay view, and the interject-at-next-break controls work again over the relay.",
+          "breaking": false
+        },
+        {
+          "sha": "d8d65ed55867bfaf175171caf493107e19c595f4",
+          "subject": "feat(chat): let the activity shelf resize to any height",
+          "summary": "The chat activity shelf can now be dragged to any height, keeps the chosen size as content changes, and can shrink the composer's question card to show more transcript.",
+          "breaking": false
+        },
+        {
+          "sha": "c27d308238116db77328501b9d6ee1356fe5e4b5",
+          "subject": "feat(agent): raise Auto Continue limit to 25 and add agentlink.autoContinueMaxTurns setting",
+          "summary": "Auto Continue's default limit rises from 10 to 25 continues, and a new agentlink.autoContinueMaxTurns setting lets you change it.",
+          "breaking": false
+        },
+        {
+          "sha": "4b6dde2bfa08cd089a412663eb71b8ec86723f42",
+          "subject": "fix(agent): classify auto-continue limit as a window setting",
+          "summary": "The agentlink.autoContinueMaxTurns setting is now classified as a window-scoped setting so it is handled consistently.",
+          "breaking": false
+        },
+        {
+          "sha": "cb2683eceab9c1ce06f630150ac7563015663707",
+          "subject": "feat(agent): support unlimited auto-continue with a zero limit",
+          "summary": "Setting agentlink.autoContinueMaxTurns to 0 now allows unlimited Auto Continue turns, and the upper limit of 500 is removed.",
+          "breaking": false
+        },
+        {
+          "sha": "0bd694700a25c5d9929813a04581c54ccec6b89b",
+          "subject": "feat(mcp): expose prompts as approval-gated slash commands",
+          "summary": "Connected MCP servers' prompts now appear as /server:prompt slash commands with argument parsing and completions, and their text is added to the chat only after approval, with optional saved rules.",
+          "breaking": false
+        },
+        {
+          "sha": "3f5369cab4b8951f77556ec0afb2e4bb7a4acb17",
+          "subject": "fix(mcp): preserve prompt grants when editing servers",
+          "summary": "Editing an MCP server in the MCP Manager no longer drops its saved prompt policy and allowed-prompt rules.",
+          "breaking": false
+        },
+        {
+          "sha": "64ff846667cde2430f9d963335829bd418a34f91",
+          "subject": "fix(mcp): cancel prompt cards after pane session changes",
+          "summary": "Pending MCP prompt approval cards are now cancelled correctly when the pane switches to a different chat session.",
+          "breaking": false
+        },
+        {
+          "sha": "4e6cdab1df7f1938c669b18574d0c3b31f885b9b",
+          "subject": "fix(mcp): show prompt commands in slash picker search",
+          "summary": "MCP prompt commands now show in their own MCP Prompts group in the slash picker and are found when searching by server or prompt name.",
+          "breaking": false
+        },
+        {
+          "sha": "3b012ab2b8e958577202f5e18e3a76c2f5f49e15",
+          "subject": "feat(mcp): render selected prompts as compact transcript cards",
+          "summary": "Selected MCP prompts now appear in the chat transcript as compact, expandable cards labelled with the server and prompt name instead of raw wrapper tags and provenance text, and Copy returns the readable text.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.56.0",
-      "baselineRef": "cli-v0.56.0",
-      "reserved": "0.56.0",
-      "commits": ["a486e272192ee78d3dd558fd6d0f687a5ca057ea"],
+      "published": "0.56.1",
+      "baselineRef": "cli-v0.56.1",
+      "reserved": "0.56.1",
+      "commits": [
+        "72b6e339c1a966b275f578b2f009c2b3b8dbf6f1",
+        "c27d308238116db77328501b9d6ee1356fe5e4b5",
+        "cb2683eceab9c1ce06f630150ac7563015663707",
+        "0bd694700a25c5d9929813a04581c54ccec6b89b"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.56.1",
-      "effectiveBump": "patch",
+      "version": "0.57.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.56.1",
+      "tag": "cli-v0.57.0",
       "notes": [
         {
-          "sha": "a486e272192ee78d3dd558fd6d0f687a5ca057ea",
-          "subject": "fix(mcp): refresh remembered capabilities on 2026-07-28 connections",
-          "summary": "MCP connections that reuse a remembered 2026-07-28 protocol verdict now refresh the server's capabilities once and reconnect if they changed, so servers updated in place are noticed immediately instead of after 7 days.",
+          "sha": "72b6e339c1a966b275f578b2f009c2b3b8dbf6f1",
+          "subject": "fix(ask-agent): keep queued messages visible and restore interjection over the relay",
+          "summary": "Ask Agent messages queued mid-turn now stay visible in the browser relay view, and the interject-at-next-break controls work again over the relay.",
+          "breaking": false
+        },
+        {
+          "sha": "c27d308238116db77328501b9d6ee1356fe5e4b5",
+          "subject": "feat(agent): raise Auto Continue limit to 25 and add agentlink.autoContinueMaxTurns setting",
+          "summary": "Auto Continue's default limit rises from 10 to 25 continues, and a new agentlink.autoContinueMaxTurns setting lets you change it.",
+          "breaking": false
+        },
+        {
+          "sha": "cb2683eceab9c1ce06f630150ac7563015663707",
+          "subject": "feat(agent): support unlimited auto-continue with a zero limit",
+          "summary": "Setting agentlink.autoContinueMaxTurns to 0 now allows unlimited Auto Continue turns, and the upper limit of 500 is removed.",
+          "breaking": false
+        },
+        {
+          "sha": "0bd694700a25c5d9929813a04581c54ccec6b89b",
+          "subject": "feat(mcp): expose prompts as approval-gated slash commands",
+          "summary": "Connected MCP servers' prompts now appear as /server:prompt slash commands with argument parsing and completions, and their text is added to the chat only after approval, with optional saved rules.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.46.0",
-      "baselineRef": "sdk-v0.46.0",
-      "reserved": "0.46.0",
-      "commits": ["a486e272192ee78d3dd558fd6d0f687a5ca057ea"],
+      "published": "0.46.1",
+      "baselineRef": "sdk-v0.46.1",
+      "reserved": "0.46.1",
+      "commits": [
+        "72b6e339c1a966b275f578b2f009c2b3b8dbf6f1",
+        "0bd694700a25c5d9929813a04581c54ccec6b89b"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.46.1",
-      "effectiveBump": "patch",
+      "version": "0.47.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.46.1",
+      "tag": "sdk-v0.47.0",
       "notes": [
         {
-          "sha": "a486e272192ee78d3dd558fd6d0f687a5ca057ea",
-          "subject": "fix(mcp): refresh remembered capabilities on 2026-07-28 connections",
-          "summary": "MCP connections that reuse a remembered 2026-07-28 protocol verdict now refresh the server's capabilities once and reconnect if they changed, so servers updated in place are noticed immediately instead of after 7 days.",
+          "sha": "72b6e339c1a966b275f578b2f009c2b3b8dbf6f1",
+          "subject": "fix(ask-agent): keep queued messages visible and restore interjection over the relay",
+          "summary": "Ask Agent messages queued mid-turn now stay visible in the browser relay view, and the interject-at-next-break controls work again over the relay.",
+          "breaking": false
+        },
+        {
+          "sha": "0bd694700a25c5d9929813a04581c54ccec6b89b",
+          "subject": "feat(mcp): expose prompts as approval-gated slash commands",
+          "summary": "Connected MCP servers' prompts now appear as /server:prompt slash commands with argument parsing and completions, and their text is added to the chat only after approval, with optional saved rules.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.51.0",
-      "baselineRef": "assistant-v0.51.0",
-      "reserved": "0.51.0",
-      "commits": ["a486e272192ee78d3dd558fd6d0f687a5ca057ea"],
+      "published": "0.51.1",
+      "baselineRef": "assistant-v0.51.1",
+      "reserved": "0.51.1",
+      "commits": [
+        "72b6e339c1a966b275f578b2f009c2b3b8dbf6f1",
+        "d8d65ed55867bfaf175171caf493107e19c595f4",
+        "c27d308238116db77328501b9d6ee1356fe5e4b5",
+        "cb2683eceab9c1ce06f630150ac7563015663707",
+        "0bd694700a25c5d9929813a04581c54ccec6b89b",
+        "4e6cdab1df7f1938c669b18574d0c3b31f885b9b",
+        "3b012ab2b8e958577202f5e18e3a76c2f5f49e15"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.51.1",
-      "effectiveBump": "patch",
+      "version": "0.52.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.51.1",
+      "tag": "assistant-v0.52.0",
       "notes": [
         {
-          "sha": "a486e272192ee78d3dd558fd6d0f687a5ca057ea",
-          "subject": "fix(mcp): refresh remembered capabilities on 2026-07-28 connections",
-          "summary": "MCP connections that reuse a remembered 2026-07-28 protocol verdict now refresh the server's capabilities once and reconnect if they changed, so servers updated in place are noticed immediately instead of after 7 days.",
+          "sha": "72b6e339c1a966b275f578b2f009c2b3b8dbf6f1",
+          "subject": "fix(ask-agent): keep queued messages visible and restore interjection over the relay",
+          "summary": "Ask Agent messages queued mid-turn now stay visible in the browser relay view, and the interject-at-next-break controls work again over the relay.",
+          "breaking": false
+        },
+        {
+          "sha": "d8d65ed55867bfaf175171caf493107e19c595f4",
+          "subject": "feat(chat): let the activity shelf resize to any height",
+          "summary": "The chat activity shelf can now be dragged to any height, keeps the chosen size as content changes, and can shrink the composer's question card to show more transcript.",
+          "breaking": false
+        },
+        {
+          "sha": "c27d308238116db77328501b9d6ee1356fe5e4b5",
+          "subject": "feat(agent): raise Auto Continue limit to 25 and add agentlink.autoContinueMaxTurns setting",
+          "summary": "Auto Continue's default limit rises from 10 to 25 continues, and a new agentlink.autoContinueMaxTurns setting lets you change it.",
+          "breaking": false
+        },
+        {
+          "sha": "cb2683eceab9c1ce06f630150ac7563015663707",
+          "subject": "feat(agent): support unlimited auto-continue with a zero limit",
+          "summary": "Setting agentlink.autoContinueMaxTurns to 0 now allows unlimited Auto Continue turns, and the upper limit of 500 is removed.",
+          "breaking": false
+        },
+        {
+          "sha": "0bd694700a25c5d9929813a04581c54ccec6b89b",
+          "subject": "feat(mcp): expose prompts as approval-gated slash commands",
+          "summary": "Connected MCP servers' prompts now appear as /server:prompt slash commands with argument parsing and completions, and their text is added to the chat only after approval, with optional saved rules.",
+          "breaking": false
+        },
+        {
+          "sha": "4e6cdab1df7f1938c669b18574d0c3b31f885b9b",
+          "subject": "fix(mcp): show prompt commands in slash picker search",
+          "summary": "MCP prompt commands now show in their own MCP Prompts group in the slash picker and are found when searching by server or prompt name.",
+          "breaking": false
+        },
+        {
+          "sha": "3b012ab2b8e958577202f5e18e3a76c2f5f49e15",
+          "subject": "feat(mcp): render selected prompts as compact transcript cards",
+          "summary": "Selected MCP prompts now appear in the chat transcript as compact, expandable cards labelled with the server and prompt name instead of raw wrapper tags and provenance text, and Copy returns the readable text.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "a486e272192ee78d3dd558fd6d0f687a5ca057ea": {
+    "72b6e339c1a966b275f578b2f009c2b3b8dbf6f1": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "MCP connections that reuse a remembered 2026-07-28 protocol verdict now refresh the server's capabilities once and reconnect if they changed, so servers updated in place are noticed immediately instead of after 7 days.",
+      "summary": "Ask Agent messages queued mid-turn now stay visible in the browser relay view, and the interject-at-next-break controls work again over the relay.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "d8d65ed55867bfaf175171caf493107e19c595f4": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The chat activity shelf can now be dragged to any height, keeps the chosen size as content changes, and can shrink the composer's question card to show more transcript.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "c27d308238116db77328501b9d6ee1356fe5e4b5": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Auto Continue's default limit rises from 10 to 25 continues, and a new agentlink.autoContinueMaxTurns setting lets you change it.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "4b6dde2bfa08cd089a412663eb71b8ec86723f42": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The agentlink.autoContinueMaxTurns setting is now classified as a window-scoped setting so it is handled consistently.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "cb2683eceab9c1ce06f630150ac7563015663707": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Setting agentlink.autoContinueMaxTurns to 0 now allows unlimited Auto Continue turns, and the upper limit of 500 is removed.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "0bd694700a25c5d9929813a04581c54ccec6b89b": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Connected MCP servers' prompts now appear as /server:prompt slash commands with argument parsing and completions, and their text is added to the chat only after approval, with optional saved rules.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "3f5369cab4b8951f77556ec0afb2e4bb7a4acb17": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Editing an MCP server in the MCP Manager no longer drops its saved prompt policy and allowed-prompt rules.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "64ff846667cde2430f9d963335829bd418a34f91": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Pending MCP prompt approval cards are now cancelled correctly when the pane switches to a different chat session.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "4e6cdab1df7f1938c669b18574d0c3b31f885b9b": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "MCP prompt commands now show in their own MCP Prompts group in the slash picker and are found when searching by server or prompt name.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "3b012ab2b8e958577202f5e18e3a76c2f5f49e15": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Selected MCP prompts now appear in the chat transcript as compact, expandable cards labelled with the server and prompt name instead of raw wrapper tags and provenance text, and Copy returns the readable text.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

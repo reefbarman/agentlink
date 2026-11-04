@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.47.0 — 2026-11-04
+
+- Ask Agent messages queued mid-turn now stay visible in the browser relay view, and the interject-at-next-break controls work again over the relay.
+- Connected MCP servers' prompts now appear as /server:prompt slash commands with argument parsing and completions, and their text is added to the chat only after approval, with optional saved rules.
+
 ## 0.46.1 — 2026-11-04
 
 - MCP connections that reuse a remembered 2026-07-28 protocol verdict now refresh the server's capabilities once and reconnect if they changed, so servers updated in place are noticed immediately instead of after 7 days.
