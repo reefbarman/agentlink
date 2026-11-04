@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "ffb9f30442795107710db7d604af9086577ff72b",
-  "createdAt": "2026-11-04T00:10:36.941Z",
+  "sourceSha": "6b3bde6c03a0d9d80b9a63f8481556f30c56d203",
+  "createdAt": "2026-11-04T02:42:44.126Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.77.0",
-      "baselineRef": "v1.77.0",
-      "reserved": "1.77.0",
-      "commits": ["ffb9f30442795107710db7d604af9086577ff72b"],
+      "published": "1.78.0",
+      "baselineRef": "v1.78.0",
+      "reserved": "1.78.0",
+      "commits": ["6b3bde6c03a0d9d80b9a63f8481556f30c56d203"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.78.0",
-      "effectiveBump": "minor",
+      "version": "1.78.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.78.0",
+      "tag": "v1.78.1",
       "notes": [
         {
-          "sha": "ffb9f30442795107710db7d604af9086577ff72b",
-          "subject": "feat(agent): tell each chat which tab it is in",
-          "summary": "Each VS Code chat's agent now sees a Session Identity line at the end of its system prompt naming its chat tab number and short session id, and /environment displays it.",
+          "sha": "6b3bde6c03a0d9d80b9a63f8481556f30c56d203",
+          "subject": "chore(condense): log session, trigger and finished-turn state for each condense",
+          "summary": "Condense operations now log the session, trigger and finished-turn state, and aborted condenses are logged, making stray post-turn compactions easier to diagnose.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.77.0",
-      "baselineRef": "desktop-v0.77.0",
-      "reserved": "0.77.0",
-      "commits": ["ffb9f30442795107710db7d604af9086577ff72b"],
+      "published": "0.78.0",
+      "baselineRef": "desktop-v0.78.0",
+      "reserved": "0.78.0",
+      "commits": ["6b3bde6c03a0d9d80b9a63f8481556f30c56d203"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.78.0",
-      "effectiveBump": "minor",
+      "version": "0.78.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.78.0",
+      "tag": "desktop-v0.78.1",
       "notes": [
         {
-          "sha": "ffb9f30442795107710db7d604af9086577ff72b",
-          "subject": "feat(agent): tell each chat which tab it is in",
-          "summary": "Each VS Code chat's agent now sees a Session Identity line at the end of its system prompt naming its chat tab number and short session id, and /environment displays it.",
+          "sha": "6b3bde6c03a0d9d80b9a63f8481556f30c56d203",
+          "subject": "chore(condense): log session, trigger and finished-turn state for each condense",
+          "summary": "Condense operations now log the session, trigger and finished-turn state, and aborted condenses are logged, making stray post-turn compactions easier to diagnose.",
           "breaking": false
         }
       ]
@@ -82,28 +82,16 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.49.0",
-      "baselineRef": "assistant-v0.49.0",
-      "reserved": "0.49.0",
-      "commits": ["ffb9f30442795107710db7d604af9086577ff72b"],
+      "published": "0.50.0",
+      "baselineRef": "assistant-v0.50.0",
+      "reserved": "0.50.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.50.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "assistant-v0.50.0",
-      "notes": [
-        {
-          "sha": "ffb9f30442795107710db7d604af9086577ff72b",
-          "subject": "feat(agent): tell each chat which tab it is in",
-          "summary": "Each VS Code chat's agent now sees a Session Identity line at the end of its system prompt naming its chat tab number and short session id, and /environment displays it.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     }
   },
   "decisions": {
@@ -111,6 +99,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Each VS Code chat's agent now sees a Session Identity line at the end of its system prompt naming its chat tab number and short session id, and /environment displays it.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "6b3bde6c03a0d9d80b9a63f8481556f30c56d203": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Condense operations now log the session, trigger and finished-turn state, and aborted condenses are logged, making stray post-turn compactions easier to diagnose.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
