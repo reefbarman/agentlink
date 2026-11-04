@@ -10234,9 +10234,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentCancelMcpPrompt": {
+        // Cancellation can be posted by the old composer's cleanup after
+        // the pane has switched to a different session. It only withdraws
+        // the matching pending request, never grants authority.
         const sessionId =
-          sourceSession?.id ??
-          (typeof msg.sessionId === "string" ? msg.sessionId : undefined);
+          (typeof msg.sessionId === "string" ? msg.sessionId : undefined) ??
+          sourceSession?.id;
         if (sessionId && typeof msg.requestId === "string")
           this.cancelMcpPromptForSession(sessionId, msg.requestId);
         break;

@@ -406,6 +406,31 @@ describe("tool terminal reveal messages", () => {
     );
   }, 15_000);
 
+  it("cancels an old composer's pending prompt after its pane switches sessions", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const controller = new AbortController();
+    const deny = vi.fn();
+    const id = "mcp-prompt:previous-owner:request-1";
+    const provider = Object.assign(Object.create(ChatViewProvider.prototype), {
+      sessionManager: {
+        getForegroundSession: () => ({ id: "new-owner" }),
+        getSession: () => ({ id: "new-owner" }),
+      },
+      mcpPromptRequests: new Map([[id, controller]]),
+      pendingApprovals: new Map([[id, deny]]),
+    });
+    await provider.handleWebviewMessage(
+      {
+        command: "agentCancelMcpPrompt",
+        sessionId: "previous-owner",
+        requestId: "request-1",
+      },
+      { sourceSessionId: "new-owner" },
+    );
+    expect(controller.signal.aborted).toBe(true);
+    expect(deny).toHaveBeenCalledWith({ decision: "deny" });
+  });
+
   it("never applies tool-level server authority to prompt approval cards", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const prompt = vi.fn();
