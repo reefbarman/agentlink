@@ -6,7 +6,6 @@ import {
 } from "@agentlink/protocol/final-status";
 import {
   AUTO_CONTINUE_MAX_TURNS,
-  AUTO_CONTINUE_MAX_TURNS_LIMIT,
   normalizeAutoContinueMaxTurns,
   SessionAutoContinueController,
   type SessionAutoContinueSendRequest,
@@ -206,11 +205,53 @@ describe("SessionAutoContinueController", () => {
     expect(normalizeAutoContinueMaxTurns(Number.NaN)).toBe(
       AUTO_CONTINUE_MAX_TURNS,
     );
-    expect(normalizeAutoContinueMaxTurns(0)).toBe(1);
-    expect(normalizeAutoContinueMaxTurns(7.9)).toBe(7);
-    expect(normalizeAutoContinueMaxTurns(10_000)).toBe(
-      AUTO_CONTINUE_MAX_TURNS_LIMIT,
+    expect(normalizeAutoContinueMaxTurns(-1)).toBe(AUTO_CONTINUE_MAX_TURNS);
+    expect(normalizeAutoContinueMaxTurns(Number.POSITIVE_INFINITY)).toBe(
+      AUTO_CONTINUE_MAX_TURNS,
     );
+    expect(normalizeAutoContinueMaxTurns(0)).toBe(0);
+    expect(normalizeAutoContinueMaxTurns(0.5)).toBe(1);
+    expect(normalizeAutoContinueMaxTurns(7.9)).toBe(7);
+    expect(normalizeAutoContinueMaxTurns(10_000)).toBe(10_000);
+  });
+
+  it("continues without a turn cap at zero but still stops for no progress", () => {
+    const { controller, sent, finishTurn } = makeController(false, {}, () => 0);
+    controller.setEnabled("session-a", true);
+    expect(controller.getState("session-a").status).toBe(
+      "Auto Continue enabled (unlimited turns).",
+    );
+    for (let turn = 0; turn < 501; turn += 1) {
+      finishTurn("session-a", "completed", true);
+    }
+    expect(sent).toHaveLength(501);
+    expect(controller.getState("session-a")).toEqual({
+      enabled: true,
+      status: "Auto Continue sent 501/unlimited.",
+    });
+    finishTurn("session-a");
+    expect(controller.getState("session-a")).toEqual({
+      enabled: false,
+      status: AUTO_CONTINUE_NO_PROGRESS_REASON,
+    });
+  });
+
+  it("applies changes between unlimited and finite limits without resetting the count", () => {
+    let maxTurns = 1;
+    const { controller, sent, finishTurn } = makeController(
+      false,
+      {},
+      () => maxTurns,
+    );
+    controller.setEnabled("session-a", true);
+    finishTurn("session-a", "completed", true);
+    maxTurns = 0;
+    finishTurn("session-a", "completed", true);
+    expect(sent).toHaveLength(2);
+    maxTurns = 2;
+    finishTurn("session-a", "completed", true);
+    expect(sent).toHaveLength(2);
+    expect(controller.getState("session-a").enabled).toBe(false);
   });
 
   it("lets queued messages run first and skips a turn the user stopped", () => {

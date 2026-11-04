@@ -11,17 +11,13 @@ import type { AutoContinueTranscriptAction } from "../shared/chatProjection.js";
 
 /** Default for `agentlink.autoContinueMaxTurns`; keep in sync with package.json. */
 export const AUTO_CONTINUE_MAX_TURNS = 25;
-export const AUTO_CONTINUE_MAX_TURNS_LIMIT = 500;
 
-/** Clamp a configured continue limit to a whole number in range. */
+/** Normalize a continue limit; only an explicit zero means unlimited. */
 export function normalizeAutoContinueMaxTurns(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     return AUTO_CONTINUE_MAX_TURNS;
   }
-  return Math.min(
-    AUTO_CONTINUE_MAX_TURNS_LIMIT,
-    Math.max(1, Math.floor(value)),
-  );
+  return value === 0 ? 0 : Math.max(1, Math.floor(value));
 }
 
 /** What a surface needs to render the Auto Continue toggle for a session. */
@@ -121,8 +117,11 @@ export class SessionAutoContinueController {
   setEnabled(sessionId: string, enabled: boolean): void {
     const record = this.ensure(sessionId);
     record.enabled = enabled;
+    const maxTurns = this.maxTurns();
     record.status = enabled
-      ? `Auto Continue enabled (max ${this.maxTurns()} turns).`
+      ? maxTurns === 0
+        ? "Auto Continue enabled (unlimited turns)."
+        : `Auto Continue enabled (max ${maxTurns} turns).`
       : "Auto Continue disabled.";
     record.count = 0;
     record.awaitingProgress = false;
@@ -241,7 +240,7 @@ export class SessionAutoContinueController {
       return;
     }
     const maxTurns = this.maxTurns();
-    if (record.count >= maxTurns) {
+    if (maxTurns > 0 && record.count >= maxTurns) {
       this.stop(
         sessionId,
         record,
@@ -257,8 +256,9 @@ export class SessionAutoContinueController {
 
     record.count += 1;
     record.awaitingProgress = true;
-    record.status = `Auto Continue sent ${record.count}/${maxTurns}.`;
-    this.log(sessionId, `sending continue ${record.count}/${maxTurns}`);
+    const progress = `${record.count}/${maxTurns === 0 ? "unlimited" : maxTurns}`;
+    record.status = `Auto Continue sent ${progress}.`;
+    this.log(sessionId, `sending continue ${progress}`);
     this.publish(sessionId, record, { kind: "continued" });
     const generation = record.generation;
     this.options.sendPrompt({

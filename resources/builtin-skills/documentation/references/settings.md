@@ -20,7 +20,7 @@ The standalone CLI uses the shared `code` model and thinking preference when tha
 - Built-in agent responses default to 8,192 output tokens unless an OpenAI-compatible model declares `agentMaxTokens` in the shared connection file. This is no longer a VS Code setting.
 - `thinkingBudget`, `showThinking` — extended-thinking budget and UI visibility
 - `defaultMode` — mode for new sessions
-- `autoContinueMaxTurns` — how many continue prompts Auto Continue sends in a chat before stopping (default 25, range 1 to 500). The count restarts each time you turn Auto Continue on, and a change applies to chats where it is already on from their next continue.
+- `autoContinueMaxTurns` — how many continue prompts Auto Continue sends in a chat before stopping (default 25; 0 for unlimited, or any positive integer with no upper limit). The count restarts each time you turn Auto Continue on, and a change applies to chats where it is already on from their next continue.
 - `compose.enabled` — machine-scoped, default-on foreground Compose tool. Eligible workspace foreground sessions receive it inline, without tool discovery, to reduce known 4+ read-only fan-outs inside one bounded tool call. Set `false` to opt out; reload affected windows after changing the setting. Background agents, `/btw`, ACP, worktree setup, and projectless sessions remain excluded. Set `AGENTLINK_DISABLE_COMPOSE=1` before startup for force-disable recovery.
 
 - `provider.maxConcurrentRequests` — cap on simultaneous model requests per provider; queued foreground requests take priority over background and maintenance work

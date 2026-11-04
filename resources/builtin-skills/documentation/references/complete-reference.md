@@ -2224,7 +2224,7 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 
 | `agentlink.thinkingBudget` | `10000` | Extended thinking budget for thinking-capable models |
 | `agentlink.showThinking` | `true` | Show thinking blocks in the built-in agent chat UI |
-| `agentlink.autoContinueMaxTurns` | `25` | Continue prompts Auto Continue sends in a chat before stopping (1 to 500) |
+| `agentlink.autoContinueMaxTurns` | `25` | Continue prompts Auto Continue sends in a chat before stopping (0 for unlimited, or any positive integer) |
 
 | `agentlink.disabledProviders` | `[]` | Temporarily remove provider IDs from model selection and automatic routing without clearing credentials |
 | `agentlink.autoCondense` | `true` | Automatically condense built-in agent conversation context when it fills up |
