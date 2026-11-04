@@ -137,6 +137,8 @@ interface ConnectServerOptions {
   rootAttemptId?: string;
   parentAttemptId?: string;
   retryAfterConnected?: boolean;
+  /** Set on the one reconnect made after remembered capabilities went stale. */
+  capabilitiesRefreshed?: boolean;
 }
 
 type McpCatalogKind = "tools" | "resources" | "prompts";
@@ -176,8 +178,25 @@ export interface McpSessionContext {
   readonly parentSessionId?: string;
 }
 
+/**
+ * The server's current capabilities. On 2026-07-28 connections the latest
+ * `server/discover` result wins: a connection that adopted a remembered
+ * verdict refreshes it after connecting, but the SDK only updates
+ * `getDiscoverResult()`, not `getServerCapabilities()`.
+ */
+function currentServerCapabilities(
+  client: Client,
+): ReturnType<Client["getServerCapabilities"]> {
+  if (client.getProtocolEra() === "modern") {
+    return (
+      client.getDiscoverResult()?.capabilities ?? client.getServerCapabilities()
+    );
+  }
+  return client.getServerCapabilities();
+}
+
 function serverAcceptsSessionContext(client: Client): boolean {
-  const capabilities = client.getServerCapabilities();
+  const capabilities = currentServerCapabilities(client);
   return Boolean(
     capabilities?.extensions?.[MCP_SESSION_CONTEXT_EXTENSION] ??
     capabilities?.experimental?.[MCP_SESSION_CONTEXT_EXTENSION],
@@ -872,7 +891,7 @@ function describeOutputSchemaError(
  */
 function modernChangeFilter(client: Client): McpSubscription["honoredFilter"] {
   if (client.getProtocolEra() !== "modern") return {};
-  const capabilities = client.getServerCapabilities();
+  const capabilities = currentServerCapabilities(client);
   return {
     ...(capabilities?.tools?.listChanged ? { toolsListChanged: true } : {}),
     ...(capabilities?.resources?.listChanged
@@ -1454,6 +1473,52 @@ export class McpClientHub {
     }
   }
 
+  /**
+   * A remembered modern verdict skips the probe but carries the capabilities
+   * the server had when it was stored, which go stale when a server is
+   * updated in place. Ask the live connection once (one request, no extra
+   * process) and remember the fresh result. On failure the remembered
+   * capabilities stay in use. Returns true when the capabilities changed.
+   */
+  private async refreshRememberedDiscovery(
+    entry: ConnectedServer,
+    plan: McpProtocolPlan,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    if (
+      plan.prior?.kind !== "modern" ||
+      entry.client.getProtocolEra() !== "modern"
+    ) {
+      return false;
+    }
+    let discover;
+    try {
+      discover = await entry.client.discover({ signal });
+    } catch (error) {
+      if (signal.aborted) throw error;
+      this.log(
+        `[mcp:${entry.name}] could not refresh remembered server capabilities: ${this.describeError(error)}`,
+      );
+      return false;
+    }
+    const changed =
+      JSON.stringify(discover.capabilities) !==
+      JSON.stringify(plan.prior.discover.capabilities);
+    if (!plan.verdictKey) return changed;
+    try {
+      await this.protocolVerdicts.set(plan.verdictKey, {
+        kind: "modern",
+        discover,
+        checkedAt: Date.now(),
+      });
+    } catch (error) {
+      this.log(
+        `[mcp:${entry.name}] could not remember protocol verdict: ${this.describeError(error)}`,
+      );
+    }
+    return changed;
+  }
+
   private async forgetProtocolVerdict(key: string): Promise<void> {
     try {
       await this.protocolVerdicts.delete(key);
@@ -1620,8 +1685,9 @@ export class McpClientHub {
     options.signal?.addEventListener("abort", relayAbort, { once: true });
     const attempt = { config: cfg, controller };
     this.connectionAttempts.set(cfg.name, attempt);
+    let outcome: "stale-capabilities" | undefined;
     try {
-      await this.performConnectServer(cfg, options, controller);
+      outcome = await this.performConnectServer(cfg, options, controller);
     } catch (error) {
       if (!controller.signal.aborted) throw error;
     } finally {
@@ -1630,13 +1696,26 @@ export class McpClientHub {
         this.connectionAttempts.delete(cfg.name);
       }
     }
+    if (outcome === "stale-capabilities" && !controller.signal.aborted) {
+      // The SDK adopted the remembered capabilities at connect time (for
+      // example to decide which change notifications to handle). Reconnect
+      // once with the refreshed verdict so it starts from the live ones.
+      this.log(
+        `[mcp:${cfg.name}] server capabilities changed since they were remembered; reconnecting`,
+      );
+      await this.disconnectServer(cfg.name);
+      await this.connectServer(cfg, {
+        ...options,
+        capabilitiesRefreshed: true,
+      });
+    }
   }
 
   private async performConnectServer(
     cfg: McpServerConfig,
     options: ConnectServerOptions,
     controller: AbortController,
-  ): Promise<void> {
+  ): Promise<"stale-capabilities" | undefined> {
     const signal = controller.signal;
     const configCurrent = await this.configIsCurrent(cfg);
     signal.throwIfAborted();
@@ -2085,6 +2164,18 @@ export class McpClientHub {
       this.authCoordinator.clearManualReauth(serverIdentityHash);
       this.authCoordinator.clearAttempt(attemptId);
       this.runtimeReconnectPending.delete(cfg.name);
+
+      // Capabilities from a remembered verdict may be out of date; refresh
+      // them before anything below reads them.
+      const capabilitiesChanged = await this.refreshRememberedDiscovery(
+        entry,
+        protocolPlan,
+        signal,
+      );
+      signal.throwIfAborted();
+      if (capabilitiesChanged && !options.capabilitiesRefreshed) {
+        return "stale-capabilities";
+      }
 
       // The SDK opens the change notification stream only after a probe; a
       // remembered modern verdict (or a failed auto-open) leaves none. Open it

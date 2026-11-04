@@ -14,6 +14,7 @@ import type { McpServerConfig } from "./mcpConfig.js";
 import {
   createInMemoryMcpProtocolVerdictStore,
   mcpProtocolVerdictKey,
+  type McpProtocolVerdict,
   type McpProtocolVerdictStore,
 } from "./mcpProtocolNegotiation.js";
 
@@ -152,6 +153,40 @@ describe("McpClientHub protocol negotiation", () => {
       expect(JSON.stringify(echoed)).toContain("hi");
 
       // Without a probe the SDK opens no listen stream; the hub opens one.
+      const refreshed = waitForStatus(hub, (infos) =>
+        infos.some((info) =>
+          info.tools?.some((tool) => tool.name === "fixture__late_tool"),
+        ),
+      );
+      await hub.callTool("fixture__add_tool", {});
+      await refreshed;
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "refreshes capabilities that changed since the verdict was remembered",
+    async () => {
+      const store = createInMemoryMcpProtocolVerdictStore();
+      const key = mcpProtocolVerdictKey(server());
+      await createHub(store).hub.connect([server()]);
+      // As if remembered before the server (updated in place) started
+      // advertising change notifications.
+      const remembered = store.get(key) as McpProtocolVerdict;
+      if (remembered.kind !== "modern") throw new Error("expected modern");
+      store.set(key, {
+        ...remembered,
+        discover: { ...remembered.discover, capabilities: {} },
+      });
+
+      const { hub, logs } = createHub(store);
+      await hub.connect([server()]);
+
+      expect(connectLog(logs)).toContain("remembered=modern");
+      expect(store.get(key)).toMatchObject({
+        discover: { capabilities: { tools: { listChanged: true } } },
+      });
+      // The live capabilities, not the stale ones, decide the listen filter.
       const refreshed = waitForStatus(hub, (infos) =>
         infos.some((info) =>
           info.tools?.some((tool) => tool.name === "fixture__late_tool"),

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixes AgentLink using out-of-date capabilities for an MCP server on protocol version 2026-07-28 that was updated in place. AgentLink remembers each server's protocol check for 7 days, and that memory included the capabilities the server had at the time, so a server that started offering something new (change notifications, or the `dev.agentlink/session-context` extension) was treated as not offering it until the week was up or its command or URL changed. AgentLink now asks the live server for its capabilities once per connection (one request, no extra process) and reconnects once if they changed.
+
 ## 1.79.0
 
 - MCP servers can now ask AgentLink which chat a tool call comes from. AgentLink offers a `dev.agentlink/session-context` extension in its MCP client capabilities, and a server that also advertises it receives the session's ID, a short label such as `tab-2` (or `tab-2/bg-1a2b3c4d` for a background agent) and, for background agents, the parent session ID in each VS Code tool call's `_meta`. Before, a server could only tell callers apart by a name the model typed in, which it could mistype or reuse. AgentLink sets the values, not the model, but they are still client-declared and not authentication. Servers that do not advertise the extension receive nothing.
