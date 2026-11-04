@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.46.0 — 2026-11-04
+
+- AgentLink now advertises an MCP session-context extension and sends session id, label, kind and parent session id in tool call _meta to servers that opt in; the VS Code extension supplies the context and the SDK node-host exposes new exports.
+
 ## 0.45.0 — 2026-11-03
 
 - MCP URL elicitation requests on the 2026-07-28 revision, which carry no elicitationId, are now shown to the user instead of being silently declined.

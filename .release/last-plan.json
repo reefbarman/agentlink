@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "6b3bde6c03a0d9d80b9a63f8481556f30c56d203",
-  "createdAt": "2026-11-04T02:42:44.126Z",
+  "sourceSha": "53aeef42a76e431ea6ad0a81edaba455f7c0fd42",
+  "createdAt": "2026-11-04T05:26:22.669Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.78.0",
-      "baselineRef": "v1.78.0",
-      "reserved": "1.78.0",
-      "commits": ["6b3bde6c03a0d9d80b9a63f8481556f30c56d203"],
+      "published": "1.78.1",
+      "baselineRef": "v1.78.1",
+      "reserved": "1.78.1",
+      "commits": ["53aeef42a76e431ea6ad0a81edaba455f7c0fd42"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.78.1",
-      "effectiveBump": "patch",
+      "version": "1.79.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.78.1",
+      "tag": "v1.79.0",
       "notes": [
         {
-          "sha": "6b3bde6c03a0d9d80b9a63f8481556f30c56d203",
-          "subject": "chore(condense): log session, trigger and finished-turn state for each condense",
-          "summary": "Condense operations now log the session, trigger and finished-turn state, and aborted condenses are logged, making stray post-turn compactions easier to diagnose.",
+          "sha": "53aeef42a76e431ea6ad0a81edaba455f7c0fd42",
+          "subject": "feat(mcp): send host session context to servers that opt in",
+          "summary": "AgentLink now advertises an MCP session-context extension and sends session id, label, kind and parent session id in tool call _meta to servers that opt in; the VS Code extension supplies the context and the SDK node-host exposes new exports.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.78.0",
-      "baselineRef": "desktop-v0.78.0",
-      "reserved": "0.78.0",
-      "commits": ["6b3bde6c03a0d9d80b9a63f8481556f30c56d203"],
+      "published": "0.78.1",
+      "baselineRef": "desktop-v0.78.1",
+      "reserved": "0.78.1",
+      "commits": ["53aeef42a76e431ea6ad0a81edaba455f7c0fd42"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.78.1",
-      "effectiveBump": "patch",
+      "version": "0.79.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.78.1",
+      "tag": "desktop-v0.79.0",
       "notes": [
         {
-          "sha": "6b3bde6c03a0d9d80b9a63f8481556f30c56d203",
-          "subject": "chore(condense): log session, trigger and finished-turn state for each condense",
-          "summary": "Condense operations now log the session, trigger and finished-turn state, and aborted condenses are logged, making stray post-turn compactions easier to diagnose.",
+          "sha": "53aeef42a76e431ea6ad0a81edaba455f7c0fd42",
+          "subject": "feat(mcp): send host session context to servers that opt in",
+          "summary": "AgentLink now advertises an MCP session-context extension and sends session id, label, kind and parent session id in tool call _meta to servers that opt in; the VS Code extension supplies the context and the SDK node-host exposes new exports.",
           "breaking": false
         }
       ]
@@ -61,37 +61,73 @@
       "published": "0.55.0",
       "baselineRef": "cli-v0.55.0",
       "reserved": "0.55.0",
-      "commits": [],
+      "commits": ["53aeef42a76e431ea6ad0a81edaba455f7c0fd42"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.56.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.56.0",
+      "notes": [
+        {
+          "sha": "53aeef42a76e431ea6ad0a81edaba455f7c0fd42",
+          "subject": "feat(mcp): send host session context to servers that opt in",
+          "summary": "AgentLink now advertises an MCP session-context extension and sends session id, label, kind and parent session id in tool call _meta to servers that opt in; the VS Code extension supplies the context and the SDK node-host exposes new exports.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.45.0",
       "baselineRef": "sdk-v0.45.0",
       "reserved": "0.45.0",
-      "commits": [],
+      "commits": ["53aeef42a76e431ea6ad0a81edaba455f7c0fd42"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.46.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.46.0",
+      "notes": [
+        {
+          "sha": "53aeef42a76e431ea6ad0a81edaba455f7c0fd42",
+          "subject": "feat(mcp): send host session context to servers that opt in",
+          "summary": "AgentLink now advertises an MCP session-context extension and sends session id, label, kind and parent session id in tool call _meta to servers that opt in; the VS Code extension supplies the context and the SDK node-host exposes new exports.",
+          "breaking": false
+        }
+      ]
     },
     "assistant": {
       "published": "0.50.0",
       "baselineRef": "assistant-v0.50.0",
       "reserved": "0.50.0",
-      "commits": [],
+      "commits": ["53aeef42a76e431ea6ad0a81edaba455f7c0fd42"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.51.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.51.0",
+      "notes": [
+        {
+          "sha": "53aeef42a76e431ea6ad0a81edaba455f7c0fd42",
+          "subject": "feat(mcp): send host session context to servers that opt in",
+          "summary": "AgentLink now advertises an MCP session-context extension and sends session id, label, kind and parent session id in tool call _meta to servers that opt in; the VS Code extension supplies the context and the SDK node-host exposes new exports.",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
@@ -107,6 +143,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Condense operations now log the session, trigger and finished-turn state, and aborted condenses are logged, making stray post-turn compactions easier to diagnose.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "53aeef42a76e431ea6ad0a81edaba455f7c0fd42": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "AgentLink now advertises an MCP session-context extension and sends session id, label, kind and parent session id in tool call _meta to servers that opt in; the VS Code extension supplies the context and the SDK node-host exposes new exports.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
