@@ -8949,6 +8949,10 @@ export class AgentSessionManager {
       if (!signal.aborted) {
         const error = err instanceof Error ? err.message : String(err);
         this.recordAndEmitEvent(session.id, { type: "condense_error", error });
+      } else {
+        this.log?.(
+          `[agent] condense aborted session=${session.id} automatic=${isAutomatic}`,
+        );
       }
     } finally {
       if (!boundToolContext) {

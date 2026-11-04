@@ -12201,6 +12201,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "condense_start":
         this.condenseStartTimes.set(sessionId, Date.now());
+        {
+          // Diagnostics for condenses that land after a final task status:
+          // record which session condensed and whether its tail was already
+          // a finished turn, so a stray post-turn condense can be traced.
+          const condensingSession = this.sessionManager?.getSession(sessionId);
+          const messages = condensingSession?.getAllMessages() ?? [];
+          let tail: (typeof messages)[number] | undefined;
+          for (let index = messages.length - 1; index >= 0; index--) {
+            const message = messages[index]!;
+            if (message.diagnosticOnly || message.isSummary) continue;
+            const isToolResultCarrier =
+              message.role === "user" &&
+              Array.isArray(message.content) &&
+              message.content.some((block) => block.type === "tool_result");
+            if (isToolResultCarrier) continue;
+            tail = message;
+            break;
+          }
+          this.log(
+            `[agent] condense_start session=${sessionId} automatic=${event.isAutomatic} background=${isBackground} status=${condensingSession?.status ?? "unknown"} tailFinal=${tail?.role === "assistant" && tail.uiHint?.finalMarker ? tail.uiHint.finalMarker.status : "none"}`,
+          );
+        }
         this.postMessage({
           type: isBackground ? "agentBgCondenseStart" : "agentCondenseStart",
           sessionId,
@@ -12210,7 +12232,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "condense":
         this.log(
-          `[agent] condensed: prev=${event.prevInputTokens} new=${event.newInputTokens}`,
+          `[agent] condensed: session=${sessionId} trigger=${event.timing?.trigger ?? "unknown"} prev=${event.prevInputTokens} new=${event.newInputTokens}`,
         );
         const condenseDurationMs = this.condenseStartTimes.has(sessionId)
           ? Date.now() - this.condenseStartTimes.get(sessionId)!
