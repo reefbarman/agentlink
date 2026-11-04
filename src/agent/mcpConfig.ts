@@ -879,7 +879,11 @@ function applySecretMutation(
 }
 
 /** Hand-edited mcp.json fields with no manager control. */
-const MANAGER_PRESERVED_FIELDS = ["protocol"] as const;
+const MANAGER_PRESERVED_FIELDS = [
+  "protocol",
+  "promptPolicy",
+  "allowedPrompts",
+] as const;
 
 function applyNormalizedOperations(
   doc: McpJsonDocument,

@@ -599,7 +599,7 @@ describe("loadMcpConfigs", () => {
     });
   });
 
-  it("preserves a hand-set protocol override across manager edits", async () => {
+  it("preserves protocol and prompt grants across manager edits", async () => {
     const configPath = join(home, ".agentlink", "ask-agent", "mcp.json");
     await writeJson(configPath, {
       mcpServers: {
@@ -607,6 +607,8 @@ describe("loadMcpConfigs", () => {
           type: "http",
           url: "https://example.com/mcp",
           protocol: "legacy",
+          promptPolicy: "ask",
+          allowedPrompts: ["ask", "status"],
         },
       },
     });
@@ -628,6 +630,8 @@ describe("loadMcpConfigs", () => {
       url: "https://example.com/mcp",
       toolPolicy: "allow",
       protocol: "legacy",
+      promptPolicy: "ask",
+      allowedPrompts: ["ask", "status"],
     });
   });
 
