@@ -32,12 +32,13 @@ describe("ChatActivityShelf", () => {
   afterEach(cleanup);
 
   it("clamps its height to the supported range", () => {
-    expect(clampChatActivityShelfHeight(10, 500)).toBe(56);
+    expect(clampChatActivityShelfHeight(4, 500)).toBe(12);
+    expect(clampChatActivityShelfHeight(20, 500)).toBe(20);
     expect(clampChatActivityShelfHeight(240, 500)).toBe(240);
     expect(clampChatActivityShelfHeight(800, 500)).toBe(500);
   });
 
-  it("supports keyboard resizing and persists the chosen maximum height", () => {
+  it("supports keyboard resizing and persists the chosen height", () => {
     render(
       <div class="chat-container">
         <div class="chat-messages" />
@@ -67,13 +68,45 @@ describe("ChatActivityShelf", () => {
 
     fireEvent.keyDown(separator, { key: "ArrowDown" });
 
-    expect(shelf.style.maxHeight).toBe("268px");
+    expect(shelf.style.height).toBe("268px");
     expect(window.localStorage.getItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY)).toBe(
       "268",
     );
+
+    // The chosen size is an exact height, so it can exceed the content.
+    fireEvent.keyDown(separator, { key: "ArrowUp" });
+    fireEvent.keyDown(separator, { key: "ArrowUp" });
+    expect(shelf.style.height).toBe("332px");
+    expect(shelf.style.maxHeight).toBe("none");
   });
 
-  it("reveals urgent content and releases the stored height when content changes", async () => {
+  it("can be resized up to the full transcript height", () => {
+    render(
+      <div class="chat-container">
+        <div class="chat-messages" />
+        <ChatActivityShelf>
+          <div>Activity</div>
+        </ChatActivityShelf>
+      </div>,
+    );
+    const separator = screen.getByRole("separator");
+    const shelf = separator.parentElement as HTMLDivElement;
+    const transcript = shelf.previousElementSibling as HTMLDivElement;
+    Object.defineProperty(transcript, "getBoundingClientRect", {
+      value: () => ({ top: 100 }),
+    });
+    Object.defineProperty(shelf, "getBoundingClientRect", {
+      value: () => ({ bottom: 700, height: 100 }),
+    });
+
+    fireEvent.keyDown(separator, { key: "End" });
+    expect(shelf.style.height).toBe("600px");
+
+    fireEvent.keyDown(separator, { key: "Home" });
+    expect(shelf.style.height).toBe("12px");
+  });
+
+  it("reveals urgent content, then restores the user's height", async () => {
     window.localStorage.setItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY, "56");
     const { rerender } = render(
       <ChatActivityShelf revealKey={null} revealMinHeight={360}>
@@ -82,7 +115,7 @@ describe("ChatActivityShelf", () => {
     );
 
     const shelf = screen.getByRole("separator").parentElement as HTMLDivElement;
-    expect(shelf.style.maxHeight).toBe("56px");
+    expect(shelf.style.height).toBe("56px");
 
     rerender(
       <ChatActivityShelf revealKey="approval-1" revealMinHeight={360}>
@@ -91,12 +124,7 @@ describe("ChatActivityShelf", () => {
       </ChatActivityShelf>,
     );
 
-    await waitFor(() => expect(shelf.style.maxHeight).toBe("360px"));
-    await waitFor(() =>
-      expect(
-        window.localStorage.getItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY),
-      ).toBeNull(),
-    );
+    await waitFor(() => expect(shelf.style.height).toBe("360px"));
 
     rerender(
       <ChatActivityShelf revealKey={null} revealMinHeight={360}>
@@ -104,7 +132,10 @@ describe("ChatActivityShelf", () => {
       </ChatActivityShelf>,
     );
 
-    await waitFor(() => expect(shelf.style.maxHeight).toBe("50vh"));
+    await waitFor(() => expect(shelf.style.height).toBe("56px"));
+    expect(window.localStorage.getItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY)).toBe(
+      "56",
+    );
   });
 
   it("does not shrink a user-expanded shelf for an approval", async () => {
@@ -116,47 +147,148 @@ describe("ChatActivityShelf", () => {
     );
 
     const shelf = screen.getByRole("separator").parentElement as HTMLDivElement;
-    await waitFor(() => expect(shelf.style.maxHeight).toBe("420px"));
+    await waitFor(() => expect(shelf.style.height).toBe("420px"));
   });
 
-  it("preserves a user resize until the shelf contents change", async () => {
+  it("keeps a user resize when the shelf contents change", async () => {
     window.localStorage.setItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY, "56");
     const { rerender } = render(
       <ChatActivityShelf>
         <div class="pending">Activity</div>
       </ChatActivityShelf>,
     );
-    const separator = screen.getByRole("separator");
-    const shelf = separator.parentElement as HTMLDivElement;
-    expect(shelf.style.maxHeight).toBe("56px");
+    const shelf = screen.getByRole("separator").parentElement as HTMLDivElement;
+    expect(shelf.style.height).toBe("56px");
 
     rerender(
       <ChatActivityShelf>
-        <div class="pending">Activity for 1s</div>
+        <div class="waiting">Waiting for approval</div>
+        <div>More activity</div>
       </ChatActivityShelf>,
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(shelf.style.maxHeight).toBe("56px");
+    expect(shelf.style.height).toBe("56px");
+    expect(window.localStorage.getItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY)).toBe(
+      "56",
+    );
+  });
+
+  it("grows once to fit a newly added card, then keeps that size", async () => {
+    window.localStorage.setItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY, "100");
+    const { rerender } = render(
+      <ChatActivityShelf>
+        <div>Activity</div>
+      </ChatActivityShelf>,
+    );
+    const separator = screen.getByRole("separator");
+    const shelf = separator.parentElement as HTMLDivElement;
+    const content = separator.nextElementSibling as HTMLDivElement;
+    // 100px shelf = 10px handle + 90px visible content; 250px of content.
+    Object.defineProperty(shelf, "getBoundingClientRect", {
+      value: () => ({ bottom: 700, height: 100 }),
+    });
+    Object.defineProperty(content, "clientHeight", { value: 90 });
+    Object.defineProperty(content, "scrollHeight", {
+      configurable: true,
+      value: 250,
+    });
+
+    // Updating an existing card leaves the size alone.
+    rerender(
+      <ChatActivityShelf>
+        <div>Activity updated</div>
+      </ChatActivityShelf>,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(shelf.style.height).toBe("100px");
 
     rerender(
       <ChatActivityShelf>
-        <div class="waiting">Waiting for approval</div>
+        <div>Activity updated</div>
+        <div>New card</div>
       </ChatActivityShelf>,
     );
-    await waitFor(() => expect(shelf.style.maxHeight).toBe("50vh"));
-    expect(
-      window.localStorage.getItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY),
-    ).toBeNull();
+    await waitFor(() => expect(shelf.style.height).toBe("260px"));
+    await waitFor(() =>
+      expect(window.localStorage.getItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY)).toBe(
+        "260",
+      ),
+    );
 
-    fireEvent.keyDown(separator, { key: "Home" });
-    expect(shelf.style.maxHeight).toBe("56px");
-
+    // Content that is huge is capped at half the window.
+    Object.defineProperty(content, "scrollHeight", { value: 5000 });
     rerender(
       <ChatActivityShelf>
-        <div class="waiting">Waiting for approval</div>
+        <div>Activity updated</div>
+        <div>New card</div>
+        <div>Another card</div>
       </ChatActivityShelf>,
     );
-    await waitFor(() => expect(shelf.style.maxHeight).toBe("56px"));
+    await waitFor(() =>
+      expect(shelf.style.height).toBe(`${window.innerHeight / 2}px`),
+    );
+  });
+
+  it("shrinks the composer question card once the shelf is collapsed", () => {
+    window.localStorage.setItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY, "44");
+    render(
+      <div class="chat-container">
+        <ChatActivityShelf>
+          <div>Activity</div>
+        </ChatActivityShelf>
+        <div class="input-area">
+          <div class="question-card">Question</div>
+        </div>
+      </div>,
+    );
+    const separator = screen.getByRole("separator");
+    const shelf = separator.parentElement as HTMLDivElement;
+    const card = document.querySelector(".question-card") as HTMLDivElement;
+    let shelfHeight = 44;
+    let cardHeight = 300;
+    Object.defineProperty(shelf, "getBoundingClientRect", {
+      value: () => ({ bottom: 700, height: shelfHeight }),
+    });
+    Object.defineProperty(card, "getBoundingClientRect", {
+      value: () => ({ height: cardHeight }),
+    });
+    Object.defineProperty(card, "scrollHeight", { value: 300 });
+    const sync = () => {
+      shelfHeight = Number.parseFloat(shelf.style.height);
+      cardHeight = card.style.maxHeight
+        ? Number.parseFloat(card.style.maxHeight)
+        : 300;
+    };
+
+    // 32px down: the shelf takes 32px first (44 -> 12), card untouched.
+    fireEvent.keyDown(separator, { key: "ArrowDown" });
+    sync();
+    expect(shelf.style.height).toBe("12px");
+    expect(card.style.maxHeight).toBe("");
+
+    // Shelf is collapsed, so the card shrinks and scrolls.
+    fireEvent.keyDown(separator, { key: "ArrowDown" });
+    sync();
+    expect(shelf.style.height).toBe("12px");
+    expect(card.style.maxHeight).toBe("268px");
+    expect(card.style.overflowY).toBe("auto");
+
+    // Going up restores the card before growing the shelf.
+    fireEvent.keyDown(separator, { key: "ArrowUp" });
+    sync();
+    expect(card.style.maxHeight).toBe("");
+    expect(shelf.style.height).toBe("12px");
+    fireEvent.keyDown(separator, { key: "ArrowUp" });
+    sync();
+    expect(shelf.style.height).toBe("44px");
+
+    // Double-click also releases a shrunken card.
+    fireEvent.keyDown(separator, { key: "ArrowDown" });
+    sync();
+    fireEvent.keyDown(separator, { key: "ArrowDown" });
+    expect(card.style.maxHeight).toBe("268px");
+    fireEvent.dblClick(separator);
+    expect(card.style.maxHeight).toBe("");
   });
 
   it("reveals a different approval after the shelf is collapsed again", async () => {
@@ -168,17 +300,17 @@ describe("ChatActivityShelf", () => {
     );
     const separator = screen.getByRole("separator");
     const shelf = separator.parentElement as HTMLDivElement;
-    await waitFor(() => expect(shelf.style.maxHeight).toBe("360px"));
+    await waitFor(() => expect(shelf.style.height).toBe("360px"));
 
     fireEvent.keyDown(separator, { key: "Home" });
-    expect(shelf.style.maxHeight).toBe("56px");
+    expect(shelf.style.height).toBe("12px");
 
     rerender(
       <ChatActivityShelf revealKey="approval-2" revealMinHeight={360}>
         Approval two
       </ChatActivityShelf>,
     );
-    await waitFor(() => expect(shelf.style.maxHeight).toBe("360px"));
+    await waitFor(() => expect(shelf.style.height).toBe("360px"));
   });
 
   it("resets to the responsive default on double-click", () => {
@@ -187,10 +319,11 @@ describe("ChatActivityShelf", () => {
 
     const separator = screen.getByRole("separator");
     const shelf = separator.parentElement as HTMLDivElement;
-    expect(shelf.style.maxHeight).toBe("240px");
+    expect(shelf.style.height).toBe("240px");
 
     fireEvent.dblClick(separator);
 
+    expect(shelf.style.height).toBe("");
     expect(shelf.style.maxHeight).toBe("50vh");
     expect(
       window.localStorage.getItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY),

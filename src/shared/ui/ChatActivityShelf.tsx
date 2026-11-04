@@ -2,8 +2,10 @@ import type { CSSProperties, ComponentChildren } from "preact";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 const DEFAULT_MAX_HEIGHT = "50vh";
-const MIN_HEIGHT = 56;
-const MIN_TRANSCRIPT_HEIGHT = 120;
+/** Small enough to collapse the shelf to little more than its resize handle. */
+const MIN_HEIGHT = 12;
+/** The user may cover the transcript entirely if they choose to. */
+const MIN_TRANSCRIPT_HEIGHT = 0;
 const KEYBOARD_STEP = 32;
 
 export const CHAT_ACTIVITY_SHELF_STORAGE_KEY =
@@ -67,9 +69,75 @@ interface ChatActivityShelfProps {
 }
 
 /**
+ * Height the shelf needs to show all of its content without scrolling, capped
+ * at the same responsive limit used before the user resizes it (half the
+ * window) and at the space available above the composer.
+ */
+function findFitHeight(shelf: HTMLElement, content: HTMLElement): number {
+  const rendered = shelf.getBoundingClientRect().height;
+  const chrome = Math.max(0, rendered - content.clientHeight);
+  const cap = Math.min(findMaximumHeight(shelf), window.innerHeight / 2);
+  return Math.min(chrome + content.scrollHeight, Math.max(cap, MIN_HEIGHT));
+}
+
+/** Smallest height the composer's question card shrinks to via the handle. */
+const MIN_QUESTION_CARD_HEIGHT = 48;
+
+/**
+ * The agent's question card lives inside the composer, just below the shelf.
+ * Dragging the shelf handle past a collapsed shelf shrinks that card too, so
+ * the user can see more of the transcript while a question is waiting.
+ */
+function findQuestionCard(shelf: HTMLElement): HTMLElement | null {
+  for (
+    let sibling = shelf.nextElementSibling;
+    sibling;
+    sibling = sibling.nextElementSibling
+  ) {
+    const card = sibling.matches(".input-area")
+      ? sibling.querySelector<HTMLElement>(":scope > .question-card")
+      : sibling.querySelector<HTMLElement>(".input-area > .question-card");
+    if (card) return card.closest(".question-set-aside") ? null : card;
+  }
+  return null;
+}
+
+function setQuestionCardHeight(card: HTMLElement, height: number | null) {
+  if (height === null) {
+    card.style.removeProperty("max-height");
+    card.style.removeProperty("overflow-y");
+  } else {
+    card.style.maxHeight = `${Math.round(height)}px`;
+    card.style.overflowY = "auto";
+  }
+}
+
+interface ResizeStart {
+  shelfHeight: number;
+  card: HTMLElement | null;
+  cardHeight: number;
+  cardNaturalHeight: number;
+}
+
+function measureResizeStart(shelf: HTMLElement): ResizeStart {
+  const card = findQuestionCard(shelf);
+  return {
+    shelfHeight: shelf.getBoundingClientRect().height,
+    card,
+    cardHeight: card?.getBoundingClientRect().height ?? 0,
+    cardNaturalHeight: card
+      ? card.scrollHeight + Math.max(0, card.offsetHeight - card.clientHeight)
+      : 0,
+  };
+}
+
+/**
  * Resizable home for transient/session activity between the transcript and
- * composer. Its maximum height is user-controlled so content scrolls here
- * instead of squeezing the transcript out of view.
+ * composer. Until the user resizes it, the shelf fits its content up to a
+ * responsive cap. Once resized, it keeps exactly the chosen height (content
+ * scrolls inside it) until the user double-clicks the handle to reset. When a
+ * new card appears, the shelf grows once to fit it (never shrinking), and that
+ * becomes the user's height until they resize again.
  */
 export function ChatActivityShelf({
   children,
@@ -84,9 +152,12 @@ export function ChatActivityShelf({
     key: string | number;
     minHeight: number;
   } | null>(null);
+  /** User-chosen height, or null to fit content up to the responsive cap. */
   const [maxHeight, setMaxHeight] = useState<number | null>(readStoredHeight);
   const [revealedHeight, setRevealedHeight] = useState<number | null>(null);
   const [resizing, setResizing] = useState(false);
+  const maxHeightRef = useRef(maxHeight);
+  maxHeightRef.current = maxHeight;
 
   const resizeTo = useCallback((height: number) => {
     const shelf = shelfRef.current;
@@ -114,30 +185,29 @@ export function ChatActivityShelf({
     const content = contentRef.current;
     if (!content || typeof MutationObserver === "undefined") return;
 
-    const observer = new MutationObserver(() => {
-      // A manual size is a useful short-lived preference, but it must not keep
-      // newly added or updated activity hidden. Return to the responsive cap
-      // on the first subsequent content change; the content can then choose
-      // its natural height and scroll only once it reaches that cap.
-      if (maxHeight === null) return;
-      setMaxHeight(null);
-      storeHeight(null);
+    const observer = new MutationObserver((records) => {
+      // Without a user-chosen height the shelf already fits its content.
+      if (maxHeightRef.current === null) return;
+      const cardAdded = records.some((record) =>
+        Array.from(record.addedNodes).some(
+          (node) => node.nodeType === Node.ELEMENT_NODE,
+        ),
+      );
+      const shelf = shelfRef.current;
+      if (!cardAdded || !shelf) return;
+
+      const fit = findFitHeight(shelf, content);
+      if (fit > shelf.getBoundingClientRect().height) {
+        setMaxHeight((current) =>
+          current === null ? null : Math.max(current, fit),
+        );
+      }
     });
-    observer.observe(content, {
-      attributes: true,
-      attributeFilter: [
-        "aria-busy",
-        "aria-expanded",
-        "aria-hidden",
-        "class",
-        "hidden",
-        "open",
-      ],
-      childList: true,
-      subtree: true,
-    });
+    // Cards are the shelf's top-level children; changes inside an existing
+    // card (todo ticks, timers) leave the user's size alone.
+    observer.observe(content, { childList: true });
     return () => observer.disconnect();
-  }, [maxHeight]);
+  }, []);
 
   useEffect(() => {
     if (revealKey === null || revealKey === undefined || !revealMinHeight) {
@@ -186,6 +256,47 @@ export function ChatActivityShelf({
     return () => window.removeEventListener("resize", handleWindowResize);
   }, [maxHeight]);
 
+  /**
+   * Moves the handle by `delta` pixels from `start` (positive is up). Going
+   * down collapses the shelf first, then shrinks the question card. Going up
+   * restores the question card first, then grows the shelf.
+   */
+  const resizeBy = useCallback(
+    (start: ResizeStart, delta: number) => {
+      const { card } = start;
+      if (!card) {
+        resizeTo(start.shelfHeight + delta);
+        return;
+      }
+      let shelfHeight = start.shelfHeight;
+      let cardHeight = start.cardHeight;
+      if (delta < 0) {
+        const shelfShrink = Math.min(
+          -delta,
+          Math.max(0, start.shelfHeight - MIN_HEIGHT),
+        );
+        shelfHeight -= shelfShrink;
+        cardHeight = Math.max(
+          Math.min(MIN_QUESTION_CARD_HEIGHT, start.cardHeight),
+          start.cardHeight - (-delta - shelfShrink),
+        );
+      } else {
+        const cardGrow = Math.min(
+          delta,
+          Math.max(0, start.cardNaturalHeight - start.cardHeight),
+        );
+        cardHeight += cardGrow;
+        shelfHeight += delta - cardGrow;
+      }
+      setQuestionCardHeight(
+        card,
+        cardHeight >= start.cardNaturalHeight ? null : cardHeight,
+      );
+      resizeTo(shelfHeight);
+    },
+    [resizeTo],
+  );
+
   const handleResizeStart = useCallback(
     (event: MouseEvent) => {
       if (event.button !== 0) return;
@@ -196,12 +307,12 @@ export function ChatActivityShelf({
       stopResize();
 
       const startY = event.clientY;
-      const startHeight = shelf.getBoundingClientRect().height;
+      const start = measureResizeStart(shelf);
       setResizing(true);
       document.body.classList.add("chat-activity-shelf-resizing");
 
       const handleMouseMove = (moveEvent: MouseEvent) => {
-        resizeTo(startHeight + startY - moveEvent.clientY);
+        resizeBy(start, startY - moveEvent.clientY);
       };
       const handleMouseUp = () => stopResize();
 
@@ -212,18 +323,24 @@ export function ChatActivityShelf({
         window.removeEventListener("mouseup", handleMouseUp);
       };
     },
-    [resizeTo, stopResize],
+    [resizeBy, stopResize],
   );
 
   const handleResizeKeyDown = useCallback(
     (event: KeyboardEvent) => {
       const shelf = shelfRef.current;
       if (!shelf) return;
-      const current = shelf.getBoundingClientRect().height;
-      let next: number | null = null;
 
-      if (event.key === "ArrowUp") next = current + KEYBOARD_STEP;
-      if (event.key === "ArrowDown") next = current - KEYBOARD_STEP;
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        event.preventDefault();
+        resizeBy(
+          measureResizeStart(shelf),
+          event.key === "ArrowUp" ? KEYBOARD_STEP : -KEYBOARD_STEP,
+        );
+        return;
+      }
+
+      let next: number | null = null;
       if (event.key === "Home") next = MIN_HEIGHT;
       if (event.key === "End") next = findMaximumHeight(shelf);
       if (next === null) return;
@@ -231,30 +348,37 @@ export function ChatActivityShelf({
       event.preventDefault();
       resizeTo(next);
     },
-    [resizeTo],
+    [resizeBy, resizeTo],
   );
 
   const resetHeight = useCallback(() => {
     stopResize();
+    const shelf = shelfRef.current;
+    const card = shelf ? findQuestionCard(shelf) : null;
+    if (card) setQuestionCardHeight(card, null);
     setRevealedHeight(null);
     setMaxHeight(null);
     storeHeight(null);
   }, [stopResize]);
 
   const effectiveMaxHeight = revealedHeight ?? maxHeight;
+  const style: CSSProperties =
+    maxHeight !== null
+      ? // A user-chosen size is an exact height, so the shelf can be made
+        // taller than its content as well as shorter.
+        { height: `${effectiveMaxHeight}px`, maxHeight: "none" }
+      : {
+          maxHeight:
+            effectiveMaxHeight === null
+              ? DEFAULT_MAX_HEIGHT
+              : `${effectiveMaxHeight}px`,
+        };
 
   return (
     <div
       class={`chat-activity-shelf${resizing ? " chat-activity-shelf-active" : ""}${className ? ` ${className}` : ""}`}
       ref={shelfRef}
-      style={
-        {
-          maxHeight:
-            effectiveMaxHeight === null
-              ? DEFAULT_MAX_HEIGHT
-              : `${effectiveMaxHeight}px`,
-        } as CSSProperties
-      }
+      style={style}
     >
       <div
         aria-label="Resize Chat Activity Shelf"
