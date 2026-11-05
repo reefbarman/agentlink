@@ -618,6 +618,180 @@ describe("explicit skill selection request boundaries", () => {
 });
 
 describe("AgentEngine", () => {
+  describe("MCP resource submission boundary", () => {
+    it.each([
+      {
+        boundary: "model-selection",
+        currentUserTask: false,
+        queuedHuman: "none",
+      },
+      {
+        boundary: "model-selection",
+        currentUserTask: true,
+        queuedHuman: "none",
+      },
+      { boundary: "scheduler", currentUserTask: false, queuedHuman: "none" },
+      { boundary: "scheduler", currentUserTask: true, queuedHuman: "none" },
+      { boundary: "scheduler", currentUserTask: false, queuedHuman: "ui" },
+      {
+        boundary: "scheduler",
+        currentUserTask: false,
+        queuedHuman: "interjection",
+      },
+    ])(
+      "drops revoked snapshots held at $boundary (current task: $currentUserTask, queued: $queuedHuman)",
+      async ({ boundary, currentUserTask, queuedHuman }) => {
+        const provider = makeMockProvider();
+        const stream = vi.spyOn(provider, "stream");
+        const registry = makeRegistry(provider);
+        const engine = new AgentEngine(registry);
+        const session = await makeSession();
+        session.addUserMessage(
+          currentUserTask
+            ? "Current human-approved task"
+            : "Old task, not authority to resume",
+        );
+        session.appendAssistantTurn([
+          { type: "text", text: "Previous response" },
+        ]);
+        const update = {
+          id: "staged-revoked",
+          server: "notes",
+          uri: "testbed://note/a",
+          text: "REVOKED_RESOURCE_BODY",
+          receivedAt: 1234,
+        };
+        let valid = true;
+        const staged = {
+          messages: [session.buildMcpResourceUpdateMessage(update)],
+          isValid: () => valid,
+          commit: vi.fn(() => [session.addMcpResourceUpdate(update)]),
+          release: vi.fn(),
+        };
+        session.mcpResourceAdmission = vi.fn(() =>
+          valid ? staged : undefined,
+        );
+        let entered!: () => void;
+        const reached = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+        let release!: () => void;
+        if (boundary === "model-selection") {
+          const held = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          vi.spyOn(
+            session,
+            "waitForModelSelectionUpdate",
+          ).mockImplementationOnce(() => {
+            entered();
+            return held;
+          });
+        } else {
+          registry.requestScheduler.setMaxConcurrentPerProvider(1);
+          const blocker = await registry.requestScheduler.acquire(
+            "mock",
+            "background",
+          );
+          release = () => blocker.release();
+        }
+        const running = (async () => {
+          const events: AgentEvent[] = [];
+          for await (const event of engine.run(session, {
+            requireMcpResourceUpdate: !currentUserTask,
+          })) {
+            events.push(event);
+            if (event.type === "api_request_start" && event.schedulerQueued)
+              entered();
+          }
+          return events;
+        })();
+        await reached;
+        expect(stream).not.toHaveBeenCalled();
+        expect(staged.commit).not.toHaveBeenCalled();
+        expect(JSON.stringify(session.getAllMessages())).not.toContain(
+          update.text,
+        );
+        if (boundary === "model-selection")
+          expect(session.mcpResourceAdmission).not.toHaveBeenCalled();
+        else expect(session.mcpResourceAdmission).toHaveBeenCalledOnce();
+        if (queuedHuman === "ui") session.setQueuedUiMessageCount("vscode", 1);
+        if (queuedHuman === "interjection")
+          session.setPendingInterjection(
+            "New human request, not yet admitted",
+            "queued-human",
+          );
+        valid = false;
+        release();
+        const events = await running;
+        expect(events.some((event) => event.type === "error")).toBe(false);
+        expect(stream).toHaveBeenCalledTimes(currentUserTask ? 1 : 0);
+        expect(JSON.stringify(stream.mock.calls)).not.toContain(update.text);
+        expect(JSON.stringify(session.getAllMessages())).not.toContain(
+          update.text,
+        );
+        expect(staged.commit).not.toHaveBeenCalled();
+        if (boundary === "scheduler")
+          expect(staged.release).toHaveBeenCalledOnce();
+        expect(
+          registry.requestScheduler.hasCapacity("mock", "interactive"),
+        ).toBe(true);
+
+        mocks.mockSummarizeConversation.mockResolvedValueOnce({
+          messages: [{ role: "user", content: "summary", isSummary: true }],
+          summary: "summary",
+          prevInputTokens: 1000,
+          newInputTokens: 100,
+        });
+        await collectEvents(engine.condenseSession(session, false, provider));
+        expect(mocks.mockSummarizeConversation).toHaveBeenCalledOnce();
+        expect(
+          JSON.stringify(
+            mocks.mockSummarizeConversation.mock.calls[0]![0].messages,
+          ),
+        ).not.toContain(update.text);
+      },
+    );
+
+    it("commits a still-valid snapshot only immediately before provider submission and releases the stage", async () => {
+      const provider = makeMockProvider();
+      const engine = new AgentEngine(makeRegistry(provider));
+      const session = await makeSession();
+      session.addUserMessage("Read the watched update");
+      const update = {
+        id: "staged-valid",
+        server: "notes",
+        uri: "testbed://note/a",
+        text: "VALID_RESOURCE_BODY",
+        receivedAt: 1234,
+      };
+      const staged = {
+        messages: [session.buildMcpResourceUpdateMessage(update)],
+        isValid: vi.fn().mockReturnValue(true),
+        commit: vi.fn(() => [session.addMcpResourceUpdate(update)]),
+        release: vi.fn(),
+      };
+      session.mcpResourceAdmission = () => staged;
+      const originalStream = provider.stream.bind(provider);
+      const stream = vi
+        .spyOn(provider, "stream")
+        .mockImplementation((request) => {
+          expect(staged.isValid).toHaveBeenCalled();
+          expect(staged.commit).toHaveBeenCalledOnce();
+          expect(JSON.stringify(session.getAllMessages())).toContain(
+            update.text,
+          );
+          expect(JSON.stringify(request.messages)).toContain(update.text);
+          return originalStream(request);
+        });
+      await collectEvents(
+        engine.run(session, { requireMcpResourceUpdate: true }),
+      );
+      expect(stream).toHaveBeenCalledOnce();
+      expect(staged.release).toHaveBeenCalledOnce();
+    });
+  });
+
   it.each([
     "first-pass",
     "guardian",

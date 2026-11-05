@@ -12,6 +12,8 @@ import type { ChatStateSnapshot as ChatState } from "@agentlink/protocol/chat-st
 import type {
   ChatMessage,
   ContentBlock,
+  McpResourceUpdateProvenance,
+  McpResourceWatchView,
   TodoItem,
 } from "@agentlink/protocol/chat-transcript";
 import type {
@@ -888,6 +890,7 @@ export interface AppState {
   contextHealth: ContextHealthSnapshot | null;
   loadedInstructions: LoadedInstructionDebugInfo[] | null;
   todos: TodoItem[];
+  mcpResourceWatches: McpResourceWatchView[];
   modes: ModeInfo[];
   availableModels: WebviewModelInfo[];
   slashCommands: SlashCommandInfo[];
@@ -934,6 +937,12 @@ export interface AppState {
 }
 
 export type AppAction =
+  | { type: "SET_MCP_RESOURCE_WATCHES"; watches: McpResourceWatchView[] }
+  | {
+      type: "ADD_MCP_RESOURCE_UPDATE";
+      text: string;
+      update: McpResourceUpdateProvenance;
+    }
   | { type: "RESTORE_PROJECTION"; state: AppState }
   | { type: "SET_STATE"; state: ChatState }
   | {
@@ -1377,6 +1386,7 @@ export function agentMessagesToChatMessages(
       skillContext?: ExplicitSkillActivationView[];
       isSummary?: boolean;
       uiHint?: {
+        mcpResourceUpdate?: McpResourceUpdateProvenance;
         userMessage?: {
           displayText?: string;
           isSlashCommand?: boolean;
@@ -1418,6 +1428,23 @@ export function agentMessagesToChatMessages(
       !(m.role === "user" && Array.isArray(m.content))
     ) {
       continuationTarget = undefined;
+    }
+    if (m.uiHint?.mcpResourceUpdate && typeof m.content === "string") {
+      continuationTarget = undefined;
+      const update = m.uiHint.mcpResourceUpdate;
+      if (
+        !result.some((message) => message.mcpResourceUpdate?.id === update.id)
+      ) {
+        result.push({
+          id: `mcp-resource-${update.id}`,
+          role: "warning",
+          content: m.uiHint.userMessage?.displayText ?? m.content,
+          timestamp: update.receivedAt,
+          blocks: [],
+          mcpResourceUpdate: update,
+        });
+      }
+      continue;
     }
     if (m.isSummary) {
       const hint = m.uiHint?.condense;
@@ -2217,6 +2244,29 @@ export function shouldDropSessionScopedEvent(
 
 export function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
+    case "SET_MCP_RESOURCE_WATCHES":
+      return { ...state, mcpResourceWatches: action.watches };
+    case "ADD_MCP_RESOURCE_UPDATE":
+      if (
+        state.messages.some(
+          (message) => message.mcpResourceUpdate?.id === action.update.id,
+        )
+      )
+        return state;
+      return {
+        ...state,
+        messages: [
+          ...state.messages,
+          {
+            id: `mcp-resource-${action.update.id}`,
+            role: "warning",
+            content: action.text,
+            timestamp: action.update.receivedAt,
+            blocks: [],
+            mcpResourceUpdate: action.update,
+          },
+        ],
+      };
     case "RESTORE_PROJECTION":
       // The session cache returns a projection owned by the active reducer.
       return action.state;
@@ -3156,6 +3206,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         lastCacheReadTokens: 0,
         estimatedTotalUsed: 0,
         todos: [],
+        mcpResourceWatches: [],
         messageQueue: [],
         approvalRequest: null,
         questionRequest: null,
@@ -4062,6 +4113,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         lastCacheReadTokens: sameSession ? state.lastCacheReadTokens : 0,
         estimatedTotalUsed: sameSession ? state.estimatedTotalUsed : 0,
         todos: Array.isArray(action.todos) ? action.todos : [],
+        mcpResourceWatches: sameSession ? state.mcpResourceWatches : [],
         messageQueue: sameSession ? state.messageQueue : [],
         approvalRequest: sameSession ? state.approvalRequest : null,
         questionRequest: sameSession ? state.questionRequest : null,
@@ -4291,6 +4343,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
 
 export const initialState: AppState = {
   messages: [],
+  mcpResourceWatches: [],
   originalPrompt: null,
   chatState: {
     sessionId: null,

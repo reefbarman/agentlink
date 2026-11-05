@@ -140,6 +140,7 @@ import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBa
 
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
+import { McpResourceWatchPanel } from "../../shared/ui/McpResourceUpdates";
 import { SessionHandoffPanel } from "../../shared/ui/SessionHandoffPanel";
 import type { SessionHandoffDraft } from "../../agent/sessionHandoff";
 import { ContextHealthPanel } from "../../shared/ui/ContextHealthPanel";
@@ -609,6 +610,7 @@ export type GatewaySnapshot = {
       } | null;
       detectedQuestion: (DetectedQuestion & { messageId: string }) | null;
       todos: TodoItem[];
+      mcpResourceWatches?: import("@agentlink/protocol/chat-transcript").McpResourceWatchView[];
       debugInfo: Record<string, string | number> | null;
       systemPrompt: string | null;
       loadedInstructions: LoadedInstructionDebugInfo[] | null;
@@ -11188,6 +11190,46 @@ export function BrowserGatewayApp({
                     : 0,
                 )}
               >
+                {!isAskAgentSelected && foreground && !mobileReviewOpen && (
+                  <McpResourceWatchPanel
+                    key={foreground.sessionId}
+                    watches={foreground.mcpResourceWatches ?? []}
+                    onAction={async (request) => {
+                      const origin = { ...snapshotOriginRef.current };
+                      const response = await fetch(
+                        buildApiPath("/api/mcp/resource-watch"),
+                        {
+                          method: "POST",
+                          credentials: "same-origin",
+                          headers: {
+                            "Content-Type": "application/json",
+                            Authorization: `Bearer ${authToken}`,
+                          },
+                          body: JSON.stringify({
+                            sessionId: foreground.sessionId,
+                            projectId: foreground.project?.projectId,
+                            ...request,
+                          }),
+                        },
+                      );
+                      const body = (await response.json()) as {
+                        ok?: boolean;
+                        error?: string;
+                        snapshot?: GatewaySnapshot;
+                      };
+                      if (!response.ok || !body.ok)
+                        throw new Error(
+                          body.error ?? "Could not update resource watch.",
+                        );
+                      if (body.snapshot)
+                        commitSnapshot(
+                          body.snapshot,
+                          origin.tabId,
+                          origin.generation,
+                        );
+                    }}
+                  />
+                )}
                 {!isAskAgentSelected && handoffDraft && !mobileReviewOpen && (
                   <SessionHandoffPanel
                     draft={handoffDraft}

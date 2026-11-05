@@ -1178,6 +1178,8 @@ export class AgentEngine {
       toolProfile?: string;
       maxApiTurns?: number;
       maxToolCalls?: number;
+      /** An external-only run must not continue an old task if its first update is revoked. */
+      requireMcpResourceUpdate?: boolean;
       /** Immutable low-authority memory evidence prepared once for this logical invocation. */
       automaticMemoryContext?: Readonly<AutomaticMemoryContext>;
       /** Immutable web backend/tool selection prepared at the logical turn boundary. */
@@ -1278,6 +1280,7 @@ export class AgentEngine {
     const maxToolCalls = opts?.maxToolCalls ?? 0; // 0 = unlimited
     const toolCallBudget = new ToolCallBudget(maxToolCalls);
     let apiTurnCount = 0;
+    let externalDataSubmitted = false;
     let providerPauseTurnCount = 0;
     let outputContinuationAttempts = 0;
     let pendingOutputContinuation = false;
@@ -1321,6 +1324,7 @@ export class AgentEngine {
       };
       requestLoop: while (true) {
         if (signal.aborted) break;
+        // External data is staged below, never admitted through human interjections.
         // Input can arrive while the continuation warning is being published.
         // Hand control back to the owner instead of nudging past a new request.
         if (
@@ -1715,6 +1719,7 @@ export class AgentEngine {
           | import("../core/tools/toolTelemetry.js").ToolRequestObservation
           | undefined;
         let telemetryResponseCompleted = false;
+        let mcpAdmission: ReturnType<AgentSession["stageMcpResourceUpdates"]>;
 
         try {
           // Build a copy of messages for the API call, injecting any attached
@@ -1726,7 +1731,17 @@ export class AgentEngine {
           // messages drop out of effective history along with their media.
           const messageAssemblyStartedAt = Date.now();
           const getMessagesStartedAt = Date.now();
-          const effectiveMessages = session.getMessages();
+          mcpAdmission = session.stageMcpResourceUpdates();
+          if (
+            opts?.requireMcpResourceUpdate &&
+            !externalDataSubmitted &&
+            !mcpAdmission
+          )
+            break requestLoop;
+          const effectiveMessages = [
+            ...session.getMessages(),
+            ...(mcpAdmission?.messages ?? []),
+          ];
           logTiming(
             "getMessages",
             getMessagesStartedAt,
@@ -1982,6 +1997,12 @@ export class AgentEngine {
             };
             break;
           }
+          if (mcpAdmission && !mcpAdmission.isValid()) continue requestLoop;
+          // No await/yield between the final grant check, transcript commit and
+          // handing this snapshot to the provider. Revoked staged data has never
+          // entered permanent history or a condensation request.
+          mcpAdmission?.commit();
+          if (mcpAdmission) externalDataSubmitted = true;
           const streamGen = provider.stream({
             model: activeModel,
             systemPrompt: requestSystemPrompt,
@@ -2518,6 +2539,7 @@ export class AgentEngine {
 
           throw streamErr;
         } finally {
+          mcpAdmission?.release();
           requestPermit?.release();
           requestPermit = undefined;
           if (telemetryRequest) {

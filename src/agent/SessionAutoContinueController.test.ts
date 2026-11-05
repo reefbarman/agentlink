@@ -52,6 +52,25 @@ function makeController(
 }
 
 describe("SessionAutoContinueController", () => {
+  it("does not extend an MCP-started turn through Auto Continue", () => {
+    const { controller, sent, finishTurn } = makeController();
+    controller.setEnabled("session-a", true);
+    controller.observe({
+      type: "agentFinalMarker",
+      sessionId: "session-a",
+      marker: { status: "completed" } as never,
+      externalTurn: true,
+    });
+    controller.observe({
+      type: "agentDone",
+      sessionId: "session-a",
+      externalTurn: true,
+    });
+    expect(sent).toHaveLength(0);
+    finishTurn("session-a");
+    expect(sent).toHaveLength(1);
+  });
+
   it("keeps one shared state per session", () => {
     const { controller, updates } = makeController();
 

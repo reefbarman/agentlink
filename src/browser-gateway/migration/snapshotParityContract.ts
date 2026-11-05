@@ -149,6 +149,11 @@ export const BROWSER_GATEWAY_SNAPSHOT_PARITY_CONTRACT = {
       "owner_event",
     ),
     foreground: {
+      mcpResourceWatches: covered(
+        "Session-scoped resource watch metadata is preserved in foreground checkpoints and events.",
+        "checkpoint",
+        "owner_event",
+      ),
       sessionId: covered(
         "Projected into checkpoint.foreground.sessionId.",
         "checkpoint",

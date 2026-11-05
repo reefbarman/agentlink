@@ -24,6 +24,7 @@ it("pins the complete browser gateway foreground-control contract", () => {
   expectTypeOf<BrowserGatewayForegroundControlState>().toEqualTypeOf<{
     sessionId: string;
     title: string;
+    mcpResourceWatches?: import("./chatTranscript.js").McpResourceWatchView[];
     originalPrompt?: string;
     mode: string;
     model: string;

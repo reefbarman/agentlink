@@ -83,6 +83,31 @@ In an existing VS Code workspace chat, type `/` to find connected servers' promp
 
 This slice supports text and embedded text resources. Other content types appear as labelled placeholders in the approval card, and assistant-role template messages retain their role label inside the server-content block rather than being injected as actual assistant history. Prompt slash commands are not yet exposed in standalone Desktop/Ask Agent, the CLI or Assistant. Agent-facing `list_mcp_prompts` and `get_mcp_prompt` remain available as before. This feature does not subscribe to resources or wake idle sessions.
 
+## Session-approved resource notifications and idle waking
+
+In VS Code workspace chats and their browser remote view, an agent can request `watch_mcp_resource` for one exact server/resource URI when updates are needed for your task. No slash command is required: you can ask cooperating tabs to register and watch their inboxes. The server must advertise resource subscriptions. Registration, connecting a server, enabling Auto Continue, and approving its tools or prompts do not create a watch.
+
+An **MCP resource watch** approval card identifies the session, server and URI. Choose:
+
+| Choice                    | Behaviour                                                                                                                                                |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Notify only**           | Show update metadata in the Chat Activity Shelf. Do not fetch content or start an agent turn.                                                            |
+| **Deliver automatically** | Repeatedly read that exact resource and queue its text for a running turn's next safe boundary, or the next turn you start. Do not wake an idle session. |
+| **Deliver and wake**      | Also allow bounded idle turns, which can use model tokens while you are away.                                                                            |
+| **Deny**                  | Do not subscribe, read, deliver or wake.                                                                                                                 |
+
+Standing permission requires your explicit card choice, including with **Approve for Me** enabled. It applies only to this loaded session, server definition and exact URI. It is not inherited by background agents or another tab, does not grant permission for other resources or tools, and is cleared on session closure or reload. Reconnecting an unchanged server retains permission; changing its definition requires fresh approval. Notifications cannot create approval cards or grant themselves permission.
+
+After an automatic-delivery grant, there is no card or model tool call for each resource read. Reads are non-interactive: a sign-in or server-input requirement pauses the watch instead of opening a browser or form. Only bounded text snapshots are delivered, not binary attachments or linked resources. Updates appear as clearly labelled MCP resource cards, not user-authored messages. Their content cannot authorise actions, approve requests or change your task. Ordinary tool, mode and Guardian checks still apply to any actions the agent takes.
+
+Use the Shelf's **Pause**, **Resume**, **Stop watching** and **Send once** controls. Stop watching cancels automatic reads and discards undelivered updates; it cannot recall content already admitted. Send once requests a separately approved one-time read/delivery without enabling a standing watch. Explicit session Stop suspends automatic delivery and waking. A new user turn can resume an approved stop/budget-paused watch, but does not undo a manual watch pause. Sessions awaiting a question or approval are not automatically started, and completed background agents are not resurrected.
+
+Client limits apply even if a server floods notifications: four watches, coalescing and unchanged-snapshot suppression; 64 KiB per resource read and 128 KiB queued per session; at most six automatic reads per minute across the session and one read per watch per five seconds. Idle wakes are limited to one per five minutes and six per hour. Three automatic delivery batches between user turns or explicit Resume pauses further automatic work, including batches delivered while already running. Wake-started turns are capped at four model request rounds and twelve tool calls, with no Auto Continue extension. A paused/error state is visible in the Shelf.
+
+Transport uses standard `notifications/resources/updated`: per-session `subscriptions/listen` resource filters on MCP 2026-07-28, and shared/ref-counted `resources/subscribe` on the 2025-era protocol. Notifications carry update metadata, not trusted message bodies; authorised resource reads obtain the content. This is latest-snapshot delivery rather than an exactly-once mailbox protocol. For agent-comms, resource reads peek at unread mail without marking it read; the existing `read_messages` tool acknowledges it under normal tool policy.
+
+Standalone Desktop/Ask Agent, CLI and Assistant do not expose watch/delivery tools yet. Their ordinary MCP resource reads are unchanged. The shared connection transport supports resource subscriptions, but hosts must supply session consent and delivery lifecycle support before advertising watches.
+
 ## Protocol versions
 
 AgentLink speaks both MCP 2026-07-28 and the 2025-era protocol. With `protocol` unset or `"auto"`, it first asks the server which versions it supports (`server/discover`) and uses 2026-07-28 when offered, otherwise the 2025-era `initialize` handshake. For a `stdio` server this check starts a short-lived second copy of the server, and a server that does not answer within 10 seconds is treated as 2025-era. The answer is remembered per server for 7 days, and any change to the server's URL, command, arguments, working directory, environment or headers checks again, so later connections skip the check. On a remembered 2026-07-28 connection AgentLink still asks the live server for its current capabilities once (one request, no second copy of the server), so a server updated in place is noticed straight away; if its capabilities changed, AgentLink reconnects once to use them. VS Code keeps it across reloads and windows; Desktop and the CLI remember it until the process exits. If a remembered answer fails to connect, AgentLink forgets it and checks again on the next attempt. An HTTP server that rejects the check with a server error or an unreadable reply is treated as 2025-era, so the automatic retry uses the older handshake; a network failure is not. A `stdio` server run through `mcp-remote` is not checked and uses the 2025-era handshake, because a second copy would start a second sign-in or token refresh; set `protocol: "2026-07-28"` to force the newer version. While a server waits for browser sign-in, AgentLink checks again instead of reusing a remembered 2026-07-28 answer, so sign-in keeps its 10-minute window.
@@ -97,7 +122,7 @@ On a 2026-07-28 connection:
 
 ## Session context for servers that ask for it
 
-AgentLink offers an MCP extension, `dev.agentlink/session-context`, in its client capabilities (`capabilities.extensions`) on both protocol versions. A server that also lists it in its own `capabilities.extensions` (or `capabilities.experimental`, for older server SDKs) receives the calling chat's identity on each VS Code tool call, user-run prompt fetch and prompt-argument completion, in the request's `_meta` under the same key:
+AgentLink offers an MCP extension, `dev.agentlink/session-context`, in its client capabilities (`capabilities.extensions`) on both protocol versions. A server that also lists it in its own `capabilities.extensions` (or `capabilities.experimental`, for older server SDKs) receives the calling chat's identity on each VS Code tool call, user-run prompt fetch, prompt-argument completion and approved resource-watch request/read, in the request's `_meta` under the same key:
 
 ```json
 {
@@ -114,7 +139,7 @@ AgentLink offers an MCP extension, `dev.agentlink/session-context`, in its clien
 - `label` is `tab-N` for chat tab N, or `tab-N/bg-<short id>` for a background agent started from it. Background agents also send `parentSessionId`.
 - `sessionId` is AgentLink's stable session ID, so a later chat that reuses tab number 2 is a different identity.
 - AgentLink sets these values, not the model. They are still client-declared: a server must not treat them as authentication.
-- Servers that do not list the extension receive nothing. The context starts from a chat's first turn in a tab; before then, and in Desktop, the CLI and Ask Agent, calls carry no context. Resource reads and agent-fetched prompts do not carry it yet.
+- Servers that do not list the extension receive nothing. The context starts from a chat's first turn in a tab; before then, and in Desktop, the CLI and Ask Agent, calls carry no context. Ordinary agent-initiated resource reads and agent-fetched prompts do not carry it yet; approved resource watches and their automatic reads do.
 
 ## MCP from Agent Plugins
 

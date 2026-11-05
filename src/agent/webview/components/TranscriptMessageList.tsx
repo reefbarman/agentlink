@@ -161,6 +161,7 @@ function messageRevision(message: ChatMessage): string {
     objectRevision(message.condenseInfo),
     objectRevision(message.warningRetry),
     objectRevision(message.coordination),
+    objectRevision(message.mcpResourceUpdate),
   ].join("\u0000");
   messageRevisionCache.set(message, revision);
   return revision;
@@ -464,7 +465,7 @@ function buildTranscriptRows(
       if (renderedRequests.has(requestId) && !message.checkpointId) continue;
       renderedRequests.add(requestId);
     }
-    if (message.role === "warning") {
+    if (message.role === "warning" && !message.mcpResourceUpdate) {
       const previous = rows[rows.length - 1];
       if (previous?.warningMessages) {
         rows[rows.length - 1] = {
@@ -730,7 +731,7 @@ function renderTranscriptRow({
       !message.finalMarker &&
       !message.error) ? null : message.role === "condense" ? (
     <CondenseRow message={message} />
-  ) : message.role === "warning" ? (
+  ) : message.role === "warning" && !message.mcpResourceUpdate ? (
     <WarningRow
       messages={warningMessages ?? [message]}
       resolved={row.warningResolved}
@@ -961,7 +962,7 @@ function rowActionAvailability(
         message.checkpointId && actions.onViewCheckpointDiff,
       ),
     };
-  if (message.role === "warning") {
+  if (message.role === "warning" && !message.mcpResourceUpdate) {
     return {
       retry: Boolean(isLatest && message.error && actions.onRetry),
     };
@@ -1049,11 +1050,14 @@ function createRowRevision(params: {
     approvalChange: row.approvalChange,
     active: params.active,
     isLatest:
-      row.message.role === "warning" || row.message.error
+      (row.message.role === "warning" && !row.message.mcpResourceUpdate) ||
+      row.message.error
         ? params.isLatest
         : undefined,
     lastMessageHasError:
-      row.message.role === "warning" ? params.lastMessageHasError : undefined,
+      row.message.role === "warning" && !row.message.mcpResourceUpdate
+        ? params.lastMessageHasError
+        : undefined,
     detectedQuestion: params.detectedQuestion,
     backgroundSessions: relevantBackgroundSessions(
       row.message,

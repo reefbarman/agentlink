@@ -112,6 +112,7 @@ export class RelaySnapshotProjector {
             debugInfo: null,
             systemPrompt: null,
             loadedInstructions: null,
+            mcpResourceWatches: checkpoint.foreground.mcpResourceWatches ?? [],
             restoringSession: checkpoint.foreground.restoringSession ?? false,
             revertRecoveryNotice:
               checkpoint.foreground.revertRecoveryNotice ?? null,
@@ -416,6 +417,9 @@ function projectMessage(message: BrowserGatewayTranscriptMessage): ChatMessage {
       ? { slashCommandLabel: message.slashCommandLabel }
       : {}),
     ...(message.origin ? { origin: message.origin } : {}),
+    ...(message.mcpResourceUpdate
+      ? { mcpResourceUpdate: { ...message.mcpResourceUpdate } }
+      : {}),
     ...(message.checkpointId ? { checkpointId: message.checkpointId } : {}),
     ...(message.displayMedia
       ? { displayMedia: projectDisplayMedia(message) }

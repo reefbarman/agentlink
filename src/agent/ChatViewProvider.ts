@@ -493,6 +493,17 @@ const AUTO_CONTINUE_SETTLE_ATTEMPTS = 50;
  * Mirrored in src/agent/webview/types.ts for the browser side.
  */
 export type ExtensionToWebview =
+  | {
+      type: "mcpResourceWatches";
+      sessionId: string;
+      watches: import("@agentlink/protocol/chat-transcript").McpResourceWatchView[];
+    }
+  | {
+      type: "mcpResourceUpdate";
+      sessionId: string;
+      text: string;
+      update: import("@agentlink/protocol/chat-transcript").McpResourceUpdateProvenance;
+    }
   | ({ type: "agentAutoContinueState" } & SessionAutoContinueUpdate)
   | { type: "releaseInstallState"; state: ReleaseInstallState }
   | {
@@ -1468,6 +1479,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private startupMcpRefreshes = new Map<string, Promise<void>>();
   private askAgentMcpConfigVersion = 0;
   private readonly uiEventHub: InMemoryAgentUiEventHub;
+  private mcpResourceInteractionSubscription?: vscode.Disposable;
   private readonly uiPublisher: AgentUiPublisher;
   private readonly browserGatewaySurfaceChangeEmitter =
     new vscode.EventEmitter<BrowserGatewaySurfaceChangeKind>();
@@ -1732,6 +1744,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.hostHeartbeatTimer = null;
     }
     this.outputChannel.dispose();
+    this.mcpResourceInteractionSubscription?.dispose();
+    this.sessionManager?.setMcpResourceInteractionGate?.(() => true);
     this.uiEventHub.dispose();
     this.browserGatewaySurfaceChangeEmitter.dispose();
     this.chatWorkspaceAttentionEmitter.dispose();
@@ -2072,6 +2086,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (
         request.kind !== "mcp" ||
         request.toolOrigin === "mcp-prompt" ||
+        request.toolOrigin === "mcp-resource" ||
         !request.mcpServerName
       )
         continue;
@@ -3918,7 +3933,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       detail?: string;
       mcpServerName?: string;
       mcpToolName?: string;
-      toolOrigin?: "mcp" | "acp" | "mcp-prompt";
+      toolOrigin?: "mcp" | "acp" | "mcp-prompt" | "mcp-resource";
       choices: Array<{
         label: string;
         value: string;
@@ -4032,7 +4047,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       detail?: string;
       mcpServerName?: string;
       mcpToolName?: string;
-      toolOrigin?: "mcp" | "acp" | "mcp-prompt";
+      toolOrigin?: "mcp" | "acp" | "mcp-prompt" | "mcp-resource";
       backgroundTask?: string;
       choices: Array<{
         label: string;
@@ -7389,6 +7404,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     );
   }
 
+  public async handleMcpResourceWatchAction(
+    sessionId: string,
+    value: unknown,
+  ): Promise<void> {
+    if (!value || typeof value !== "object") return;
+    const request = value as Record<string, unknown>;
+    const { server, uri, action } = request;
+    if (
+      typeof server !== "string" ||
+      !server ||
+      server.length > 256 ||
+      typeof uri !== "string" ||
+      !uri ||
+      uri.length > 2048 ||
+      (action !== "pause" &&
+        action !== "resume" &&
+        action !== "unwatch" &&
+        action !== "send-once")
+    )
+      return;
+    if (!this.sessionManager?.getSession(sessionId)) return;
+    await this.sessionManager.handleMcpResourceWatchAction(sessionId, {
+      server,
+      uri,
+      action,
+    });
+  }
+
   /** Argument value suggestions from the server's `completion/complete`. */
   public async completeMcpPromptForSession(
     sessionId: string | undefined,
@@ -8172,6 +8215,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (session.runState?.phase === "awaiting_question") {
       this.restorePendingQuestionRecovery(session, session.runState.question);
     }
+    connection.postMessage({
+      type: "mcpResourceWatches",
+      sessionId: session.id,
+      watches: this.sessionManager?.getMcpResourceWatches?.(session.id) ?? [],
+    });
     for (const envelope of this.uiEventHub.getSnapshot(session.id)) {
       connection.postMessage({ ...envelope.event, sessionId: session.id });
     }
@@ -8227,6 +8275,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   setSessionManager(manager: AgentSessionManager): void {
     this.sessionManager = manager;
+    this.mcpResourceInteractionSubscription?.dispose();
+    manager.setMcpResourceInteractionGate?.((sessionId) =>
+      this.uiEventHub
+        .getSnapshot(sessionId)
+        .some(
+          ({ event }) =>
+            event.type === "showApproval" ||
+            event.type === "agentQuestionRequest" ||
+            event.type === "agentFormElicitationRequest" ||
+            event.type === "agentUrlElicitationRequest",
+        ),
+    );
+    this.mcpResourceInteractionSubscription = this.uiEventHub.onDidPublish(
+      ({ sessionId, event }) => {
+        if (this.sessionManager !== manager) return;
+        if (
+          event.type === "idle" ||
+          event.type === "agentQuestionCleared" ||
+          event.type === "agentFormElicitationCleared" ||
+          event.type === "agentUrlElicitationCleared"
+        ) {
+          manager.reconsiderMcpResourceDelivery?.(sessionId);
+        }
+      },
+    );
     this.refreshChatTabHostCoordinator();
     const projects =
       typeof manager.getWorkspaceProjects === "function"
@@ -8808,6 +8881,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       : foregroundSession;
     const sourceSessionId = explicitSourceSessionId ?? sourceSession?.id;
 
+    if (msg.type === "mcpResourceWatchAction") {
+      if (
+        sourceSessionId &&
+        (msg.sessionId === undefined || msg.sessionId === sourceSessionId)
+      ) {
+        await this.handleMcpResourceWatchAction(sourceSessionId, msg);
+      }
+      return;
+    }
     switch (msg.command) {
       case "releaseUpdateInstall":
         await vscode.commands.executeCommand("agentlink.installUpdate");
@@ -11226,6 +11308,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // bare prompt.
     mgr
       .sendMessage(sessionId, modelText, session.mode, {
+        automatedUserMessage: true,
         thinkingEnabled: reasoningEffort !== "none",
         reasoningEffort,
         activeFilePath: session.activeFilePath,
@@ -11571,6 +11654,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       },
       session.estimatedTotalUsed,
     );
+    this.applyProjectedAction({
+      type: "SET_MCP_RESOURCE_WATCHES",
+      watches: this.sessionManager?.getMcpResourceWatches?.(session.id) ?? [],
+    });
     this.restoreProjectedBrowserQueue(session.id);
     this.projectedDetectRequest = null;
     this.projectedLastDetectKey = null;
@@ -12078,6 +12165,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         });
         break;
 
+      case "mcpResourceWatches":
+        this.applyProjectedAction({
+          type: "SET_MCP_RESOURCE_WATCHES",
+          watches: extMsg.watches,
+        });
+        break;
+      case "mcpResourceUpdate":
+        this.applyProjectedAction({
+          type: "ADD_MCP_RESOURCE_UPDATE",
+          text: extMsg.text,
+          update: extMsg.update,
+        });
+        break;
       case "agentInterjection":
         this.applyProjectedAction({
           type: "ADD_INTERJECTION",
@@ -12741,6 +12841,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "mcp_resource_watches":
+        this.postMessage({
+          type: "mcpResourceWatches",
+          sessionId,
+          watches: event.watches,
+        });
+        break;
+      case "mcp_resource_update":
+        this.deltaBufferFlusher.flushNow();
+        this.postMessage({
+          type: "mcpResourceUpdate",
+          sessionId,
+          text: event.text,
+          update: event.update,
+        });
+        break;
       case "user_interjection":
         this.log(`[agent] user_interjection queueId=${event.queueId}`);
         this.postMessage({
@@ -14945,8 +15061,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.projectExtensionMessage(msg);
     this.sendOrQueueWebviewMessage(msg);
     this.postMessageToEditorPanes(msg);
+    if (msg.type === "agentSessionLoaded" || msg.type === "stateUpdate") {
+      const sessionId =
+        msg.type === "agentSessionLoaded" ? msg.sessionId : msg.state.sessionId;
+      if (sessionId)
+        this.postMessage({
+          type: "mcpResourceWatches",
+          sessionId,
+          watches:
+            this.sessionManager?.getMcpResourceWatches?.(sessionId) ?? [],
+        });
+    }
     // After delivery, so surfaces see the turn end before any continue prompt.
-    this.autoContinue.observe(msg);
+    this.autoContinue.observe({
+      ...msg,
+      externalTurn:
+        "sessionId" in msg && typeof msg.sessionId === "string"
+          ? this.sessionManager?.isMcpResourceExternalTurn?.(msg.sessionId) ===
+            true
+          : false,
+    });
   }
 
   /**

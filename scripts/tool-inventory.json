@@ -872,6 +872,24 @@
       "definitionSource": "registry-schema"
     },
     {
+      "name": "unwatch_mcp_resource",
+      "parameters": ["server", "uri"],
+      "cluster": "mcp",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "watch_mcp_resource",
+      "parameters": ["delivery", "server", "uri"],
+      "cluster": "mcp",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
       "name": "web_fetch",
       "parameters": ["find", "max_length", "section", "start_line", "url"],
       "cluster": "read",
@@ -910,5 +928,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "55570882ea7820825427d9b26165e26440d933898526878c5b9966fac1bbfdd9"
+  "revision": "40f3c1411e697fe5b74c67f965076a5f1b3455c2afec0c9a88bc8de6f214085d"
 }

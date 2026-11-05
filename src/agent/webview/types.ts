@@ -119,6 +119,17 @@ export interface WorktreeSetupState {
 /** Messages from extension to webview */
 export type ExtensionMessage =
   | {
+      type: "mcpResourceWatches";
+      sessionId: string;
+      watches: import("@agentlink/protocol/chat-transcript").McpResourceWatchView[];
+    }
+  | {
+      type: "mcpResourceUpdate";
+      sessionId: string;
+      text: string;
+      update: import("@agentlink/protocol/chat-transcript").McpResourceUpdateProvenance;
+    }
+  | {
       /** Host-owned Auto Continue state, shared with the browser. */
       type: "agentAutoContinueState";
       sessionId: string;

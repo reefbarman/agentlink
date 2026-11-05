@@ -1902,6 +1902,49 @@ describe("ChatViewProvider session state sync", () => {
       delete terminalSettings[key];
   });
 
+  it("feeds real pending approval and question cards into resource wake admission", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    let gate!: (sessionId: string) => boolean;
+    const reconsiderMcpResourceDelivery = vi.fn();
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => undefined),
+      getWorkspaceProjects: vi.fn(() => []),
+      setMcpResourceInteractionGate: (resolver: typeof gate) => {
+        gate = resolver;
+      },
+      reconsiderMcpResourceDelivery,
+    } as never);
+    const hub =
+      provider.getUiEventHub() as import("./AgentUiPublisher.js").InMemoryAgentUiEventHub;
+    expect(gate("pending-tab")).toBe(false);
+    hub.publishApproval("pending-tab", {
+      id: "pending-read",
+      kind: "mcp",
+      toolOrigin: "mcp-resource",
+      command: "Read inbox",
+    });
+    expect(gate("pending-tab")).toBe(true);
+    expect(gate("other-tab")).toBe(false);
+    hub.publishApprovalIdle("pending-tab", "pending-read");
+    expect(gate("pending-tab")).toBe(false);
+    expect(reconsiderMcpResourceDelivery).toHaveBeenCalledWith("pending-tab");
+    hub.publishQuestionRequest(
+      "pending-tab",
+      "pending-question",
+      "Choose the next file",
+      [{ id: "file", type: "text", question: "Which file?" }],
+    );
+    expect(gate("pending-tab")).toBe(true);
+    hub.publishQuestionCleared("pending-tab", "pending-question");
+    expect(gate("pending-tab")).toBe(false);
+    expect(reconsiderMcpResourceDelivery).toHaveBeenCalledTimes(2);
+    provider.dispose();
+  });
+
   it("reconciles session reasoning after the authenticated model catalog settles", async () => {
     const { providerRegistry } = await import("./providers/index.js");
     const snapshot = {
@@ -8813,7 +8856,12 @@ describe("ChatViewProvider session state sync", () => {
     provider.setSessionManager(manager as never);
     manager.onSessionsChanged?.();
 
-    expect(mockPostMessage).toHaveBeenCalledTimes(3);
+    expect(mockPostMessage).toHaveBeenCalledTimes(4);
+    expect(mockPostMessage.mock.calls[1]?.[0]).toEqual({
+      type: "mcpResourceWatches",
+      sessionId: "session-1",
+      watches: [],
+    });
 
     expect(mockPostMessage.mock.calls[0]?.[0]).toEqual({
       type: "stateUpdate",
@@ -8860,7 +8908,7 @@ describe("ChatViewProvider session state sync", () => {
       },
     });
 
-    expect(mockPostMessage.mock.calls[1]?.[0]).toEqual({
+    expect(mockPostMessage.mock.calls[2]?.[0]).toEqual({
       type: "agentSessionUpdate",
       sessions: [
         expect.objectContaining({
@@ -8873,7 +8921,7 @@ describe("ChatViewProvider session state sync", () => {
       ],
     });
 
-    expect(mockPostMessage.mock.calls[2]?.[0]).toEqual({
+    expect(mockPostMessage.mock.calls[3]?.[0]).toEqual({
       type: "agentBgSessionsUpdate",
       sessions: [],
     });

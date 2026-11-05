@@ -1596,6 +1596,21 @@ const fleetWorkflowKindSchema = z.enum([
 
 // Validators for the deferred MCP resource/prompt bridges, which are reached
 // through call_native_tool. Shapes match MCP_META_TOOL_DEFINITIONS.
+export const watchMcpResourceSchema = {
+  server: z.string().min(1).max(256),
+  uri: z.string().min(1).max(2048),
+  delivery: z
+    .enum(["notify", "deliver", "wake"])
+    .describe(
+      "Requested level: notify only, automatic resource reads/delivery, or automatic delivery plus bounded idle waking. The user chooses the actual permission on a session approval card.",
+    ),
+};
+
+export const unwatchMcpResourceSchema = {
+  server: z.string().min(1).max(256),
+  uri: z.string().min(1).max(2048),
+};
+
 export const listMcpResourcesSchema = {};
 
 export const readMcpResourceSchema = {

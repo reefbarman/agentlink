@@ -379,6 +379,8 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   get_repo_map: schemas.getRepoMapSchema,
   get_module_neighbors: schemas.getModuleNeighborsSchema,
   load_rule: schemas.loadRuleSchema,
+  watch_mcp_resource: schemas.watchMcpResourceSchema,
+  unwatch_mcp_resource: schemas.unwatchMcpResourceSchema,
   load_skill: schemas.loadSkillSchema,
   read_skill_resource: schemas.readSkillResourceSchema,
   list_files: schemas.listFilesSchema,
@@ -903,6 +905,7 @@ export function getAgentTools(
   nativeWebToolKinds: readonly import("../core/webAccess.js").CoreWebToolKind[] = [],
   composeEnabled = false,
   hasDeferredRules = false,
+  mcpResourceWatchesEnabled = false,
 ): ToolDefinition[] {
   const mcpToolNames = (mcpToolDefs ?? []).map((t) => t.name);
   const allowed = mode ? getToolsForMode(mode, mcpToolNames) : null;
@@ -945,12 +948,20 @@ export function getAgentTools(
       ([name]) =>
         !isWebImageToolName(name) || isVscodeWebImageRetrievalAvailable(),
     )
+    .filter(
+      ([name]) =>
+        (name !== "watch_mcp_resource" && name !== "unwatch_mcp_resource") ||
+        mcpResourceWatchesEnabled,
+    )
     .filter(([name]) => IS_DEV_BUILD || !TOOL_REGISTRY[name]?.devOnly)
     .filter(
       ([name]) =>
         Boolean(profileAllowlist) ||
         !allowed ||
         allowed.has(name) ||
+        (mcpResourceWatchesEnabled &&
+          mode?.toolGroups.includes("mcp") === true &&
+          (name === "watch_mcp_resource" || name === "unwatch_mcp_resource")) ||
         NATIVE_DISCOVERY_BRIDGE_TOOLS.has(name) ||
         (IS_DEV_BUILD && TOOL_REGISTRY[name]?.devOnly),
     )
@@ -1957,6 +1968,15 @@ export interface ToolDispatchContext {
   mcpToolDiscoveryProvider?: McpToolDiscoveryProvider;
   /** MCP resource/prompt implementation for runtimes with connected MCP clients. */
   mcpResourcePromptProvider?: McpResourcePromptProvider;
+  /** Host-owned session approval and delivery. Absent on unsupported surfaces. */
+  mcpResourceWatchProvider?: {
+    watch(request: {
+      server: string;
+      uri: string;
+      mode: "notify" | "deliver" | "wake";
+    }): Promise<unknown>;
+    unwatch(request: { server: string; uri: string }): Promise<unknown>;
+  };
   /** MCP tool invocation implementation for runtimes with connected MCP clients. */
   mcpToolInvocationProvider?: McpToolInvocationProvider;
   /** User-question implementation for runtimes that can ask structured questions. */
@@ -2319,6 +2339,7 @@ export function createAgentToolRuntime(
         request.nativeWebToolKinds ?? ctx.nativeWebToolKinds,
         request.composeEnabled === true,
         request.hasDeferredRules === true,
+        ctx.mcpResourceWatchProvider !== undefined,
       );
     },
     resolveToolCall(request) {
@@ -4780,6 +4801,31 @@ async function dispatchToolCallWithTrackedApprovals(
       } finally {
         currentLease?.release();
       }
+    }
+
+    case "watch_mcp_resource":
+    case "unwatch_mcp_resource": {
+      if (!ctx.mcpResourceWatchProvider) {
+        return errorResult(
+          "MCP resource watches are unavailable on this host.",
+        );
+      }
+      const server = String(params.server ?? "");
+      if (!skillAllowlistAllowsMcpServer(skillAllowlist, server)) {
+        return errorResult(
+          `MCP server '${server}' is not allowed by the active skill.`,
+        );
+      }
+      const uri = String(params.uri ?? "");
+      const result =
+        toolName === "watch_mcp_resource"
+          ? await ctx.mcpResourceWatchProvider.watch({
+              server,
+              uri,
+              mode: params.delivery as "notify" | "deliver" | "wake",
+            })
+          : await ctx.mcpResourceWatchProvider.unwatch({ server, uri });
+      return jsonResult(result);
     }
 
     case "read_mcp_resource": {

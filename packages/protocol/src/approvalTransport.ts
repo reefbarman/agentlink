@@ -187,7 +187,7 @@ export interface ApprovalRequest {
    * "mcp-prompt" marks a user-run MCP prompt whose server-written text is
    * about to be added to the chat; `mcpToolName` then holds the prompt name.
    */
-  toolOrigin?: "mcp" | "acp" | "mcp-prompt";
+  toolOrigin?: "mcp" | "acp" | "mcp-prompt" | "mcp-resource";
   /** For MCP: approval choices */
   mcpChoices?: Array<{
     label: string;

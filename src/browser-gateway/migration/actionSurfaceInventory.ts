@@ -251,6 +251,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
   ),
   retainedHttp(
     "vscode_gateway",
+    "POST",
+    "/api/mcp/resource-watch",
+    "Session/project-bound MCP watch pause, resume, revocation and one-time read actions remain authenticated HTTP; the host owns approval and delivery.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
     "GET",
     "/api/search-files*",
     "Bounded file search remains an authenticated HTTP read.",

@@ -19,6 +19,28 @@ function payload(commandSandbox: unknown) {
 }
 
 describe("projectBrowserGatewayOwnerInteractionPayload", () => {
+  it("preserves resource-watch origin and exact host choices without tool grants", () => {
+    const source = {
+      ...payload(undefined),
+      approval: {
+        id: "watch-approval",
+        kind: "mcp" as const,
+        toolOrigin: "mcp-resource" as const,
+        mcpServerName: "mail",
+        mcpToolName: "mail://inbox/tab-1",
+        mcpChoices: [
+          { label: "Notify only", value: "notify" },
+          { label: "Deliver automatically", value: "deliver" },
+          { label: "Deliver and wake", value: "wake" },
+          { label: "Deny", value: "deny", isDanger: true },
+        ],
+      },
+    };
+    expect(projectBrowserGatewayOwnerInteractionPayload(source)).toEqual(
+      source,
+    );
+  });
+
   it("keeps an Ask Agent command's sandbox description for relay clients", () => {
     expect(
       projectBrowserGatewayOwnerInteractionPayload(

@@ -38,6 +38,8 @@ export type SessionAutoContinueObservedMessage = {
   sessionId?: string;
   marker?: FinalMessageMarker | null;
   toolName?: string;
+  /** Host-set only. External data turns must not chain into Auto Continue. */
+  externalTurn?: boolean;
 };
 
 /** One continue turn for a surface to commit. */
@@ -165,6 +167,11 @@ export class SessionAutoContinueController {
     if (!sessionId) return;
     const record = this.sessions.get(sessionId);
     if (!record?.enabled) return;
+    if (message.externalTurn) {
+      record.generation += 1;
+      record.latestMarker = null;
+      return;
+    }
 
     switch (message.type) {
       case "agentCommittedUserMessage":

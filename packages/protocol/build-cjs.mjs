@@ -252,6 +252,7 @@ await Promise.all([
       writeFile(
         "dist/cjs/browserGatewayForegroundControlState.d.cts",
         content
+          .replaceAll('"./chatTranscript.js"', '"./chatTranscript.cjs"')
           .replaceAll('"./terminal.js"', '"./terminal.cjs"')
           .replaceAll(
             '"./browserGatewayContextBudget.js"',
@@ -609,6 +610,7 @@ await Promise.all([
       writeFile(
         "dist/cjs/browserGatewayTranscriptMessage.d.cts",
         content
+          .replaceAll('"./chatTranscript.js"', '"./chatTranscript.cjs"')
           .replaceAll(
             '"./browserGatewayTranscriptBlock.js"',
             '"./browserGatewayTranscriptBlock.cjs"',

@@ -71,6 +71,7 @@ import {
   type ComposerMedia,
 } from "./components/InputArea";
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
+import { McpResourceWatchPanel } from "../../shared/ui/McpResourceUpdates";
 import type { EditInForkRequest } from "../../shared/editInFork";
 import { SessionHandoffPanel } from "../../shared/ui/SessionHandoffPanel";
 import type { SessionHandoffDraft } from "../sessionHandoff";
@@ -343,6 +344,7 @@ const TRANSCRIPT_CONTENT_EVENT_TYPES = new Set<string>([
   "agentError",
   "agentInterjection",
   "agentCommittedUserMessage",
+  "mcpResourceUpdate",
   "agentSurfaceChange",
   "agentCondenseStart",
   "agentCondense",
@@ -1220,6 +1222,16 @@ export function App({
             retryable: msg.retryable,
             code: msg.code,
             actions: msg.actions,
+          });
+          break;
+        case "mcpResourceWatches":
+          dispatch({ type: "SET_MCP_RESOURCE_WATCHES", watches: msg.watches });
+          break;
+        case "mcpResourceUpdate":
+          dispatch({
+            type: "ADD_MCP_RESOURCE_UPDATE",
+            text: msg.text,
+            update: msg.update,
           });
           break;
         case "agentTodoUpdate":
@@ -4452,6 +4464,17 @@ export function App({
                 />
               )}
               {/* A pending MCP request takes over the Shelf; tasks return after. */}
+              <McpResourceWatchPanel
+                key={state.chatState.sessionId ?? "no-session"}
+                watches={state.mcpResourceWatches}
+                onAction={(request) =>
+                  vscodeApi.postMessage({
+                    type: "mcpResourceWatchAction",
+                    sessionId: state.chatState.sessionId,
+                    ...request,
+                  })
+                }
+              />
               {state.todos.length > 0 && !elicitation && !urlElicitation && (
                 <TodoPanel todos={state.todos} />
               )}

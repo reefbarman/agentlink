@@ -26,6 +26,8 @@ export interface ApprovalLayoutProps {
   onAccept: () => void;
   onSaveAndAccept: () => void;
   secondaryAction?: { label: string; onClick: () => void };
+  /** Exact host-provided choices for approvals that do not use tool grants. */
+  actionsContent?: ComponentChildren;
   onReject: (reason?: string) => void;
   followUpRef: RefObject<string>;
 }
@@ -92,6 +94,7 @@ export function ApprovalLayout({
   onAccept,
   onSaveAndAccept,
   secondaryAction,
+  actionsContent,
   onReject,
   followUpRef,
 }: ApprovalLayoutProps) {
@@ -177,23 +180,30 @@ export function ApprovalLayout({
       {/* Action buttons */}
       <div class="approval-card-footer">
         <div class="button-row">
-          {rulesModified ? (
-            <button class="btn btn-primary" onClick={onSaveAndAccept}>
-              {primaryWithRulesLabel}
-            </button>
-          ) : (
-            <button class="btn btn-primary" onClick={onAccept}>
-              {primaryLabel}
-            </button>
+          {actionsContent ?? (
+            <>
+              {rulesModified ? (
+                <button class="btn btn-primary" onClick={onSaveAndAccept}>
+                  {primaryWithRulesLabel}
+                </button>
+              ) : (
+                <button class="btn btn-primary" onClick={onAccept}>
+                  {primaryLabel}
+                </button>
+              )}
+              {secondaryAction && (
+                <button
+                  class="btn btn-secondary"
+                  onClick={secondaryAction.onClick}
+                >
+                  {secondaryAction.label}
+                </button>
+              )}
+              <button class="btn btn-danger" onClick={handleReject}>
+                Reject
+              </button>
+            </>
           )}
-          {secondaryAction && (
-            <button class="btn btn-secondary" onClick={secondaryAction.onClick}>
-              {secondaryAction.label}
-            </button>
-          )}
-          <button class="btn btn-danger" onClick={handleReject}>
-            Reject
-          </button>
         </div>
       </div>
     </div>

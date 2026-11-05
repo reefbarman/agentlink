@@ -191,6 +191,25 @@ export interface BackgroundCoordination {
   }>;
 }
 
+/** Host-owned watch state. Resource text and URI are untrusted display data. */
+export interface McpResourceWatchView {
+  server: string;
+  uri: string;
+  mode: "notify" | "deliver" | "wake";
+  paused: boolean;
+  reason?: string;
+  pending: boolean;
+  updatedAt?: number;
+}
+
+/** Host-stamped provenance, never human-message or approval authority. */
+export interface McpResourceUpdateProvenance {
+  id: string;
+  server: string;
+  uri: string;
+  receivedAt: number;
+}
+
 /** A serializable chat message shared by host runtimes and UI surfaces. */
 export interface ChatMessage {
   id: string;
@@ -202,6 +221,8 @@ export interface ChatMessage {
   blocks: ContentBlock[];
   /** Agent communication, never a human-authored message. */
   coordination?: BackgroundCoordination;
+  /** Untrusted external resource content, never authored by the user. */
+  mcpResourceUpdate?: McpResourceUpdateProvenance;
   /** Badge shown on approval follow-up and rejection annotation messages. */
   badge?: "follow-up" | "rejection";
   /** True when this message includes a slash command invocation. */

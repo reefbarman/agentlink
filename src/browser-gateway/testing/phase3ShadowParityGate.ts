@@ -535,6 +535,7 @@ function createLegacySnapshot(
       repository: { ...readSet.repository! },
       foreground: {
         sessionId: foreground.sessionId,
+        mcpResourceWatches: [],
         project: { ...foregroundProject },
         title: foreground.title,
         mode: foreground.mode,

@@ -205,6 +205,7 @@ async function buildRuntimeMeasurements() {
         ["search", "fetch"],
         true,
         true,
+        true,
       ).flatMap((tool) => {
         // get_context is defined through read_file's advertised context view.
         const views = (

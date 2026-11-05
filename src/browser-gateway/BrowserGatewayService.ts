@@ -129,6 +129,7 @@ export interface BrowserGatewaySessionState {
         questionRequest: StructuredQuestionRequest | null;
         detectedQuestion: AppState["detectedQuestion"];
         todos: TodoItem[];
+        mcpResourceWatches: AppState["mcpResourceWatches"];
         debugInfo: AppState["debugInfo"];
         systemPrompt: AppState["systemPrompt"];
         loadedInstructions: AppState["loadedInstructions"];
@@ -181,6 +182,7 @@ export interface BrowserGatewayWireSessionState {
     questionRequest: StructuredQuestionRequest | null;
     detectedQuestion: AppState["detectedQuestion"];
     todos: TodoItem[];
+    mcpResourceWatches: AppState["mcpResourceWatches"];
     debugInfo: AppState["debugInfo"];
     systemPrompt: AppState["systemPrompt"];
     loadedInstructions: AppState["loadedInstructions"];
@@ -734,6 +736,8 @@ export class BrowserGatewayService implements vscode.Disposable {
           ? projected.detectedQuestion
           : null,
         todos: projectedMatchesForeground ? projected.todos : [],
+        mcpResourceWatches:
+          this.sessionManager.getMcpResourceWatches?.(foreground.id) ?? [],
         debugInfo: projectedMatchesForeground ? projected.debugInfo : null,
         systemPrompt: projectedMatchesForeground
           ? projected.systemPrompt
@@ -898,6 +902,8 @@ export class BrowserGatewayService implements vscode.Disposable {
         detectedQuestion: projectedMatchesSession
           ? projected.detectedQuestion
           : null,
+        mcpResourceWatches:
+          this.sessionManager.getMcpResourceWatches?.(session.id) ?? [],
         todos: projectedMatchesSession
           ? structuredClone(projected.todos)
           : structuredClone(getLatestTodoState(messages)),
@@ -996,6 +1002,7 @@ export class BrowserGatewayService implements vscode.Disposable {
             questionRequest: sessionState.foreground.questionRequest,
             detectedQuestion: sessionState.foreground.detectedQuestion,
             todos: sessionState.foreground.todos,
+            mcpResourceWatches: sessionState.foreground.mcpResourceWatches,
             debugInfo: sessionState.foreground.debugInfo,
             systemPrompt: sessionState.foreground.systemPrompt,
             loadedInstructions: sessionState.foreground.loadedInstructions,
@@ -1241,6 +1248,7 @@ export class BrowserGatewayService implements vscode.Disposable {
             },
             queue: foreground.messageQueue,
             todos: foreground.todos,
+            mcpResourceWatches: foreground.mcpResourceWatches,
           }
         : null,
       interaction,

@@ -29,6 +29,70 @@ const request: ApprovalRequest = {
 };
 
 describe("McpCard", () => {
+  const watchChoices = [
+    { label: "Notify only", value: "notify" },
+    { label: "Deliver automatically", value: "deliver" },
+    { label: "Deliver and wake", value: "wake" },
+    { label: "Deny", value: "deny", isDanger: true },
+  ];
+
+  it.each(watchChoices)(
+    "submits the resource-watch choice $value without inferring a tool grant",
+    (choice) => {
+      const submit = vi.fn();
+      const followUpRef = { current: "  Limit this to my inbox  " };
+      render(
+        h(McpCard, {
+          request: {
+            ...request,
+            toolOrigin: "mcp-resource",
+            command: "Watch mail://inbox/tab-1 for session tab-1",
+            mcpToolName: "mail://inbox/tab-1",
+            mcpDetail:
+              "Notify only never reads content. Automatic delivery authorises repeated reads.",
+            mcpChoices: watchChoices,
+          },
+          submit,
+          followUpRef,
+        }),
+      );
+      expect(screen.getByText("MCP resource watch")).toBeTruthy();
+      expect(
+        screen.getByText(/Future resource contents are unknown and untrusted/),
+      ).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: /Auto Approval Rules/ }),
+      ).toBeNull();
+      expect(screen.queryByRole("button", { name: "Allow Once" })).toBeNull();
+      expect(
+        screen.getAllByRole("button").map((button) => button.textContent),
+      ).toEqual(watchChoices.map((item) => item.label));
+      expect(submit).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: choice.label }));
+      expect(submit).toHaveBeenCalledExactlyOnceWith({
+        id: request.id,
+        decision: choice.value,
+        ...(choice.isDanger
+          ? { rejectionReason: "Limit this to my inbox" }
+          : { followUp: "Limit this to my inbox" }),
+      });
+      expect(followUpRef.current).toBe(
+        choice.isDanger ? "" : "  Limit this to my inbox  ",
+      );
+    },
+  );
+
+  it("does not manufacture allow or deny actions when the host provides no watch choices", () => {
+    render(
+      h(McpCard, {
+        request: { ...request, toolOrigin: "mcp-resource", mcpChoices: [] },
+        submit: vi.fn(),
+        followUpRef: { current: "" },
+      }),
+    );
+    expect(screen.queryAllByRole("button")).toEqual([]);
+  });
+
   it("names the OAuth browser action and omits unavailable approval rules", () => {
     const submit = vi.fn();
     render(

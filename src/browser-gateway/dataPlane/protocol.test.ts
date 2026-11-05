@@ -520,6 +520,101 @@ describe("browser gateway data-plane limits", () => {
 });
 
 describe("browser gateway owner protocol", () => {
+  it.each(["notify", "deliver", "wake"] as const)(
+    "round-trips %s resource watches and resource provenance",
+    (mode) => {
+      const source = checkpoint();
+      source.foreground!.mcpResourceWatches = [
+        {
+          server: "mail",
+          uri: "mail://inbox/tab-1",
+          mode,
+          paused: true,
+          reason: "approval required",
+          pending: true,
+          updatedAt: 0,
+        },
+      ];
+      source.transcript.messages[0] = {
+        ...source.transcript.messages[0],
+        role: "warning",
+        mcpResourceUpdate: {
+          id: "delivery-1",
+          server: "mail",
+          uri: "mail://inbox/tab-1",
+          receivedAt: 0,
+        },
+      };
+      expect(
+        parseBrowserGatewayOwnerCheckpoint(JSON.parse(JSON.stringify(source))),
+      ).toEqual(source);
+    },
+  );
+
+  it("keeps resource fields absent on legacy snapshots and preserves an explicit empty watch list", () => {
+    const source = checkpoint();
+    const parsed = parseBrowserGatewayOwnerCheckpoint(source);
+    expect(parsed.foreground).not.toHaveProperty("mcpResourceWatches");
+    expect(parsed.transcript.messages[0]).not.toHaveProperty(
+      "mcpResourceUpdate",
+    );
+    source.foreground!.mcpResourceWatches = [];
+    expect(
+      parseBrowserGatewayOwnerCheckpoint(source).foreground?.mcpResourceWatches,
+    ).toEqual([]);
+  });
+
+  it.each([
+    { mode: "always" },
+    { pending: 1 },
+    { paused: "yes" },
+    { updatedAt: -1 },
+    { server: "" },
+    { uri: "x".repeat(8_193) },
+  ])("rejects malformed resource-watch fields %j", (invalid) => {
+    const source = checkpoint();
+    const watch = {
+      server: "mail",
+      uri: "mail://inbox/tab-1",
+      mode: "notify",
+      paused: false,
+      pending: false,
+      ...invalid,
+    };
+    const raw = {
+      ...source,
+      foreground: { ...source.foreground, mcpResourceWatches: [watch] },
+    };
+    expect(() => parseBrowserGatewayOwnerCheckpoint(raw)).toThrow(
+      BrowserGatewayProtocolError,
+    );
+  });
+
+  it("rejects resource provenance promoted to a user message or malformed provenance", () => {
+    const source = checkpoint();
+    source.transcript.messages[0].mcpResourceUpdate = {
+      id: "delivery-1",
+      server: "mail",
+      uri: "mail://inbox/tab-1",
+      receivedAt: 123,
+    };
+    expect(() => parseBrowserGatewayOwnerCheckpoint(source)).toThrow(
+      /must remain warning messages/,
+    );
+    source.transcript.messages[0].role = "warning";
+    source.transcript.messages[0].mcpResourceUpdate.receivedAt = -1;
+    expect(() => parseBrowserGatewayOwnerCheckpoint(source)).toThrow(
+      BrowserGatewayProtocolError,
+    );
+    source.transcript.messages[0].mcpResourceUpdate.receivedAt = 123;
+    Object.assign(source.transcript.messages[0].mcpResourceUpdate, {
+      trusted: true,
+    });
+    expect(() => parseBrowserGatewayOwnerCheckpoint(source)).toThrow(
+      BrowserGatewayProtocolError,
+    );
+  });
+
   it("keeps exported immutable owner registries frozen", () => {
     for (const registry of [
       BROWSER_GATEWAY_OWNER_EVENT_KINDS,

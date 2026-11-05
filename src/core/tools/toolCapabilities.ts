@@ -512,6 +512,22 @@ const toolCapabilities = [
   ),
 
   // MCP/session/control
+  metadata(
+    "watch_mcp_resource",
+    "mcp",
+    ["mcp.resource.watch"],
+    "control",
+    "always",
+    false,
+  ),
+  metadata(
+    "unwatch_mcp_resource",
+    "mcp",
+    ["mcp.resource.unwatch"],
+    "control",
+    "never",
+    false,
+  ),
   metadata("find_mcp_tools", "mcp", ["mcp.discovery"], "read", "never", true),
   metadata("call_mcp_tool", "mcp", ["mcp.call"], "external", "policy", false),
   metadata(

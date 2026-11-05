@@ -37,7 +37,7 @@ export interface InlineApprovalRequest {
    * Distinguishes an MCP call from an ACP-relayed external-agent tool call,
    * or a user-run MCP prompt ("mcp-prompt").
    */
-  toolOrigin?: "mcp" | "acp" | "mcp-prompt";
+  toolOrigin?: "mcp" | "acp" | "mcp-prompt" | "mcp-resource";
   /** Identity for approvals whose decisions carry additional structured fields. */
   id?: string;
   /** User-visible attribution for a background task requesting approval. */

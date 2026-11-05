@@ -1,4 +1,8 @@
 import type { BackgroundResultState } from "@agentlink/protocol/background-result";
+import type {
+  McpResourceWatchView,
+  McpResourceUpdateProvenance,
+} from "@agentlink/protocol/chat-transcript";
 import { boundedImageAttribution } from "./imageAttribution.js";
 import type { BrowserGatewayBackgroundSummary } from "@agentlink/protocol/browser-gateway-background-summary";
 import {
@@ -964,6 +968,7 @@ function parseForeground(
     "configuredCommandApprovalPolicy",
     "restoringSession",
     "revertRecoveryNotice",
+    "mcpResourceWatches",
   ]);
   const estimatedTokens = optionalNonNegativeInteger(
     object,
@@ -1173,6 +1178,76 @@ function parseForeground(
     ...(revertRecoveryNotice.present
       ? { revertRecoveryNotice: revertRecoveryNotice.value }
       : {}),
+    ...(object.mcpResourceWatches !== undefined
+      ? {
+          mcpResourceWatches: arrayValue(
+            object.mcpResourceWatches,
+            `${path}.mcpResourceWatches`,
+          ).map((watch, index) =>
+            parseMcpResourceWatch(
+              watch,
+              `${path}.mcpResourceWatches[${index}]`,
+            ),
+          ),
+        }
+      : {}),
+  };
+}
+
+function parseMcpResourceWatch(
+  value: unknown,
+  path: string,
+): McpResourceWatchView {
+  const object = strictRecord(value, path, [
+    "server",
+    "uri",
+    "mode",
+    "paused",
+    "reason",
+    "pending",
+    "updatedAt",
+  ]);
+  const reason = optionalString(object, "reason", path, 4_000);
+  return {
+    server: nonEmptyString(object.server, `${path}.server`, 256),
+    uri: nonEmptyString(object.uri, `${path}.uri`, 8_192),
+    mode: enumValue(
+      object.mode,
+      `${path}.mode`,
+      new Set(["notify", "deliver", "wake"]),
+    ) as McpResourceWatchView["mode"],
+    paused: booleanValue(object.paused, `${path}.paused`),
+    pending: booleanValue(object.pending, `${path}.pending`),
+    ...(reason !== undefined ? { reason } : {}),
+    ...(object.updatedAt !== undefined
+      ? {
+          updatedAt: nonNegativeFiniteNumber(
+            object.updatedAt,
+            `${path}.updatedAt`,
+          ),
+        }
+      : {}),
+  };
+}
+
+function parseMcpResourceUpdate(
+  value: unknown,
+  path: string,
+): McpResourceUpdateProvenance {
+  const object = strictRecord(value, path, [
+    "id",
+    "server",
+    "uri",
+    "receivedAt",
+  ]);
+  return {
+    id: nonEmptyString(object.id, `${path}.id`, 256),
+    server: nonEmptyString(object.server, `${path}.server`, 256),
+    uri: nonEmptyString(object.uri, `${path}.uri`, 8_192),
+    receivedAt: nonNegativeFiniteNumber(
+      object.receivedAt,
+      `${path}.receivedAt`,
+    ),
   };
 }
 
@@ -1787,6 +1862,7 @@ function parseMessage(
     "condenseInfo",
     "warningMessage",
     "warningRetry",
+    "mcpResourceUpdate",
   ]);
   const badge = optionalEnum(
     object,
@@ -1808,6 +1884,19 @@ function parseMessage(
     new Set(["vscode", "browser"]),
   ) as BrowserGatewayTranscriptMessage["origin"];
   const checkpointId = optionalString(object, "checkpointId", path, 256);
+  const mcpResourceUpdate = optionalObject(
+    object,
+    "mcpResourceUpdate",
+    path,
+    parseMcpResourceUpdate,
+  );
+  if (mcpResourceUpdate && object.role !== "warning") {
+    fail(
+      "invalid_value",
+      `${path}.role`,
+      "MCP resource updates must remain warning messages, not user instructions",
+    );
+  }
   const displayMedia = optionalObject(
     object,
     "displayMedia",
@@ -1864,6 +1953,7 @@ function parseMessage(
     ...(slashCommandLabel ? { slashCommandLabel } : {}),
     ...(origin ? { origin } : {}),
     ...(checkpointId ? { checkpointId } : {}),
+    ...(mcpResourceUpdate ? { mcpResourceUpdate } : {}),
     ...(displayMedia ? { displayMedia } : {}),
     ...(finalMarker ? { finalMarker } : {}),
     ...(surfaceChange ? { surfaceChange } : {}),

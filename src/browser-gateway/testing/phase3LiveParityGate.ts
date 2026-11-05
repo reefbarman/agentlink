@@ -453,6 +453,7 @@ function createLegacySnapshot(
       ],
       foreground: {
         sessionId: foreground.sessionId,
+        mcpResourceWatches: [],
         project: { ...project },
         title: foreground.title,
         mode: foreground.mode,

@@ -75,6 +75,8 @@ export * from "./condenseThresholds.js";
 export interface CondenseMessage extends MessageParam {
   isSummary?: boolean;
   isResumeContext?: boolean;
+  /** Host-labelled external data must not become a canonical user request. */
+  externalData?: true;
   condenseId?: string;
   condenseParent?: string;
   preservedContext?: PreservedRuntimeContext;
@@ -603,7 +605,13 @@ export interface SummarizeResult<M extends CondenseMessage = CondenseMessage> {
 
 function extractCanonicalUserMessages(messages: AgentMessage[]): string[] {
   const extracted = messages
-    .filter((m) => m.role === "user" && !m.isSummary && !m.isResumeContext)
+    .filter(
+      (m) =>
+        m.role === "user" &&
+        !m.isSummary &&
+        !m.isResumeContext &&
+        !m.externalData,
+    )
     .map((m) => {
       if (typeof m.content === "string") {
         return stripMemoryCandidateReminders(m.content).trim();

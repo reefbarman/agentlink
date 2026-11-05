@@ -115,6 +115,7 @@ interface ProjectionContext {
   readonly finalElapsed?: boolean;
   /** Receiver accepts live progress on running tool-call blocks. */
   readonly toolProgress?: boolean;
+  readonly resourceUpdates?: boolean;
 }
 
 interface ProjectedReadSet {
@@ -166,6 +167,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
   private readonly finalElapsed: boolean;
   private readonly toolProgress: boolean;
   private readonly queueInterjection: boolean;
+  private readonly resourceUpdates: boolean;
   private historySessionId: string | null = null;
   private readonly historyMessages = new Map<string, ChatMessage>();
   private demanded = false;
@@ -221,6 +223,8 @@ export class BrowserGatewayOwnerProjectionAdapter {
     this.toolProgress =
       options.dataPlaneFeatures?.includes("transcript-tool-progress-v1") ??
       false;
+    this.resourceUpdates =
+      options.dataPlaneFeatures?.includes("mcp-resource-updates-v1") ?? false;
     this.queueInterjection =
       options.dataPlaneFeatures?.includes("queue-interjection-v1") ?? false;
     this.sourceSubscription = sources.onDidChange((source) => {
@@ -364,6 +368,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
         finalResults: this.finalResults,
         finalElapsed: this.finalElapsed,
         toolProgress: this.toolProgress,
+        resourceUpdates: this.resourceUpdates,
       }),
     );
     const referencedDetails = detailsForMessages(
@@ -412,6 +417,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
         const foreground = projectForeground(
           readSet.foreground,
           readSet.policies,
+          this.resourceUpdates,
         );
         if (
           previous.foreground?.sessionId !== foreground?.sessionId ||
@@ -482,6 +488,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
         const foreground = projectForeground(
           readSet.foreground,
           readSet.policies,
+          this.resourceUpdates,
         );
         if (
           previous.foreground?.sessionId !== foreground?.sessionId ||
@@ -607,6 +614,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
         const foreground = projectForeground(
           readSet.foreground,
           readSet.policies,
+          this.resourceUpdates,
         );
         const capabilities = projectCapabilities(
           readSet,
@@ -687,6 +695,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       finalResults: this.finalResults,
       finalElapsed: this.finalElapsed,
       toolProgress: this.toolProgress,
+      resourceUpdates: this.resourceUpdates,
     };
     const state = projectReadSet(
       readSet,
@@ -720,6 +729,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       finalResults: this.finalResults,
       finalElapsed: this.finalElapsed,
       toolProgress: this.toolProgress,
+      resourceUpdates: this.resourceUpdates,
     });
     const referencedDetails = detailsForMessages(
       [...details.values()],
@@ -975,7 +985,11 @@ function projectReadSet(
 ): ProjectedOwnerState {
   return {
     catalog: projectCatalog(readSet),
-    foreground: projectForeground(readSet.foreground, readSet.policies),
+    foreground: projectForeground(
+      readSet.foreground,
+      readSet.policies,
+      context.resourceUpdates,
+    ),
     transcript: projectTranscript(readSet.foreground, context),
     ui: {
       interaction: context.interaction(readSet.interaction),
@@ -1061,6 +1075,7 @@ function projectCatalog(
 function projectForeground(
   foreground: BrowserGatewayOwnerForegroundSource | null,
   policies: BrowserGatewayOwnerProjectionReadSet["policies"],
+  resourceUpdates = false,
 ): BrowserGatewayForegroundControlState | null {
   if (!foreground) return null;
   return {
@@ -1208,6 +1223,24 @@ function projectForeground(
     executionPreset: policies.executionPreset,
     configuredCommandApprovalPolicy: policies.configuredCommandApprovalPolicy,
     restoringSession: foreground.restoringSession,
+    ...(resourceUpdates && foreground.mcpResourceWatches !== undefined
+      ? {
+          mcpResourceWatches: foreground.mcpResourceWatches.map((watch) => ({
+            // Preserve exact resource identities for subsequent host actions.
+            server: watch.server,
+            uri: watch.uri,
+            mode: watch.mode,
+            paused: watch.paused,
+            pending: watch.pending,
+            ...(watch.reason !== undefined
+              ? { reason: bounded(watch.reason, 4_000) }
+              : {}),
+            ...(watch.updatedAt !== undefined
+              ? { updatedAt: watch.updatedAt }
+              : {}),
+          })),
+        }
+      : {}),
     revertRecoveryNotice: foreground.revertRecoveryNotice
       ? {
           projectId: bounded(foreground.revertRecoveryNotice.projectId, 256),
@@ -1335,6 +1368,16 @@ function projectMessage(
       ? { slashCommandLabel: bounded(message.slashCommandLabel, 1_000) }
       : {}),
     ...(message.origin ? { origin: message.origin } : {}),
+    ...(context.resourceUpdates && message.mcpResourceUpdate
+      ? {
+          mcpResourceUpdate: {
+            id: message.mcpResourceUpdate.id,
+            server: message.mcpResourceUpdate.server,
+            uri: message.mcpResourceUpdate.uri,
+            receivedAt: message.mcpResourceUpdate.receivedAt,
+          },
+        }
+      : {}),
     ...(message.checkpointId
       ? { checkpointId: bounded(message.checkpointId, 256) }
       : {}),

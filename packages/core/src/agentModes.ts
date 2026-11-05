@@ -150,7 +150,8 @@ export const TOOL_GROUPS: Record<string, string[]> = {
   memory: ["manage_memory"],
   "read-only-command": ["execute_command"],
   plan: ["write_file", "apply_diff", "execute_command", "get_terminal_output"],
-  mcp: [], // populated dynamically from McpClientHub
+  // Hosts opt into watch tools separately from permitting this mode group.
+  mcp: ["watch_mcp_resource", "unwatch_mcp_resource"],
 };
 
 /**
@@ -161,7 +162,10 @@ export function getToolsForMode(
   mode: AgentMode,
   mcpTools: string[] = [],
 ): Set<string> {
-  const groups: Record<string, string[]> = { ...TOOL_GROUPS, mcp: mcpTools };
+  const groups: Record<string, string[]> = {
+    ...TOOL_GROUPS,
+    mcp: [...TOOL_GROUPS.mcp!, ...mcpTools],
+  };
   const allowed = new Set<string>();
   for (const group of mode.toolGroups) {
     for (const tool of groups[group] ?? []) {

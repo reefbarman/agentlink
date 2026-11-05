@@ -309,6 +309,106 @@ function makeAdapter(
 }
 
 describe("BrowserGatewayOwnerProjectionAdapter", () => {
+  it("preserves resource-watch state and untrusted provenance through checkpoints and updates", () => {
+    const source = readSet();
+    const watches = [
+      {
+        server: "mail",
+        uri: "mail://inbox/tab-1",
+        mode: "wake" as const,
+        paused: true,
+        reason: "Stopped by user",
+        pending: true,
+        updatedAt: 945,
+      },
+    ];
+    const provenance = {
+      id: "resource-update-7",
+      server: "mail",
+      uri: "mail://inbox/tab-1",
+      receivedAt: 940,
+    };
+    source.foreground = {
+      ...source.foreground!,
+      mcpResourceWatches: watches,
+      messages: [
+        {
+          ...message(
+            "resource-message",
+            "warning",
+            "Untrusted resource text",
+            945,
+          ),
+          mcpResourceUpdate: provenance,
+        },
+      ],
+    };
+    const sources = new ProjectionSources(source);
+    const legacy = makeAdapter(sources);
+    expect(legacy.getCheckpoint().foreground).not.toHaveProperty(
+      "mcpResourceWatches",
+    );
+    expect(legacy.getCheckpoint().transcript.messages[0]).not.toHaveProperty(
+      "mcpResourceUpdate",
+    );
+    legacy.dispose();
+    const adapter = makeAdapter(sources, {
+      dataPlaneFeatures: ["mcp-resource-updates-v1"],
+    });
+    const publications: BrowserGatewayOwnerProjectionPublication[] = [];
+    adapter.onDidPublish((publication) => publications.push(publication));
+    adapter.setDemanded(true);
+    const checkpoint = adapter.getCheckpoint();
+    expect(checkpoint.foreground?.mcpResourceWatches).toEqual(watches);
+    expect(checkpoint.transcript.messages[0]).toMatchObject({
+      role: "warning",
+      mcpResourceUpdate: provenance,
+    });
+    expect(checkpoint.transcript.messages[0]).not.toHaveProperty("origin");
+
+    source.foreground.mcpResourceWatches = [
+      { ...watches[0], paused: false, pending: false },
+    ];
+    source.foreground.messages = [
+      {
+        ...source.foreground.messages[0],
+        mcpResourceUpdate: { ...provenance, id: "resource-update-8" },
+      },
+    ];
+    sources.fire("foreground");
+    expect(
+      publications.some(
+        (publication) =>
+          publication.kind === "event" &&
+          JSON.stringify(publication.event).includes("resource-update-8"),
+      ),
+    ).toBe(true);
+    const updated = adapter.getCheckpoint();
+    expect(updated.foreground?.mcpResourceWatches).toEqual(
+      source.foreground.mcpResourceWatches,
+    );
+    expect(updated.transcript.messages[0].revision).not.toBe(
+      checkpoint.transcript.messages[0].revision,
+    );
+    expect(updated.transcript.messages[0].mcpResourceUpdate?.id).toBe(
+      "resource-update-8",
+    );
+    source.foreground.mcpResourceWatches = [];
+    sources.fire("foreground");
+    expect(adapter.getCheckpoint().foreground?.mcpResourceWatches).toEqual([]);
+    adapter.dispose();
+  });
+
+  it("omits resource fields for existing sources without resource watches", () => {
+    const adapter = makeAdapter(new ProjectionSources(readSet()));
+    const checkpoint = adapter.getCheckpoint();
+    expect(checkpoint.foreground).not.toHaveProperty("mcpResourceWatches");
+    expect(checkpoint.transcript.messages[0]).not.toHaveProperty(
+      "mcpResourceUpdate",
+    );
+    adapter.dispose();
+  });
+
   it("relays a final-marker work summary as a lazily loaded reference only to helpers that advertise it", () => {
     const workSummary: WorkSummary = {
       version: 1,

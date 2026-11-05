@@ -11,6 +11,7 @@ export const BROWSER_GATEWAY_DATA_PLANE_FEATURES = [
   "transcript-final-result-v1",
   "transcript-tool-progress-v1",
   "queue-interjection-v1",
+  "mcp-resource-updates-v1",
 ] as const;
 export type BrowserGatewayDataPlaneFeature =
   (typeof BROWSER_GATEWAY_DATA_PLANE_FEATURES)[number];

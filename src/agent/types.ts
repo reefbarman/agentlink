@@ -16,6 +16,10 @@ import type {
   McpApprovalPromotionMeta,
   ToolResult,
 } from "@agentlink/protocol/tool-result";
+import type {
+  McpResourceUpdateProvenance,
+  McpResourceWatchView,
+} from "@agentlink/protocol/chat-transcript";
 import type { MessageParam, ReasoningEffort } from "./providers/types.js";
 
 import type { CondenseTiming } from "../telemetry/ContextUsageTelemetry.js";
@@ -81,6 +85,8 @@ export type AgentMessage = MessageParam & {
    * human decision record. Grants nothing by itself.
    */
   humanInputId?: string;
+  /** Host-admitted external data, never canonical user instructions. */
+  externalData?: true;
   /** Host-only decision evidence tied to tool results in this source message. */
   humanQuestionAnswers?: import("@agentlink/protocol/structured-question").HumanQuestionAnswer[];
   isSummary?: boolean;
@@ -92,6 +98,7 @@ export type AgentMessage = MessageParam & {
   /** Persisted transcript-only diagnostic; never sent to providers or condensation. */
   diagnosticOnly?: boolean;
   uiHint?: {
+    mcpResourceUpdate?: McpResourceUpdateProvenance;
     userMessage?: {
       coordination?: import("@agentlink/protocol/chat-transcript").BackgroundCoordination;
       displayText?: string;
@@ -134,6 +141,12 @@ export type AgentMessage = MessageParam & {
 // --- Agent Events (emitted by AgentEngine) ---
 
 export type AgentEvent =
+  | {
+      type: "mcp_resource_update";
+      text: string;
+      update: McpResourceUpdateProvenance;
+    }
+  | { type: "mcp_resource_watches"; watches: McpResourceWatchView[] }
   | { type: "thinking_start"; thinkingId: string }
   | { type: "thinking_delta"; thinkingId: string; text: string }
   | { type: "thinking_end"; thinkingId: string }

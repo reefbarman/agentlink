@@ -1,4 +1,9 @@
 import * as crypto from "crypto";
+import { createSessionMcpResourceWatches } from "./mcpResourceWatchRuntime.js";
+import type {
+  McpResourceWatches,
+  McpResourceUpdateBatch,
+} from "../core/mcpResourceWatches.js";
 import { appendOwnershipHandoff } from "./background/ownershipHandoff.js";
 import {
   BUDGET_EVIDENCE_DIGEST_MARKER,
@@ -992,6 +997,25 @@ export class AgentSessionManager {
   >();
   /** Coordinators with an internally queued question turn not yet reflected in status. */
   private backgroundCoordinatorTurnsStarting = new Set<string>();
+  private readonly mcpResourceWatches = new Map<string, McpResourceWatches>();
+  private readonly mcpResourceExternalTurns = new Set<string>();
+  private readonly mcpResourceReconsiderPending = new Set<string>();
+  private mcpResourceInteractionPending: (sessionId: string) => boolean = () =>
+    false;
+  private readonly manualMcpResourceUpdates = new Map<
+    string,
+    Array<{
+      id: string;
+      server: string;
+      uri: string;
+      text: string;
+      receivedAt: number;
+    }>
+  >();
+  private readonly mcpResourceWakeStarting = new Map<
+    string,
+    McpResourceUpdateBatch
+  >();
   /**
    * Accepted interactive turns (send or retry) whose session status has not
    * yet become "streaming". Turn preparation (hooks, checkpoints, condense,
@@ -1830,6 +1854,36 @@ export class AgentSessionManager {
                 this.projectMcpHubRegistry!.acquire(session.projectScope),
             }
           : {}),
+        mcpResourceWatchProvider: (
+          mcpHubLease?.hub ?? captured.mcpHub
+        )?.supportsResourceSubscriptions?.()
+          ? {
+              watch: (
+                request: Parameters<
+                  NonNullable<
+                    ToolDispatchContext["mcpResourceWatchProvider"]
+                  >["watch"]
+                >[0],
+              ) =>
+                this.ensureMcpResourceWatches(session).watch(
+                  request.server,
+                  request.uri,
+                  request.mode,
+                ),
+              unwatch: async (
+                request: Parameters<
+                  NonNullable<
+                    ToolDispatchContext["mcpResourceWatchProvider"]
+                  >["unwatch"]
+                >[0],
+              ) => {
+                await this.mcpResourceWatches
+                  .get(session.id)
+                  ?.unwatch(request.server, request.uri);
+                return { ok: true };
+              },
+            }
+          : undefined,
         onFileRead: (filePath: string) => session.trackFileRead(filePath),
         onComposeFileRead: (filePath: string) =>
           session.trackFileRead(filePath, "compose"),
@@ -2366,6 +2420,7 @@ export class AgentSessionManager {
       session.composeEnabled,
       typeof session.getAdvertisedRules === "function" &&
         session.getAdvertisedRules().length > 0,
+      preparedTurn.context.mcpResourceWatchProvider !== undefined,
     );
     const usesReadOnlyCommand =
       preparedTurn.context.commandExecutionPolicy === "read-only" ||
@@ -5217,6 +5272,249 @@ export class AgentSessionManager {
     session.mcpToolDisclosure = this.buildMcpToolDisclosure(currentContext);
   }
 
+  setMcpResourceInteractionGate(
+    isPending: (sessionId: string) => boolean,
+  ): void {
+    this.mcpResourceInteractionPending = isPending;
+  }
+
+  reconsiderMcpResourceDelivery(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session || !this.mcpResourceWatches.has(sessionId)) return;
+    this.mcpResourceReconsiderPending.add(sessionId);
+    queueMicrotask(() => {
+      if (this.mcpResourceWakeStarting.has(sessionId)) return;
+      this.mcpResourceReconsiderPending.delete(sessionId);
+      this.tryWakeForMcpResource(session);
+    });
+  }
+
+  isMcpResourceExternalTurn(sessionId: string): boolean {
+    return this.mcpResourceExternalTurns.has(sessionId);
+  }
+
+  getMcpResourceWatches(sessionId: string) {
+    return this.mcpResourceWatches.get(sessionId)?.snapshot() ?? [];
+  }
+
+  private ensureMcpResourceWatches(session: AgentSession): McpResourceWatches {
+    const existing = this.mcpResourceWatches.get(session.id);
+    if (existing) return existing;
+    const getHub = () =>
+      this.projectMcpHubRegistry?.getCurrent(session.projectScope)?.hub ??
+      this.toolCtx?.mcpHub;
+    const controller = createSessionMcpResourceWatches({
+      sessionId: session.id,
+      getHub,
+      getSessionContext: () => this.getMcpSessionContext(session.id),
+      // Standing human consent must not be delegated to a parent agent.
+      requestApproval: this.toolCtx?.onApprovalRequest,
+      isActive: () => this.sessions.get(session.id) === session,
+      onChange: () => {
+        this.recordAndEmitEvent(session.id, {
+          type: "mcp_resource_watches",
+          watches: this.mcpResourceWatches.get(session.id)?.snapshot() ?? [],
+        });
+      },
+      onPending: () =>
+        queueMicrotask(() => this.tryWakeForMcpResource(session)),
+    });
+    this.mcpResourceWatches.set(session.id, controller);
+    session.onHumanInputReceived = () => controller.noteUserTurn();
+    session.mcpResourceAdmission = () => {
+      if (this.mcpResourceInteractionPending(session.id)) return undefined;
+      const manual = this.manualMcpResourceUpdates.get(session.id);
+      let pendingWake = this.mcpResourceWakeStarting.get(session.id);
+      if (pendingWake && !controller.isBatchValid(pendingWake)) {
+        this.mcpResourceWakeStarting.delete(session.id);
+        pendingWake = undefined;
+      }
+      const batch = pendingWake ?? controller.reservePending({ idle: false });
+      if (!batch && !manual?.length) return undefined;
+      const updates = [...(manual ?? []), ...(batch?.updates ?? [])];
+      let committed = false;
+      const isValid = () =>
+        !committed &&
+        this.sessions.get(session.id) === session &&
+        !this.mcpResourceInteractionPending(session.id) &&
+        (!manual || this.manualMcpResourceUpdates.get(session.id) === manual) &&
+        (!batch || controller.isBatchValid(batch));
+      return {
+        messages: updates.map((update) =>
+          session.buildMcpResourceUpdateMessage(update),
+        ),
+        isValid,
+        commit: () => {
+          if (!isValid()) return [];
+          const events = updates.map((update) =>
+            session.addMcpResourceUpdate(update),
+          );
+          if (manual) this.manualMcpResourceUpdates.delete(session.id);
+          if (batch) controller.commitPending(batch);
+          if (pendingWake === batch)
+            this.mcpResourceWakeStarting.delete(session.id);
+          committed = true;
+          // Publish synchronously at provider submission, not while preparing a request.
+          for (const event of events)
+            this.recordAndEmitEvent(session.id, event);
+          this.saveSession(session.id);
+          return events;
+        },
+        release: () => {
+          if (batch && !committed) controller.releasePending(batch);
+        },
+      };
+    };
+    return controller;
+  }
+
+  private tryWakeForMcpResource(session: AgentSession): void {
+    if (
+      this.sessions.get(session.id) !== session ||
+      this.mcpResourceInteractionPending(session.id) ||
+      session.background ||
+      session.status !== "idle" ||
+      session.runState !== undefined ||
+      session.hasQueuedUiMessages ||
+      session.hasPendingInterjections ||
+      this.interactiveTurnsStarting.has(session.id) ||
+      this.backgroundCoordinatorTurnsStarting.has(session.id) ||
+      this.mcpResourceWakeStarting.has(session.id)
+    )
+      return;
+    const controller = this.mcpResourceWatches.get(session.id);
+    const batch = controller?.reservePending({ idle: true });
+    if (!controller || !batch) return;
+    this.mcpResourceWakeStarting.set(session.id, batch);
+    void this.sendMessage(session.id, "", session.mode, {
+      skipUserMessage: true,
+      mcpResourceWake: batch,
+    })
+      .catch((error: unknown) => {
+        this.log?.(
+          `[mcp-resource] idle admission failed: ${error instanceof Error ? error.name : "unknown"}`,
+        );
+      })
+      .finally(() => {
+        controller.releasePending(batch);
+        if (this.mcpResourceWakeStarting.get(session.id) === batch)
+          this.mcpResourceWakeStarting.delete(session.id);
+        if (this.mcpResourceReconsiderPending.delete(session.id))
+          this.reconsiderMcpResourceDelivery(session.id);
+      });
+  }
+
+  async handleMcpResourceWatchAction(
+    sessionId: string,
+    request: {
+      server: string;
+      uri: string;
+      action: "pause" | "resume" | "unwatch" | "send-once";
+    },
+  ): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    const controller = this.mcpResourceWatches.get(sessionId);
+    if (!session || !controller) return;
+    if (request.action === "pause")
+      controller.pause(request.server, request.uri);
+    else if (request.action === "resume") {
+      controller.resume(request.server, request.uri);
+      this.tryWakeForMcpResource(session);
+    } else if (request.action === "unwatch")
+      await controller.unwatch(request.server, request.uri);
+    else if (request.action === "send-once")
+      await this.sendMcpResourceOnce(session, request.server, request.uri);
+  }
+
+  private async sendMcpResourceOnce(
+    session: AgentSession,
+    server: string,
+    uri: string,
+  ): Promise<void> {
+    const hub =
+      this.projectMcpHubRegistry?.getCurrent(session.projectScope)?.hub ??
+      this.toolCtx?.mcpHub;
+    const approve = this.toolCtx?.onApprovalRequest;
+    if (!hub || !approve) return;
+    const config = JSON.stringify(hub.getServerConfig(server));
+    const response = await approve(
+      {
+        id: `mcp-resource-once:${session.id}:${crypto.randomUUID()}`,
+        kind: "mcp",
+        toolOrigin: "mcp-resource",
+        mcpServerName: server,
+        mcpToolName: uri,
+        title: `Read this MCP resource and send it to this session once?`,
+        detail: `${server}\n${uri}\nUntrusted external data, not new instructions. This does not enable a standing watch or automatic waking.`,
+        choices: [
+          { label: "Read and send once", value: "read-once" },
+          { label: "Deny", value: "deny", isDanger: true },
+        ],
+      },
+      session.id,
+    );
+    if (
+      (typeof response === "string" ? response : response.decision) !==
+        "read-once" ||
+      this.sessions.get(session.id) !== session ||
+      config !== JSON.stringify(hub.getServerConfig(server))
+    )
+      return;
+    const result = await hub.readResource(server, uri, {
+      sessionContext: this.getMcpSessionContext(session.id),
+      interactive: false,
+      signal: session.abortSignal,
+    });
+    if (
+      result.isError ||
+      result.content.some((part) => part.type !== "text") ||
+      this.sessions.get(session.id) !== session ||
+      session.abortSignal?.aborted ||
+      config !== JSON.stringify(hub.getServerConfig(server))
+    )
+      return;
+    const text = result.content
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+    if (!text.trim() || Buffer.byteLength(text, "utf8") > 65_536) return;
+    const queued = this.manualMcpResourceUpdates.get(session.id) ?? [];
+    if (queued.length >= 4) return;
+    this.manualMcpResourceUpdates.set(session.id, [
+      ...queued,
+      {
+        id: crypto.randomUUID(),
+        server,
+        uri,
+        text,
+        receivedAt: Date.now(),
+      },
+    ]);
+    if (
+      session.status === "idle" &&
+      !this.interactiveTurnsStarting.has(session.id)
+    ) {
+      await this.sendMessage(session.id, "", session.mode, {
+        skipUserMessage: true,
+        mcpResourceManual: true,
+      });
+    }
+  }
+
+  private removeMcpResourceWatches(sessionId: string): void {
+    const controller = this.mcpResourceWatches.get(sessionId);
+    this.mcpResourceWatches.delete(sessionId);
+    this.mcpResourceReconsiderPending.delete(sessionId);
+    this.mcpResourceWakeStarting.delete(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.mcpResourceAdmission = undefined;
+      session.onHumanInputReceived = undefined;
+    }
+    this.manualMcpResourceUpdates.delete(sessionId);
+    void controller?.dispose();
+  }
+
   getConfig(): AgentConfig {
     return this.config;
   }
@@ -5804,6 +6102,7 @@ export class AgentSessionManager {
       if (!result.ok && result.reason !== "not_found") return;
     }
 
+    this.removeMcpResourceWatches(session.id);
     this.sessions.delete(session.id);
     workHistoryRegistry.dispose(session.id);
     this.removeSkillCatalogFallback(session);
@@ -7371,6 +7670,11 @@ export class AgentSessionManager {
        * turn. Continue through normal execution without adding a duplicate.
        */
       skipUserMessage?: boolean;
+      /** Host-reserved, untrusted MCP data turn. Never set by a UI request. */
+      mcpResourceWake?: McpResourceUpdateBatch;
+      mcpResourceManual?: boolean;
+      /** Host-generated continuation, not a new human input or budget reset. */
+      automatedUserMessage?: boolean;
       /** Resolves the direct predecessor transcript for a handoff successor. */
       getHandoffSourceTranscript?: import("../core/tools/types.js").AgentToolExecutionContext["getHandoffSourceTranscript"];
       additionalMessages?: Array<{
@@ -7405,7 +7709,12 @@ export class AgentSessionManager {
       });
     }
 
+    if (opts?.origin && !opts.mcpResourceWake && !opts.automatedUserMessage) {
+      this.mcpResourceWatches.get(session.id)?.noteUserTurn();
+    }
     const releaseTurnStart = this.markTurnStarting(session.id);
+    if (opts?.mcpResourceWake || opts?.mcpResourceManual)
+      this.mcpResourceExternalTurns.add(session.id);
     try {
       return await this.sendMessageInQueue(
         session,
@@ -7415,6 +7724,9 @@ export class AgentSessionManager {
       );
     } finally {
       releaseTurnStart();
+      if (opts?.mcpResourceWake || opts?.mcpResourceManual)
+        this.mcpResourceExternalTurns.delete(session.id);
+      queueMicrotask(() => this.tryWakeForMcpResource(session));
     }
   }
 
@@ -7425,6 +7737,13 @@ export class AgentSessionManager {
     releaseTurnStart: () => void,
   ): Promise<void> {
     return this.withSessionSendQueue(session.id, async () => {
+      if (
+        opts?.mcpResourceWake &&
+        !this.mcpResourceWatches
+          .get(session.id)
+          ?.isBatchValid(opts.mcpResourceWake)
+      )
+        return;
       if (!isProjectlessSessionScope(session.projectScope)) {
         this.requireSessionExecution(session);
       }
@@ -7751,6 +8070,7 @@ export class AgentSessionManager {
               isSlashCommand: message.isSlashCommand === true,
               slashCommandLabel: message.slashCommandLabel,
               origin: message.origin,
+              automated: opts?.automatedUserMessage,
               images: message.images,
               documents: message.documents,
               skillContext: preparedSkill ? [preparedSkill.context] : undefined,
@@ -7796,6 +8116,17 @@ export class AgentSessionManager {
               session,
               preparedTurn.context,
             );
+          if (
+            opts?.mcpResourceWake &&
+            !this.mcpResourceWatches
+              .get(session.id)
+              ?.isBatchValid(opts.mcpResourceWake)
+          ) {
+            session.status = "idle";
+            session.runState = undefined;
+            this.notifySessionsChanged();
+            return;
+          }
           session.status = "streaming";
           releaseTurnStart();
           if (!session.background) {
@@ -7809,6 +8140,25 @@ export class AgentSessionManager {
           // Persist immediately so the session appears in history even if the
           // API call fails (e.g. network error, auth failure on the first message).
           await this.saveSessionNow(session.id);
+          if (
+            opts?.mcpResourceWake &&
+            !this.mcpResourceWatches
+              .get(session.id)
+              ?.isBatchValid(opts.mcpResourceWake)
+          ) {
+            session.status = "idle";
+            session.runState = undefined;
+            await this.saveSessionNow(session.id);
+            this.recordAndEmitEvent(session.id, {
+              type: "done",
+              totalInputTokens: session.totalInputTokens,
+              totalOutputTokens: session.totalOutputTokens,
+              totalCacheReadTokens: session.totalCacheReadTokens,
+              totalCacheCreationTokens: session.totalCacheCreationTokens,
+            });
+            this.notifySessionsChanged();
+            return;
+          }
           let lastPersistedActiveAt = session.lastActiveAt;
 
           const persistIfHistoryChanged = (
@@ -7859,6 +8209,12 @@ export class AgentSessionManager {
               this.applySessionIdentity(session);
 
               for await (const event of engine.run(session, {
+                requireMcpResourceUpdate: !!(
+                  opts?.mcpResourceWake || opts?.mcpResourceManual
+                ),
+                ...(opts?.mcpResourceWake
+                  ? { maxApiTurns: 4, maxToolCalls: 12 }
+                  : {}),
                 automaticMemoryContext,
                 composeEnabled: session.composeEnabled,
                 getHandoffSourceTranscript:
@@ -7971,6 +8327,8 @@ export class AgentSessionManager {
 
               if (
                 naturalDone &&
+                !opts?.mcpResourceWake &&
+                !opts?.mcpResourceManual &&
                 hookRuntime &&
                 autoContinueCount < MAX_AUTO_CONTINUE
               ) {
@@ -8024,6 +8382,8 @@ export class AgentSessionManager {
               // Check if we should auto-continue due to pending todos
               if (
                 naturalDone &&
+                !opts?.mcpResourceWake &&
+                !opts?.mcpResourceManual &&
                 !explicitFinalMarker &&
                 !hasQueuedUserMessages &&
                 autoContinueCount < MAX_AUTO_CONTINUE &&
@@ -8186,6 +8546,8 @@ export class AgentSessionManager {
   }
 
   stopSession(sessionId: string): void {
+    this.mcpResourceWatches.get(sessionId)?.pauseAll();
+    this.manualMcpResourceUpdates.delete(sessionId);
     const subtreeIds = this.getSessionSubtreeIds(sessionId);
     for (const currentId of subtreeIds.reverse()) {
       this.cancelPendingBackgroundQuestionsForSession(currentId);
@@ -8248,6 +8610,8 @@ export class AgentSessionManager {
   }
 
   private stopSingleSession(sessionId: string): void {
+    this.mcpResourceWatches.get(sessionId)?.pauseAll();
+    this.manualMcpResourceUpdates.delete(sessionId);
     const session = this.sessions.get(sessionId);
     if (session && this.isSessionStopped(session)) return;
     if (session) {
@@ -8870,6 +9234,7 @@ export class AgentSessionManager {
             session.composeEnabled,
             typeof session.getAdvertisedRules === "function" &&
               session.getAdvertisedRules().length > 0,
+            context.mcpResourceWatchProvider !== undefined,
           ),
           todoTool,
         ]
@@ -9918,6 +10283,7 @@ export class AgentSessionManager {
       ) {
         continue;
       }
+      this.removeMcpResourceWatches(sessionId);
       this.sessions.delete(sessionId);
       workHistoryRegistry.dispose(sessionId);
       this.removeSkillCatalogFallback(session);
@@ -10187,6 +10553,7 @@ export class AgentSessionManager {
           reason: "other",
         });
       }
+      this.removeMcpResourceWatches(sessionId);
       this.sessions.delete(sessionId);
       workHistoryRegistry.dispose(sessionId);
       this.removeSkillCatalogFallback(removedSession);

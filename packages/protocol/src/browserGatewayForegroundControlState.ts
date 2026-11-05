@@ -12,6 +12,7 @@ import type { BrowserGatewayContextBudget } from "./browserGatewayContextBudget.
 import type { ChatWorkspaceInteractiveExecutionPhase } from "./chatWorkspace.js";
 import type { CommandApprovalPolicy } from "./commandApprovalPolicy.js";
 import type { ContextHealthSnapshot } from "./contextHealth.js";
+import type { McpResourceWatchView } from "./chatTranscript.js";
 import type { RevertRecoveryNotice } from "./sessionHydration.js";
 
 export type BrowserGatewayRevertRecoveryNotice = RevertRecoveryNotice;
@@ -19,6 +20,7 @@ export type BrowserGatewayRevertRecoveryNotice = RevertRecoveryNotice;
 export interface BrowserGatewayForegroundControlState {
   sessionId: string;
   title: string;
+  mcpResourceWatches?: McpResourceWatchView[];
   originalPrompt?: string;
   mode: string;
   model: string;

@@ -963,7 +963,7 @@
     "sha256": "57b435501b7aa87c0b0662a9b44d42e331e78cb515623466b26d030765d93e83"
   },
   "toolInventory": {
-    "count": 75,
+    "count": 77,
     "driftCount": 0,
     "missingBySource": {
       "registry": [],
@@ -973,6 +973,6 @@
       "definition": [],
       "dispatch": []
     },
-    "sha256": "f6bab78489db26a1e5d658b94f3935195158afdff3d5eefe78459ef7f65b8dd3"
+    "sha256": "7ac957c3d6e398349574754fadcbf70b1d8a6097b01159c0cf5a147027115d39"
   }
 }

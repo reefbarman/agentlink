@@ -1,6 +1,7 @@
 import type { BrowserGatewayTranscriptBlock } from "./browserGatewayTranscriptBlock.js";
 import type { BrowserGatewayTranscriptText } from "./browserGatewayTranscriptText.js";
 import type { ImageAttribution } from "./toolResult.js";
+import type { McpResourceUpdateProvenance } from "./chatTranscript.js";
 
 /** Block id used by `display-image` detail requests for message display media. */
 export const BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID = "display-media";
@@ -40,6 +41,7 @@ export interface BrowserGatewayTranscriptMessage {
   isSlashCommand?: boolean;
   slashCommandLabel?: string;
   origin?: "vscode" | "browser";
+  mcpResourceUpdate?: McpResourceUpdateProvenance;
   checkpointId?: string;
   displayMedia?: BrowserGatewayTranscriptDisplayMedia;
   finalMarker?: {

@@ -1,5 +1,6 @@
 import type {
   ChatMessage,
+  McpResourceWatchView,
   TodoItem,
 } from "@agentlink/protocol/chat-transcript";
 import type {
@@ -129,6 +130,7 @@ export interface BrowserGatewayOwnerForegroundSource {
   condenseThreshold?: number;
   restoringSession: boolean;
   revertRecoveryNotice: RevertRecoveryNotice | null;
+  mcpResourceWatches?: readonly McpResourceWatchView[];
   messages: readonly ChatMessage[];
   earlierCursor: string | null;
   hasEarlier: boolean;

@@ -39,6 +39,11 @@ import {
   type McpAuthTrigger,
 } from "./mcpAuthCoordinator.js";
 import { createHash, randomUUID } from "crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  MCP_RELISTEN_POLICY,
+  McpResourceSubscriptions,
+} from "./mcpResourceSubscriptions.js";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
@@ -163,6 +168,14 @@ export interface McpHubRequestContext {
  * Servers that do not advertise it receive nothing.
  */
 export const MCP_SESSION_CONTEXT_EXTENSION = "dev.agentlink/session-context";
+
+/** Resource request context and interaction policy supplied by the host. */
+export interface McpResourceReadOptions {
+  readonly sessionContext?: McpSessionContext;
+  readonly signal?: AbortSignal;
+  /** Automatic reads must never open sign-in or input UI. Defaults to true. */
+  readonly interactive?: boolean;
+}
 
 /**
  * Host-set identity of the session making an MCP request. Set by AgentLink,
@@ -435,11 +448,11 @@ const MAX_MCP_CATALOG_ITEMS = 10_000;
 /** Cap on 2026-07-28 `input_required` rounds (elicitation) for one request. */
 const MAX_MCP_INPUT_ROUNDS = 10;
 /** Re-listen backoff after a change-notification stream drops unexpectedly. */
-const MCP_RELISTEN_BASE_DELAY_MS = 1_000;
-const MCP_RELISTEN_MAX_DELAY_MS = 30_000;
-const MCP_RELISTEN_MAX_ATTEMPTS = 6;
+const MCP_RELISTEN_BASE_DELAY_MS = MCP_RELISTEN_POLICY.baseDelayMs;
+const MCP_RELISTEN_MAX_DELAY_MS = MCP_RELISTEN_POLICY.maxDelayMs;
+const MCP_RELISTEN_MAX_ATTEMPTS = MCP_RELISTEN_POLICY.maxAttempts;
 /** A stream that stayed open this long resets the re-listen attempt budget. */
-const MCP_RELISTEN_STABLE_MS = 60_000;
+const MCP_RELISTEN_STABLE_MS = MCP_RELISTEN_POLICY.stableMs;
 const sharedProtocolVerdicts = createInMemoryMcpProtocolVerdictStore();
 
 interface McpRemoteInvocation {
@@ -988,6 +1001,18 @@ export class McpClientHub {
   private invalidRedirectRecoveryAttempted = new Set<string>();
   private runtimeReconnectPending = new Set<string>();
   private interactiveAuthUseCounts = new Map<string, number>();
+  private readonly noninteractiveResourceUse = new AsyncLocalStorage<boolean>();
+  private readonly automaticResourceReads = new Map<
+    Client,
+    Set<{ interactionRequired: boolean }>
+  >();
+  private readonly resourceSubscriptions = new Map<
+    string,
+    {
+      config: string;
+      manager: McpResourceSubscriptions;
+    }
+  >();
   private static readonly MAX_AUTH_RETRIES = 3;
   private schemaValidator: McpSchemaValidatorProvider | undefined;
 
@@ -1159,6 +1184,17 @@ export class McpClientHub {
       ...this.pendingInteractiveServers.keys(),
     ]);
     const newNames = new Set(configs.map((config) => config.name));
+    for (const [name, subscriptions] of this.resourceSubscriptions) {
+      const config = configs.find((candidate) => candidate.name === name);
+      if (
+        !config ||
+        config.disabled ||
+        JSON.stringify(config) !== subscriptions.config
+      ) {
+        this.resourceSubscriptions.delete(name);
+        await subscriptions.manager.dispose();
+      }
+    }
     if (options.reconcileChangedServers) {
       await Promise.all(
         configs.map(async (config) => {
@@ -1677,10 +1713,25 @@ export class McpClientHub {
     cfg: McpServerConfig,
     authMode: McpAuthMode,
   ): McpAuthMode {
+    if (this.noninteractiveResourceUse.getStore()) return "noninteractive";
     return authMode === "interactive" ||
       (this.interactiveAuthUseCounts.get(cfg.name) ?? 0) > 0
       ? "interactive"
       : "noninteractive";
+  }
+
+  private guardResourceReadAuthorization(provider: McpHubOAuthProvider): void {
+    const redirect = provider.redirectToAuthorization;
+    provider.redirectToAuthorization = (url) => {
+      // Check at the actual UI entry, not the provider's connection-scoped
+      // auth mode: that mode can still be interactive from an earlier connect.
+      if (this.noninteractiveResourceUse.getStore()) {
+        throw new Error(
+          "Automatic MCP resource reads require explicit authentication recovery.",
+        );
+      }
+      return redirect.call(provider, url);
+    };
   }
 
   private async withInteractiveAuthForUse<T>(
@@ -1842,6 +1893,7 @@ export class McpClientHub {
       }
       if (!oauthProvider) {
         oauthProvider = await this.host.createOAuthProvider(cfg.name, cfg.url);
+        this.guardResourceReadAuthorization(oauthProvider);
         signal.throwIfAborted();
         oauthProvider.onLog = (message) => this.log(message);
         oauthProvider.onBeforeAuthorizationOpen = (request) =>
@@ -1973,6 +2025,7 @@ export class McpClientHub {
           return;
         }
         current.status = "disconnected";
+        this.resourceSubscriptions.get(cfg.name)?.manager.detach();
         if ((cfg.type ?? "stdio") === "stdio") {
           current.error = processDiagnostic(
             "MCP process closed after connecting.",
@@ -2004,6 +2057,17 @@ export class McpClientHub {
 
       // Register elicitation handler
       entry.client.setRequestHandler("elicitation/create", async (req) => {
+        // Legacy elicitation has no reliable originating request ID. Fail
+        // closed while automatic reads are in flight, rather than showing UI
+        // in response to a notification-driven read on a shared connection.
+        const automaticReads = this.automaticResourceReads.get(entry.client);
+        if (
+          entry.client.getProtocolEra() !== "modern" &&
+          automaticReads?.size
+        ) {
+          for (const read of automaticReads) read.interactionRequired = true;
+          return { action: "cancel" as const };
+        }
         const params = (req as { params: unknown }).params as {
           mode?: string;
           message?: string;
@@ -2248,6 +2312,15 @@ export class McpClientHub {
       }
       entry.status = "connected";
       entry.connectedAt = Date.now();
+      const resourceSubscriptions = this.resourceSubscriptions.get(cfg.name);
+      if (resourceSubscriptions) {
+        if (resourceSubscriptions.config === JSON.stringify(cfg)) {
+          resourceSubscriptions.manager.attach(entry.client, transport);
+        } else {
+          this.resourceSubscriptions.delete(cfg.name);
+          await resourceSubscriptions.manager.dispose();
+        }
+      }
       void this.rememberProtocolVerdict(entry, protocolPlan);
       if (subscription) {
         this.watchChangeSubscription(entry, entry.client, subscription, 0);
@@ -3004,6 +3077,7 @@ export class McpClientHub {
 
   private async disconnectServer(name: string): Promise<void> {
     const entry = this.servers.get(name);
+    this.resourceSubscriptions.get(name)?.manager.detach();
     const attempt = this.connectionAttempts.get(name);
     this.connectionAttempts.delete(name);
     this.servers.delete(name);
@@ -3142,6 +3216,9 @@ export class McpClientHub {
   /** Disable a server in-memory. Callers must persist the config separately. */
   async disableServer(name: string): Promise<void> {
     const config = this.getServerConfig(name);
+    const subscriptions = this.resourceSubscriptions.get(name);
+    this.resourceSubscriptions.delete(name);
+    await subscriptions?.manager.dispose();
     await this.disconnectServer(name);
     if (config) this.disabledServers.set(name, { ...config, disabled: true });
     this.onStatusChange?.(this.getServerInfos());
@@ -3240,6 +3317,7 @@ export class McpClientHub {
       this.connectionAttempts.set(name, attempt);
       // Register before awaiting startup so disconnect can cancel manual auth too.
       const provider = await this.host.createOAuthProvider(cfg.name, cfg.url);
+      this.guardResourceReadAuthorization(provider);
       if (controller.signal.aborted) {
         provider.stop();
         return;
@@ -3317,6 +3395,9 @@ export class McpClientHub {
 
   /** Disconnect all servers. */
   async disconnectAll(): Promise<void> {
+    const subscriptions = [...this.resourceSubscriptions.values()];
+    this.resourceSubscriptions.clear();
+    await Promise.all(subscriptions.map(({ manager }) => manager.dispose()));
     await Promise.all(
       Array.from(
         new Set([
@@ -3757,24 +3838,70 @@ export class McpClientHub {
    * Read a specific resource from an MCP server.
    * Pass `servername__uri` or just `uri` if serverName is provided separately.
    */
-  async readResource(serverName: string, uri: string): Promise<ToolResult> {
+  async readResource(
+    serverName: string,
+    uri: string,
+    options?: McpResourceReadOptions,
+  ): Promise<ToolResult> {
+    const failure = (kind: string, message: string): ToolResult => ({
+      isError: true,
+      error: { kind, message },
+      content: [
+        { type: "text", text: JSON.stringify({ error: message, code: kind }) },
+      ],
+    });
+    const cancelled = () =>
+      failure("mcp_request_cancelled", "MCP resource read cancelled.");
+    if (options?.signal?.aborted) return cancelled();
     const server = this.servers.get(serverName);
     if (!server || server.status !== "connected") {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              error: `Server '${serverName}' not connected`,
-            }),
-          },
-        ],
-      };
+      return failure(
+        "mcp_not_connected",
+        "MCP resource server is not connected.",
+      );
+    }
+    const automatic = options?.interactive === false;
+    const state = { interactionRequired: false };
+    if (automatic) {
+      let reads = this.automaticResourceReads.get(server.client);
+      if (!reads)
+        this.automaticResourceReads.set(server.client, (reads = new Set()));
+      reads.add(state);
     }
     try {
-      const result = await this.withInteractiveAuthForUse(serverName, () =>
-        server.client.readResource({ uri }),
-      );
+      const meta = sessionContextMeta(server.client, options?.sessionContext);
+      const read = () =>
+        server.client.readResource(
+          { uri, ...(meta ? { _meta: meta } : {}) },
+          {
+            signal: options?.signal,
+            ...(automatic
+              ? { allowInputRequired: true, cache: "no-store" as const }
+              : {}),
+          },
+        );
+      const result = automatic
+        ? await this.noninteractiveResourceUse.run(true, read)
+        : await this.withInteractiveAuthForUse(serverName, read);
+      if (options?.signal?.aborted) return cancelled();
+      if (
+        state.interactionRequired ||
+        (result as { resultType?: string }).resultType === "input_required"
+      ) {
+        return failure(
+          "mcp_interaction_required",
+          "MCP resource read needs user interaction. Recover explicitly before resuming automatic reads.",
+        );
+      }
+      if (
+        automatic &&
+        result.contents.some((content) => !("text" in content))
+      ) {
+        return failure(
+          "mcp_resource_unsupported_content",
+          "Automatic MCP resource reads support text snapshots only.",
+        );
+      }
       const parts: ToolResult["content"] = [];
       for (const c of result.contents) {
         if ("text" in c && c.text !== undefined) {
@@ -3790,11 +3917,69 @@ export class McpClientHub {
       }
       return { content: parts.length ? parts : [{ type: "text", text: "" }] };
     } catch (err) {
-      const msg = await this.handleRuntimeAuthFailure(serverName, err);
-      return {
-        content: [{ type: "text", text: JSON.stringify({ error: msg }) }],
-      };
+      if (options?.signal?.aborted) return cancelled();
+      // Runtime recovery may launch sign-in. Automatic reads never invoke it,
+      // and raw server/HTTP errors are not safe to insert into model context.
+      if (!automatic)
+        await this.handleRuntimeAuthFailure(serverName, err).catch(
+          () => undefined,
+        );
+      return failure(
+        automatic ? "mcp_resource_read_paused" : "mcp_resource_read_failed",
+        automatic
+          ? "MCP resource read paused. Check the server and recover explicitly before resuming."
+          : "MCP resource read failed. Check the server connection.",
+      );
+    } finally {
+      if (automatic) {
+        const reads = this.automaticResourceReads.get(server.client);
+        reads?.delete(state);
+        if (!reads?.size) this.automaticResourceReads.delete(server.client);
+      }
     }
+  }
+
+  supportsResourceSubscriptions(serverName?: string): boolean {
+    const entries = serverName
+      ? [this.servers.get(serverName)]
+      : [...this.servers.values()];
+    return entries.some(
+      (entry) =>
+        entry?.status === "connected" &&
+        currentServerCapabilities(entry.client)?.resources?.subscribe === true,
+    );
+  }
+
+  /** Replace only this session's resource stream on the existing connection. */
+  async subscribeResources(
+    serverName: string,
+    sessionId: string,
+    uris: readonly string[],
+    options: {
+      readonly sessionContext?: McpSessionContext;
+      readonly onUpdated: (uri: string) => void;
+      readonly onError: (error: string) => void;
+      readonly onReconnected?: () => void;
+    },
+  ): Promise<{ dispose(): Promise<void> }> {
+    const server = this.servers.get(serverName);
+    if (!server || server.status !== "connected" || !server.client.transport) {
+      throw new Error("MCP resource server is not connected.");
+    }
+    let subscriptions = this.resourceSubscriptions.get(serverName);
+    if (!subscriptions) {
+      const manager = new McpResourceSubscriptions();
+      subscriptions = {
+        config: JSON.stringify(server.config),
+        manager,
+      };
+      this.resourceSubscriptions.set(serverName, subscriptions);
+      manager.attach(server.client, server.client.transport);
+    }
+    return subscriptions.manager.subscribe(sessionId, uris, {
+      ...options,
+      meta: (client) => sessionContextMeta(client, options.sessionContext),
+    });
   }
 
   /**

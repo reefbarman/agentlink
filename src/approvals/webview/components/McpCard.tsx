@@ -33,6 +33,7 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
   const choices = request.mcpChoices ?? [];
   const isAgentTool = request.toolOrigin === "acp";
   const isPrompt = request.toolOrigin === "mcp-prompt";
+  const isResourceWatch = request.toolOrigin === "mcp-resource";
   const isAuthorization = request.mcpToolName === "OAuth authorization";
   const hasRuleChoices = choices.some((choice) =>
     choice.value.startsWith("always-"),
@@ -156,6 +157,70 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
       </p>
     </div>
   );
+
+  if (isResourceWatch) {
+    return (
+      <ApprovalLayout
+        queuePosition={request.queuePosition}
+        queueTotal={request.queueTotal}
+        sourceProject={request.sourceProject}
+        targetProject={request.targetProject}
+        purpose="Choose how this resource can update this session"
+        rulesModified={false}
+        primaryLabel=""
+        primaryWithRulesLabel=""
+        onAccept={handleAllowOnce}
+        onSaveAndAccept={handleSaveAndAllow}
+        onReject={handleReject}
+        followUpRef={followUpRef}
+        actionsContent={
+          <>
+            {choices.map((choice) => (
+              <button
+                key={choice.value}
+                type="button"
+                class={`btn ${choice.isDanger ? "btn-danger" : "btn-secondary"}`}
+                onClick={() => {
+                  const text = followUpRef.current?.trim() || undefined;
+                  if (choice.isDanger) {
+                    followUpRef.current = "";
+                    submit({
+                      id: request.id,
+                      decision: choice.value,
+                      rejectionReason: text,
+                    });
+                  } else {
+                    submit({
+                      id: request.id,
+                      decision: choice.value,
+                      followUp: text,
+                    });
+                  }
+                }}
+              >
+                {choice.label}
+              </button>
+            ))}
+          </>
+        }
+      >
+        <div class="card-label">
+          <span class="codicon codicon-server" /> MCP resource watch
+        </div>
+        <pre class="command-box">{`${serverName} / ${toolName}`}</pre>
+        {request.command && <p>{request.command}</p>}
+        <p>
+          Future resource contents are unknown and untrusted. This permission is
+          only for this session and exact resource, not MCP tools or other
+          resources. Deliver and wake can spend model tokens while you are not
+          interacting.
+        </p>
+        {request.mcpDetail && (
+          <pre class="approval-detail-text">{request.mcpDetail}</pre>
+        )}
+      </ApprovalLayout>
+    );
+  }
 
   return (
     <ApprovalLayout

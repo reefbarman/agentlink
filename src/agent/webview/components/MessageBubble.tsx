@@ -39,6 +39,7 @@ import { useRemoteDisplayImage } from "./RemoteToolDetail";
 import { RemoteFinalMarkerResult } from "./RemoteFinalMarkerResult";
 import { SkillLoadBlock } from "./SkillLoadBlock";
 import { McpPromptBlock } from "./McpPromptBlock";
+import { McpResourceUpdateCard } from "../../../shared/ui/McpResourceUpdates";
 import { parseMcpPromptPresentation } from "../../../shared/mcpPromptPresentation.js";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -362,6 +363,15 @@ export function MessageBubble({
   useEffect(() => {
     setShowAllDetectedOptions(false);
   }, [message.id, detectedQuestion?.messageId]);
+
+  if (message.mcpResourceUpdate) {
+    return (
+      <McpResourceUpdateCard
+        text={message.content}
+        update={message.mcpResourceUpdate}
+      />
+    );
+  }
 
   if (message.role === "user") {
     // Annotation messages (follow-up / rejection from approval cards)

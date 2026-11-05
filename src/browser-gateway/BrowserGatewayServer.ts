@@ -532,6 +532,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "POST",
+        rawExact("/api/mcp/resource-watch"),
+        ({ req, res }) => this.handleMcpResourceWatchAction(req, res),
+        json("resource watch action failed"),
+      ),
+      route(
+        "POST",
         rawExact("/api/queue/pause-interjection"),
         ({ req, res }) => this.handleQueuePauseInterjectionAction(req, res),
         json("queue pause interjection action failed"),
@@ -1722,6 +1728,48 @@ export class BrowserGatewayServer implements vscode.Disposable {
       result.ok ? 200 : 409,
       result.ok ? { ...result, snapshot: this.getSnapshot() } : result,
     );
+  }
+
+  private async handleMcpResourceWatchAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const body = (await readJsonBody(req)) as {
+      sessionId?: unknown;
+      projectId?: unknown;
+      server?: unknown;
+      uri?: unknown;
+      action?: unknown;
+    } | null;
+    const { sessionId, server, uri, action } = body ?? {};
+    if (
+      typeof sessionId !== "string" ||
+      !sessionId ||
+      typeof server !== "string" ||
+      !server ||
+      typeof uri !== "string" ||
+      !uri ||
+      (action !== "pause" &&
+        action !== "resume" &&
+        action !== "unwatch" &&
+        action !== "send-once")
+    ) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const projectId = this.resolveRequestedProjectId(body?.projectId, res);
+    if (!projectId || !this.validateSessionProject(sessionId, projectId, res))
+      return;
+    await this.chatViewProvider.handleMcpResourceWatchAction(sessionId, {
+      server,
+      uri,
+      action,
+    });
+    this.writeJson(res, 200, { ok: true, snapshot: this.getSnapshot() });
   }
 
   private async handleQueuePauseInterjectionAction(
