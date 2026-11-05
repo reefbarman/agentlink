@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "2724e3a137df6c5afebb58a151eabd1cfeec503a",
-  "createdAt": "2026-11-05T04:02:04.705Z",
+  "sourceSha": "898b518ee28f9e409c7d1e03ac7fb942533e4b16",
+  "createdAt": "2026-11-05T05:08:47.956Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.82.1",
-      "baselineRef": "v1.82.1",
-      "reserved": "1.82.1",
-      "commits": ["2724e3a137df6c5afebb58a151eabd1cfeec503a"],
+      "published": "1.82.2",
+      "baselineRef": "v1.82.2",
+      "reserved": "1.82.2",
+      "commits": ["898b518ee28f9e409c7d1e03ac7fb942533e4b16"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.82.2",
+      "version": "1.82.3",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.82.2",
+      "tag": "v1.82.3",
       "notes": [
         {
-          "sha": "2724e3a137df6c5afebb58a151eabd1cfeec503a",
-          "subject": "fix(ui): keep watch approval ahead of resource controls",
-          "summary": "Fixes the MCP Resource watches panel so pending watch approval cards stay visible and focused, and watches only appear in the panel after approval completes.",
+          "sha": "898b518ee28f9e409c7d1e03ac7fb942533e4b16",
+          "subject": "fix(ui): clarify MCP updates and show wake activity immediately",
+          "summary": "MCP resource updates now show as expandable tool-style blocks with the server, URI and untrusted-content notice, and activity appears immediately when an idle tab wakes before model output arrives.}]}</parameter>Wait — I need to ensure valid JSON output.{",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.82.1",
-      "baselineRef": "desktop-v0.82.1",
-      "reserved": "0.82.1",
-      "commits": ["2724e3a137df6c5afebb58a151eabd1cfeec503a"],
+      "published": "0.82.2",
+      "baselineRef": "desktop-v0.82.2",
+      "reserved": "0.82.2",
+      "commits": ["898b518ee28f9e409c7d1e03ac7fb942533e4b16"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.82.2",
+      "version": "0.82.3",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.82.2",
+      "tag": "desktop-v0.82.3",
       "notes": [
         {
-          "sha": "2724e3a137df6c5afebb58a151eabd1cfeec503a",
-          "subject": "fix(ui): keep watch approval ahead of resource controls",
-          "summary": "Fixes the MCP Resource watches panel so pending watch approval cards stay visible and focused, and watches only appear in the panel after approval completes.",
+          "sha": "898b518ee28f9e409c7d1e03ac7fb942533e4b16",
+          "subject": "fix(ui): clarify MCP updates and show wake activity immediately",
+          "summary": "MCP resource updates now show as expandable tool-style blocks with the server, URI and untrusted-content notice, and activity appears immediately when an idle tab wakes before model output arrives.}]}</parameter>Wait — I need to ensure valid JSON output.{",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.54.1",
-      "baselineRef": "assistant-v0.54.1",
-      "reserved": "0.54.1",
-      "commits": ["2724e3a137df6c5afebb58a151eabd1cfeec503a"],
+      "published": "0.54.2",
+      "baselineRef": "assistant-v0.54.2",
+      "reserved": "0.54.2",
+      "commits": ["898b518ee28f9e409c7d1e03ac7fb942533e4b16"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.54.2",
+      "version": "0.54.3",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.54.2",
+      "tag": "assistant-v0.54.3",
       "notes": [
         {
-          "sha": "2724e3a137df6c5afebb58a151eabd1cfeec503a",
-          "subject": "fix(ui): keep watch approval ahead of resource controls",
-          "summary": "Fixes the MCP Resource watches panel so pending watch approval cards stay visible and focused, and watches only appear in the panel after approval completes.",
+          "sha": "898b518ee28f9e409c7d1e03ac7fb942533e4b16",
+          "subject": "fix(ui): clarify MCP updates and show wake activity immediately",
+          "summary": "MCP resource updates now show as expandable tool-style blocks with the server, URI and untrusted-content notice, and activity appears immediately when an idle tab wakes before model output arrives.}]}</parameter>Wait — I need to ensure valid JSON output.{",
           "breaking": false
         }
       ]
@@ -127,6 +127,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Fixes the MCP Resource watches panel so pending watch approval cards stay visible and focused, and watches only appear in the panel after approval completes.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "898b518ee28f9e409c7d1e03ac7fb942533e4b16": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "MCP resource updates now show as expandable tool-style blocks with the server, URI and untrusted-content notice, and activity appears immediately when an idle tab wakes before model output arrives.}]}</parameter>Wait — I need to ensure valid JSON output.{",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

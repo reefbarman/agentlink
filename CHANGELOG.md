@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.82.3
+
 - Incoming MCP resource updates now use an expandable tool-style block with a mail icon, chevron, server label and structured source/content details. Content remains plain, untrusted external text. Idle wakes publish preparation activity immediately and show a live indicator before model output, instead of leaving a static update row or reactivating the previous final answer. VS Code and browser workspace chat share the behaviour.
 
 ## 1.82.2
