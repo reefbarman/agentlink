@@ -142,6 +142,7 @@ import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
 import {
   McpResourceWatchPanel,
+  McpResourcePendingIndicator,
   useMcpResourceWatchReveal,
 } from "../../shared/ui/McpResourceUpdates";
 import { SessionHandoffPanel } from "../../shared/ui/SessionHandoffPanel";
@@ -3062,6 +3063,7 @@ export function BrowserGatewayApp({
   }, [selectedInstanceId, selectedProjectId]);
 
   const foreground = snapshot?.session.foreground ?? null;
+  const [mcpWatchRevealVersion, setMcpWatchRevealVersion] = useState(0);
   const mcpWatchSessionId = foreground?.sessionId ?? "no-session";
   const mcpWatchIdentities = useMcpResourceWatchReveal(
     mcpWatchSessionId,
@@ -11203,13 +11205,38 @@ export function BrowserGatewayApp({
                 )}
               </div>
               <ChatActivityShelf
+                notification={
+                  !isAskAgentSelected &&
+                  !mobileReviewOpen &&
+                  foreground?.mcpResourceWatches?.some(
+                    (watch) => watch.pending,
+                  ) ? (
+                    <McpResourcePendingIndicator
+                      watches={foreground.mcpResourceWatches}
+                      disabled={Boolean(
+                        visibleApproval ||
+                        pendingFormElicitation ||
+                        pendingUrlElicitation,
+                      )}
+                      onOpen={() => {
+                        setMcpWatchPanels((panels) => ({
+                          ...panels,
+                          [mcpWatchSessionId]: true,
+                        }));
+                        setMcpWatchRevealVersion((version) => version + 1);
+                      }}
+                    />
+                  ) : null
+                }
                 revealKey={
                   visibleApproval?.id ??
                   pendingFormElicitation?.id ??
                   (!isAskAgentSelected ? pendingUrlElicitation?.id : null) ??
-                  (environmentPanelOpen ? "environment" : null) ??
+                  (environmentPanelOpen
+                    ? `environment:${mcpWatchRevealVersion}`
+                    : null) ??
                   (mcpWatchPanelOpen
-                    ? `mcp-watches:${mcpWatchSessionId}:${mcpWatchIdentities}`
+                    ? `mcp-watches:${mcpWatchSessionId}:${mcpWatchIdentities}:${mcpWatchRevealVersion}`
                     : null)
                 }
                 revealMinHeight={Math.max(
@@ -11226,6 +11253,7 @@ export function BrowserGatewayApp({
                   <McpResourceWatchPanel
                     key={foreground?.sessionId ?? "no-session"}
                     watches={foreground?.mcpResourceWatches ?? []}
+                    revealVersion={mcpWatchRevealVersion}
                     open={mcpWatchPanelOpen && !visibleApproval}
                     onClose={() =>
                       setMcpWatchPanels((panels) => ({

@@ -73,6 +73,7 @@ import {
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
 import {
   McpResourceWatchPanel,
+  McpResourcePendingIndicator,
   useMcpResourceWatchReveal,
 } from "../../shared/ui/McpResourceUpdates";
 import type { EditInForkRequest } from "../../shared/editInFork";
@@ -539,6 +540,7 @@ export function App({
   const [mcpWatchPanels, setMcpWatchPanels] = useState<Record<string, boolean>>(
     {},
   );
+  const [mcpWatchRevealVersion, setMcpWatchRevealVersion] = useState(0);
   const mcpWatchSessionId = state.chatState.sessionId ?? "no-session";
   const mcpWatchIdentities = useMcpResourceWatchReveal(
     mcpWatchSessionId,
@@ -4056,14 +4058,36 @@ export function App({
               />
             </MarkdownImageProvider>
             <ChatActivityShelf
+              notification={
+                state.mcpResourceWatches.some((watch) => watch.pending) ? (
+                  <McpResourcePendingIndicator
+                    watches={state.mcpResourceWatches}
+                    disabled={Boolean(
+                      globalApproval ||
+                      state.approvalRequest ||
+                      elicitation ||
+                      urlElicitation,
+                    )}
+                    onOpen={() => {
+                      setMcpWatchPanels((panels) => ({
+                        ...panels,
+                        [mcpWatchSessionId]: true,
+                      }));
+                      setMcpWatchRevealVersion((version) => version + 1);
+                    }}
+                  />
+                ) : null
+              }
               revealKey={
                 globalApproval?.id ??
                 state.approvalRequest?.id ??
                 elicitation?.id ??
                 urlElicitation?.id ??
-                (environmentPanelOpen ? "environment" : null) ??
+                (environmentPanelOpen
+                  ? `environment:${mcpWatchRevealVersion}`
+                  : null) ??
                 (mcpWatchPanelOpen
-                  ? `mcp-watches:${mcpWatchSessionId}:${mcpWatchIdentities}`
+                  ? `mcp-watches:${mcpWatchSessionId}:${mcpWatchIdentities}:${mcpWatchRevealVersion}`
                   : null)
               }
               revealMinHeight={Math.max(
@@ -4493,6 +4517,7 @@ export function App({
               <McpResourceWatchPanel
                 key={state.chatState.sessionId ?? "no-session"}
                 watches={state.mcpResourceWatches}
+                revealVersion={mcpWatchRevealVersion}
                 open={
                   mcpWatchPanelOpen && !state.approvalRequest && !globalApproval
                 }

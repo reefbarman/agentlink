@@ -5,6 +5,7 @@ import type {
   McpResourceWatchView,
 } from "@agentlink/protocol/chat-transcript";
 import {
+  McpResourcePendingIndicator,
   McpResourceWatchPanel,
   useMcpResourceWatchReveal,
 } from "../../shared/ui/McpResourceUpdates";
@@ -23,6 +24,37 @@ vi.mock("./components/mermaidRenderer", () => ({
   renderMermaid: vi.fn(async () => "<svg />"),
 }));
 afterEach(cleanup);
+
+it("counts pending watches and preserves pending state when opening controls", () => {
+  const onOpen = vi.fn();
+  const watch: McpResourceWatchView = {
+    server: "comms",
+    uri: "comms://one",
+    mode: "notify",
+    paused: false,
+    pending: true,
+  };
+  const watches = [
+    watch,
+    { ...watch, uri: "comms://two" },
+    { ...watch, uri: "comms://three", pending: false },
+  ];
+  const { container, rerender } = render(
+    <McpResourcePendingIndicator watches={watches} onOpen={onOpen} />,
+  );
+  const button = container.querySelector("button")!;
+  expect(button.textContent).toContain("2 MCP updates available");
+  fireEvent.click(button);
+  expect(onOpen).toHaveBeenCalledOnce();
+  expect(watches.filter((entry) => entry.pending)).toHaveLength(2);
+  rerender(
+    <McpResourcePendingIndicator watches={watches} onOpen={onOpen} disabled />,
+  );
+  fireEvent.click(button);
+  expect(onOpen).toHaveBeenCalledOnce();
+  rerender(<McpResourcePendingIndicator watches={[]} onOpen={onOpen} />);
+  expect(container.querySelector("button")).toBeNull();
+});
 const update = {
   id: "one",
   server: "external",

@@ -82,6 +82,38 @@ export function McpResourceUpdateCard({
   );
 }
 
+/** Metadata-only affordance: opening controls never reads or delivers content. */
+export function McpResourcePendingIndicator({
+  watches,
+  disabled,
+  onOpen,
+}: {
+  watches: readonly McpResourceWatchView[];
+  disabled?: boolean;
+  onOpen: () => void;
+}) {
+  const count = watches.filter((watch) => watch.pending).length;
+  if (!count) return null;
+  return (
+    <div role="status" aria-live="polite" aria-atomic="true">
+      <button
+        type="button"
+        class="mcp-resource-pending-indicator"
+        disabled={disabled}
+        title={
+          disabled
+            ? "Resolve the pending request before opening resource watches"
+            : "Open resource watches. This does not read content or start the agent."
+        }
+        onClick={disabled ? undefined : onOpen}
+      >
+        <i class="codicon codicon-mail" aria-hidden="true" />
+        {count} MCP {count === 1 ? "update" : "updates"} available
+      </button>
+    </div>
+  );
+}
+
 const permissions: Record<McpResourceWatchView["mode"], string> = {
   notify: "Notify only",
   deliver: "Deliver automatically",
@@ -94,14 +126,22 @@ export function McpResourceWatchPanel({
   onAction,
   open = watches.length > 0,
   onClose,
+  revealVersion = 0,
 }: {
   watches: McpResourceWatchView[];
+  /** Changes only for explicit open clicks, never for incoming notifications. */
+  revealVersion?: number;
   onAction: (request: McpResourceWatchAction) => void | Promise<void>;
   open?: boolean;
   onClose?: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    if (open && revealVersion)
+      panelRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [open, revealVersion]);
   if (!open) return null;
   const submit = async (
     watch: McpResourceWatchView,
@@ -124,6 +164,7 @@ export function McpResourceWatchPanel({
   return (
     <section
       class="pane-card mcp-resource-watches"
+      ref={panelRef}
       aria-label="MCP resource watches"
     >
       <PaneHeader

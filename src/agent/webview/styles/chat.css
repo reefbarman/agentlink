@@ -5227,6 +5227,38 @@ body.chat-activity-shelf-resizing * {
   outline: none;
 }
 
+/* Pinned Shelf notification, outside its resized and scrollable body. */
+.chat-activity-shelf-notification {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  padding: 3px 8px;
+}
+
+.mcp-resource-pending-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--vscode-focusBorder);
+  border-radius: 12px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.mcp-resource-pending-indicator:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.mcp-resource-pending-indicator:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
 /* External updates look like expandable tool results, without impersonating a tool call. */
 .mcp-resource-update {
   margin: 6px 0;

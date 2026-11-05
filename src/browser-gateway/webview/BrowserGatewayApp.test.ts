@@ -2027,6 +2027,20 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       source!.emit("snapshot", next);
     });
     expect(document.activeElement).toBe(approve);
+    watch.pending = true;
+    await act(async () => {
+      source!.emit("snapshot", next);
+    });
+    const blockedIndicator = (await screen.findByRole("button", {
+      name: "1 MCP update available",
+    })) as HTMLButtonElement;
+    expect(blockedIndicator.disabled).toBe(true);
+    fireEvent.click(blockedIndicator);
+    expect(document.activeElement).toBe(approve);
+    expect(
+      screen.queryByRole("region", { name: "MCP resource watches" }),
+    ).toBeNull();
+    watch.pending = false;
     next.ui.approval = null;
     await act(async () => {
       source!.emit("snapshot", next);
@@ -2042,6 +2056,10 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Hide resource watches" }),
     );
+    fireEvent.keyDown(handle, { key: "Home" });
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockClear();
+    watch.mode = "notify";
     watch.pending = true;
     await act(async () => {
       source!.emit("snapshot", next);
@@ -2049,6 +2067,46 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(
       screen.queryByRole("region", { name: "MCP resource watches" }),
     ).toBeNull();
+    const indicator = await screen.findByRole("button", {
+      name: "1 MCP update available",
+    });
+    const shelf = handle.parentElement as HTMLElement;
+    expect(shelf.contains(indicator)).toBe(false);
+    expect(shelf.style.height).toBe("12px");
+    fireEvent.click(indicator);
+    expect(
+      screen.getByRole("region", { name: "MCP resource watches" }),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(Number.parseFloat(shelf.style.height)).toBeGreaterThanOrEqual(220),
+    );
+    fireEvent.click(screen.getByTestId("trigger-environment"));
+    expect(await screen.findByText("Environment")).toBeTruthy();
+    const panel = screen.getByRole("region", { name: "MCP resource watches" });
+    const scroll = vi.fn();
+    panel.scrollIntoView = scroll;
+    fireEvent.keyDown(handle, { key: "Home" });
+    fireEvent.click(indicator);
+    await waitFor(() =>
+      expect(Number.parseFloat(shelf.style.height)).toBeGreaterThanOrEqual(320),
+    );
+    expect(scroll).toHaveBeenCalledWith({ block: "nearest" });
+    watch.pending = false;
+    await act(async () => {
+      source!.emit("snapshot", next);
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: /MCP update.*available/ }),
+      ).toBeNull(),
+    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          init?.method === "POST" &&
+          /\/api\/(mcp\/resource-watch|message)/.test(String(input)),
+      ),
+    ).toBe(false);
   });
 
   it("opens, hides and reopens resource-watch controls locally without requesting permission or sending a turn", async () => {

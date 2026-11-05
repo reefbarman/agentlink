@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Pending MCP resource updates now have a persistent, clickable indicator on the Chat Activity Shelf in VS Code and the browser remote view. It stays visible when watches are hidden or the Shelf is collapsed, without reopening the panel automatically. Clicking reveals watch controls only; Notify only still never reads/delivers content or wakes the agent. Pending approval/input cards retain focus and take precedence over opening watches.
+
 ## 1.82.3
 
 - Incoming MCP resource updates now use an expandable tool-style block with a mail icon, chevron, server label and structured source/content details. Content remains plain, untrusted external text. Idle wakes publish preparation activity immediately and show a live indicator before model output, instead of leaving a static update row or reactivating the previous final answer. VS Code and browser workspace chat share the behaviour.

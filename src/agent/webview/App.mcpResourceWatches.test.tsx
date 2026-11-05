@@ -26,6 +26,90 @@ function deliver(message: unknown): void {
 }
 
 describe("App resource-watch panel", () => {
+  it("keeps pending metadata visible outside a collapsed Shelf and opens watches only on click", async () => {
+    const vscodeApi = {
+      postMessage: vi.fn(),
+      getState: vi.fn(),
+      setState: vi.fn(),
+    };
+    render(<App vscodeApi={vscodeApi} />);
+    const watch = {
+      server: "comms",
+      uri: "comms://inbox/one",
+      mode: "notify",
+      paused: false,
+      pending: false,
+    };
+    deliver({ type: "mcpResourceWatches", watches: [watch] });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Hide resource watches" }),
+    );
+    const handle = screen.getByRole("separator", {
+      name: "Resize Chat Activity Shelf",
+    });
+    const shelf = handle.parentElement as HTMLElement;
+    vi.spyOn(shelf, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 588, 400, 12),
+    );
+    vi.spyOn(
+      document.querySelector(".chat-messages")!,
+      "getBoundingClientRect",
+    ).mockReturnValue(new DOMRect(0, 100, 400, 488));
+    fireEvent.keyDown(handle, { key: "Home" });
+    deliver({
+      type: "mcpResourceWatches",
+      watches: [{ ...watch, pending: true }],
+    });
+    const indicator = screen.getByRole("button", {
+      name: "1 MCP update available",
+    });
+    expect(shelf.contains(indicator)).toBe(false);
+    expect(shelf.style.height).toBe("12px");
+    expect(
+      screen.queryByRole("region", { name: "MCP resource watches" }),
+    ).toBeNull();
+    fireEvent.click(indicator);
+    expect(
+      screen.getByRole("region", { name: "MCP resource watches" }),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(Number.parseFloat(shelf.style.height)).toBeGreaterThanOrEqual(220),
+    );
+    // Environment must not mask an explicit reveal of already-open watches.
+    deliver({
+      type: "agentSlashCommandsUpdate",
+      commands: [{ name: "environment", source: "builtin", builtin: true }],
+    });
+    const composer = screen.getByPlaceholderText(/Message\.\.\./);
+    fireEvent.input(composer, { target: { value: "/environment" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    expect(screen.getByText("Environment")).toBeTruthy();
+    const panel = screen.getByRole("region", { name: "MCP resource watches" });
+    const scroll = vi.fn();
+    panel.scrollIntoView = scroll;
+    fireEvent.keyDown(handle, { key: "Home" });
+    expect(shelf.style.height).toBe("12px");
+    fireEvent.click(indicator);
+    await waitFor(() =>
+      expect(Number.parseFloat(shelf.style.height)).toBeGreaterThanOrEqual(320),
+    );
+    expect(scroll).toHaveBeenCalledWith({ block: "nearest" });
+    deliver({ type: "mcpResourceWatches", watches: [watch] });
+    expect(
+      screen.queryByRole("button", { name: /MCP update.*available/ }),
+    ).toBeNull();
+    expect(
+      document.querySelector(".chat-activity-shelf-notification"),
+    ).toBeNull();
+    expect(
+      vscodeApi.postMessage.mock.calls.some(
+        ([message]) =>
+          message.command === "agentSend" ||
+          message.type === "mcpResourceWatchAction",
+      ),
+    ).toBe(false);
+  });
+
   it("keeps the approval card visible and focused until the decision clears", () => {
     const vscodeApi = {
       postMessage: vi.fn(),
@@ -60,6 +144,28 @@ describe("App resource-watch panel", () => {
         },
       ],
     });
+    expect(
+      screen.queryByRole("region", { name: "MCP resource watches" }),
+    ).toBeNull();
+    expect(document.activeElement).toBe(approve);
+    deliver({
+      type: "mcpResourceWatches",
+      watches: [
+        {
+          server: "comms",
+          uri: "comms://inbox/one",
+          mode: "notify",
+          paused: false,
+          pending: true,
+        },
+      ],
+    });
+    const indicator = screen.getByRole("button", {
+      name: "1 MCP update available",
+    }) as HTMLButtonElement;
+    expect(indicator.disabled).toBe(true);
+    expect(document.activeElement).toBe(approve);
+    fireEvent.click(indicator);
     expect(
       screen.queryByRole("region", { name: "MCP resource watches" }),
     ).toBeNull();

@@ -61,6 +61,8 @@ function findMaximumHeight(shelf: HTMLElement): number {
 
 interface ChatActivityShelfProps {
   children: ComponentChildren;
+  /** Pinned outside the resizable/scrollable body, including when collapsed. */
+  notification?: ComponentChildren;
   className?: string;
   /** Identity of urgent content that should be revealed when it first appears. */
   revealKey?: string | number | null;
@@ -141,6 +143,7 @@ function measureResizeStart(shelf: HTMLElement): ResizeStart {
  */
 export function ChatActivityShelf({
   children,
+  notification,
   className,
   revealKey = null,
   revealMinHeight,
@@ -375,36 +378,41 @@ export function ChatActivityShelf({
         };
 
   return (
-    <div
-      class={`chat-activity-shelf${resizing ? " chat-activity-shelf-active" : ""}${className ? ` ${className}` : ""}`}
-      ref={shelfRef}
-      style={style}
-    >
+    <>
+      {notification && (
+        <div class="chat-activity-shelf-notification">{notification}</div>
+      )}
       <div
-        aria-label="Resize Chat Activity Shelf"
-        aria-orientation="horizontal"
-        aria-valuemax={Math.max(MIN_HEIGHT, window.innerHeight)}
-        aria-valuemin={MIN_HEIGHT}
-        aria-valuenow={Math.round(
-          effectiveMaxHeight ??
-            shelfRef.current?.getBoundingClientRect().height ??
-            MIN_HEIGHT,
-        )}
-        class="chat-activity-shelf-handle"
-        onDblClick={resetHeight}
-        onKeyDown={(event) =>
-          handleResizeKeyDown(event as unknown as KeyboardEvent)
-        }
-        onMouseDown={(event) =>
-          handleResizeStart(event as unknown as MouseEvent)
-        }
-        role="separator"
-        tabIndex={0}
-        title="Drag to resize the Chat Activity Shelf; double-click to reset"
-      />
-      <div class="chat-activity-shelf-content" ref={contentRef}>
-        {children}
+        class={`chat-activity-shelf${resizing ? " chat-activity-shelf-active" : ""}${className ? ` ${className}` : ""}`}
+        ref={shelfRef}
+        style={style}
+      >
+        <div
+          aria-label="Resize Chat Activity Shelf"
+          aria-orientation="horizontal"
+          aria-valuemax={Math.max(MIN_HEIGHT, window.innerHeight)}
+          aria-valuemin={MIN_HEIGHT}
+          aria-valuenow={Math.round(
+            effectiveMaxHeight ??
+              shelfRef.current?.getBoundingClientRect().height ??
+              MIN_HEIGHT,
+          )}
+          class="chat-activity-shelf-handle"
+          onDblClick={resetHeight}
+          onKeyDown={(event) =>
+            handleResizeKeyDown(event as unknown as KeyboardEvent)
+          }
+          onMouseDown={(event) =>
+            handleResizeStart(event as unknown as MouseEvent)
+          }
+          role="separator"
+          tabIndex={0}
+          title="Drag to resize the Chat Activity Shelf; double-click to reset"
+        />
+        <div class="chat-activity-shelf-content" ref={contentRef}>
+          {children}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
