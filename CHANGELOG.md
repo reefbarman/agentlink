@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.83.1
+
 - Send once now clears a Notify-only watch's pending indicator after successful context admission (or an empty successful read), without marking server mail read. Newer notifications, failed/denied reads and snapshots not yet admitted keep their notice, preventing stale badges without dropping concurrent updates. The host publishes the corrected state to both VS Code and browser remote chat.
 
 ## 1.83.0
