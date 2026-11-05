@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Browser resource-watch controls no longer stay disabled throughout a Send once agent turn. The action finishes after approval/read/queueing, allowing Pause and Stop watching while the agent is working or waiting for an answer. Later delivery-turn failures are reported through the normal session error UI, without automatic retries or broader watch permission.
+
 ## 1.83.1
 
 - Send once now clears a Notify-only watch's pending indicator after successful context admission (or an empty successful read), without marking server mail read. Newer notifications, failed/denied reads and snapshots not yet admitted keep their notice, preventing stale badges without dropping concurrent updates. The host publishes the corrected state to both VS Code and browser remote chat.

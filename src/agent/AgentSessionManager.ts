@@ -5517,9 +5517,19 @@ export class AgentSessionManager {
       session.status === "idle" &&
       !this.interactiveTurnsStarting.has(session.id)
     ) {
-      await this.sendMessage(session.id, "", session.mode, {
+      // The control action completes when the approved snapshot is queued, not
+      // when the resulting turn (which may ask a question) eventually ends.
+      void this.sendMessage(session.id, "", session.mode, {
         skipUserMessage: true,
         mcpResourceManual: true,
+      }).catch((error: unknown) => {
+        if (this.sessions.get(session.id) !== session) return;
+        this.recordAndEmitEvent(session.id, {
+          type: "error",
+          error: `MCP resource delivery failed: ${error instanceof Error ? error.message : String(error)}`,
+          retryable: false,
+          code: "mcp_resource_manual_failed",
+        });
       });
     }
   }

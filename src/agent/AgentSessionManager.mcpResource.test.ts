@@ -425,6 +425,61 @@ describe("AgentSessionManager MCP resource composition", () => {
     },
   );
 
+  it("finishes Send once control handling while the real turn is still preparing, so unwatch remains usable", async () => {
+    const f = fixture("notify");
+    await f.controller.watch(server, uri, "notify");
+    await vi.advanceTimersByTimeAsync(0);
+    f.onApprovalRequest.mockResolvedValueOnce("read-once");
+    f.send.mockRestore();
+    let finish!: () => void;
+    const preparing = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    vi.spyOn(f.seams, "sendMessageInQueue").mockReturnValueOnce(preparing);
+    const send = vi.spyOn(f.manager, "sendMessage");
+    await f.manager.handleMcpResourceWatchAction(f.session.id, {
+      server,
+      uri,
+      action: "send-once",
+    });
+    expect(f.manager.isTurnStarting(f.session.id)).toBe(true);
+    expect(send).toHaveBeenCalledOnce();
+    await f.manager.handleMcpResourceWatchAction(f.session.id, {
+      server,
+      uri,
+      action: "unwatch",
+    });
+    expect(f.manager.getMcpResourceWatches(f.session.id)).toEqual([]);
+    finish();
+    await send.mock.results[0].value;
+    expect(f.manager.isTurnStarting(f.session.id)).toBe(false);
+    await f.controller.dispose();
+  });
+
+  it("publishes a later manual-turn failure after accepting the control action", async () => {
+    const f = fixture("notify");
+    await f.controller.watch(server, uri, "notify");
+    await vi.advanceTimersByTimeAsync(0);
+    f.onApprovalRequest.mockResolvedValueOnce("read-once");
+    f.send.mockRejectedValueOnce(new Error("turn failed"));
+    await f.manager.handleMcpResourceWatchAction(f.session.id, {
+      server,
+      uri,
+      action: "send-once",
+    });
+    expect(f.record).toHaveBeenCalledWith(
+      f.session.id,
+      expect.objectContaining({
+        type: "error",
+        code: "mcp_resource_manual_failed",
+        error: "MCP resource delivery failed: turn failed",
+        retryable: false,
+      }),
+    );
+    expect(f.session.stageMcpResourceUpdates()).toBeDefined();
+    await f.controller.dispose();
+  });
+
   it("restages overlapping approved one-off reads without discarding the later arrival", async () => {
     const f = fixture("read-once");
     f.session.status = "streaming";
