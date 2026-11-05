@@ -140,7 +140,10 @@ import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBa
 
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
-import { McpResourceWatchPanel } from "../../shared/ui/McpResourceUpdates";
+import {
+  McpResourceWatchPanel,
+  useMcpResourceWatchReveal,
+} from "../../shared/ui/McpResourceUpdates";
 import { SessionHandoffPanel } from "../../shared/ui/SessionHandoffPanel";
 import type { SessionHandoffDraft } from "../../agent/sessionHandoff";
 import { ContextHealthPanel } from "../../shared/ui/ContextHealthPanel";
@@ -3059,6 +3062,22 @@ export function BrowserGatewayApp({
   }, [selectedInstanceId, selectedProjectId]);
 
   const foreground = snapshot?.session.foreground ?? null;
+  const mcpWatchSessionId = foreground?.sessionId ?? "no-session";
+  const mcpWatchIdentities = useMcpResourceWatchReveal(
+    mcpWatchSessionId,
+    foreground?.mcpResourceWatches ?? [],
+    () => {
+      if (!isAskAgentSelected)
+        setMcpWatchPanels((panels) => ({
+          ...panels,
+          [mcpWatchSessionId]: true,
+        }));
+    },
+  );
+  const mcpWatchPanelOpen =
+    !isAskAgentSelected &&
+    (mcpWatchPanels[mcpWatchSessionId] ??
+      (foreground?.mcpResourceWatches?.length ?? 0) > 0);
   const askAgentStatusRef = useRef(status);
   askAgentStatusRef.current = status;
   const askAgentForegroundMissing =
@@ -11188,11 +11207,15 @@ export function BrowserGatewayApp({
                   visibleApproval?.id ??
                   pendingFormElicitation?.id ??
                   (!isAskAgentSelected ? pendingUrlElicitation?.id : null) ??
-                  (environmentPanelOpen ? "environment" : null)
+                  (environmentPanelOpen ? "environment" : null) ??
+                  (mcpWatchPanelOpen
+                    ? `mcp-watches:${mcpWatchSessionId}:${mcpWatchIdentities}`
+                    : null)
                 }
                 revealMinHeight={Math.max(
                   approvalPanelHeight + 10,
                   environmentPanelOpen ? 320 : 0,
+                  mcpWatchPanelOpen ? 220 : 0,
                   pendingFormElicitation ||
                     (!isAskAgentSelected && pendingUrlElicitation)
                     ? 480
@@ -11203,10 +11226,7 @@ export function BrowserGatewayApp({
                   <McpResourceWatchPanel
                     key={foreground?.sessionId ?? "no-session"}
                     watches={foreground?.mcpResourceWatches ?? []}
-                    open={
-                      mcpWatchPanels[foreground?.sessionId ?? "no-session"] ??
-                      (foreground?.mcpResourceWatches?.length ?? 0) > 0
-                    }
+                    open={mcpWatchPanelOpen}
                     onClose={() =>
                       setMcpWatchPanels((panels) => ({
                         ...panels,

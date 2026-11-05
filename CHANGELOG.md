@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Adding a new MCP resource watch now reopens its panel and reveals the Chat Activity Shelf, even after dismissal. Routine notifications and status changes keep a dismissed panel closed. The behaviour is shared by VS Code and the browser remote view.
+
 ## 1.82.0
 
 - Resource watches now use a compact, themed panel with visible action buttons and a close control. Closing hides the panel without pausing watches or changing permissions; `/mcp-watches` reopens it locally in VS Code and the browser remote view, without starting an agent turn.

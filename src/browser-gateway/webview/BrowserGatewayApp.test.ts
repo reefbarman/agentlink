@@ -1951,6 +1951,83 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(notification.requestPermission).not.toHaveBeenCalled();
   });
 
+  it("reveals a new workspace watch after dismissal, but keeps routine updates hidden", async () => {
+    const next = createGroupedSnapshot();
+    const fallbackFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input, init) =>
+      String(input).includes("/api/ui-state")
+        ? jsonResponse(next)
+        : fallbackFetch(input, init),
+    );
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+    await selectWorkspaceTab();
+    await waitFor(() =>
+      expect(screen.getByTestId("current-model").textContent).toBe(
+        "claude-sonnet-4-6",
+      ),
+    );
+    fireEvent.click(screen.getByTestId("trigger-mcp-watches"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Hide resource watches" }),
+    );
+    const handle = screen.getByRole("separator", {
+      name: "Resize Chat Activity Shelf",
+    });
+    vi.spyOn(handle.parentElement!, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 588, 400, 12),
+    );
+    vi.spyOn(
+      document.querySelector(".chat-messages")!,
+      "getBoundingClientRect",
+    ).mockReturnValue(new DOMRect(0, 100, 400, 488));
+    fireEvent.keyDown(handle, { key: "Home" });
+    const source = MockEventSource.instances.find(
+      (entry) =>
+        entry.url.includes("instance-1") &&
+        entry.addEventListener.mock.calls.some(([name]) => name === "snapshot"),
+    );
+    expect(
+      source,
+      MockEventSource.instances.map((entry) => entry.url).join("\n"),
+    ).toBeTruthy();
+    const watch = {
+      server: "comms",
+      uri: "comms://inbox/one",
+      mode: "wake",
+      paused: false,
+      pending: false,
+    };
+    Object.assign(next.session.foreground, { mcpResourceWatches: [watch] });
+    await act(async () => {
+      source!.emit("snapshot", next);
+    });
+    expect(
+      await screen.findByRole("region", { name: "MCP resource watches" }),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        Number.parseFloat((handle.parentElement as HTMLElement).style.height),
+      ).toBeGreaterThanOrEqual(220),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Hide resource watches" }),
+    );
+    watch.pending = true;
+    await act(async () => {
+      source!.emit("snapshot", next);
+    });
+    expect(
+      screen.queryByRole("region", { name: "MCP resource watches" }),
+    ).toBeNull();
+  });
+
   it("opens, hides and reopens resource-watch controls locally without requesting permission or sending a turn", async () => {
     render(
       h(BrowserGatewayApp, {

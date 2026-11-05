@@ -1,8 +1,11 @@
+import {
+  McpResourceWatchPanel,
+  useMcpResourceWatchReveal,
+} from "../../shared/ui/McpResourceUpdates";
 import { afterEach, describe, expect, it, vi } from "vitest";
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 
-import { McpResourceWatchPanel } from "../../shared/ui/McpResourceUpdates";
 import type { McpResourceWatchView } from "@agentlink/protocol/chat-transcript";
 import { MessageBubble } from "./components/MessageBubble";
 import { TranscriptMessageList } from "./components/TranscriptMessageList";
@@ -28,6 +31,37 @@ const watch: McpResourceWatchView = {
 };
 
 describe("shared MCP resource UI", () => {
+  it("reveals additions per chat, but not routine updates or returning to an unchanged watch list", () => {
+    const onReveal = vi.fn();
+    function Probe({
+      sessionId,
+      watches,
+    }: {
+      sessionId: string;
+      watches: McpResourceWatchView[];
+    }) {
+      useMcpResourceWatchReveal(sessionId, watches, onReveal);
+      return null;
+    }
+    const { rerender } = render(<Probe sessionId="a" watches={[]} />);
+    rerender(<Probe sessionId="a" watches={[watch]} />);
+    expect(onReveal).toHaveBeenCalledOnce();
+    onReveal.mockClear();
+    rerender(
+      <Probe
+        sessionId="a"
+        watches={[{ ...watch, paused: false, pending: false }]}
+      />,
+    );
+    expect(onReveal).not.toHaveBeenCalled();
+    rerender(<Probe sessionId="b" watches={[watch]} />);
+    rerender(<Probe sessionId="a" watches={[watch]} />);
+    expect(onReveal).not.toHaveBeenCalled();
+    rerender(<Probe sessionId="a" watches={[]} />);
+    rerender(<Probe sessionId="a" watches={[watch]} />);
+    expect(onReveal).toHaveBeenCalledOnce();
+  });
+
   it("shows an expandable non-user card and never interprets content or URIs as links/images", () => {
     const text =
       '<img src="https://hostile.invalid/image"> ![fetch](https://hostile.invalid/image) [approve](javascript:alert(1))';

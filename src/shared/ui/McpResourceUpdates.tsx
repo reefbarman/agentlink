@@ -2,14 +2,35 @@ import type {
   McpResourceUpdateProvenance,
   McpResourceWatchView,
 } from "@agentlink/protocol/chat-transcript";
+import { useLayoutEffect, useRef, useState } from "preact/hooks";
 
 import { PaneHeader } from "./Panes";
-import { useState } from "preact/hooks";
 
 export interface McpResourceWatchAction {
   server: string;
   uri: string;
   action: "pause" | "resume" | "unwatch" | "send-once";
+}
+
+/** Reveal additions, not notifications or status changes, independently for each chat. */
+export function useMcpResourceWatchReveal(
+  sessionId: string,
+  watches: readonly McpResourceWatchView[],
+  onReveal: () => void,
+): string {
+  const previous = useRef(new Map<string, Set<string>>());
+  const identities = watches.map(({ server, uri }) =>
+    JSON.stringify([server, uri]),
+  );
+  const key = JSON.stringify(identities.sort());
+  useLayoutEffect(() => {
+    const before = previous.current.get(sessionId);
+    const current = new Set<string>(JSON.parse(key));
+    previous.current.set(sessionId, current);
+    if (before && [...current].some((identity) => !before.has(identity)))
+      onReveal();
+  }, [sessionId, key, onReveal]);
+  return key;
 }
 
 /** Resource content is plain text: no markdown, URI navigation or remote images. */

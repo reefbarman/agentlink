@@ -71,7 +71,10 @@ import {
   type ComposerMedia,
 } from "./components/InputArea";
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
-import { McpResourceWatchPanel } from "../../shared/ui/McpResourceUpdates";
+import {
+  McpResourceWatchPanel,
+  useMcpResourceWatchReveal,
+} from "../../shared/ui/McpResourceUpdates";
 import type { EditInForkRequest } from "../../shared/editInFork";
 import { SessionHandoffPanel } from "../../shared/ui/SessionHandoffPanel";
 import type { SessionHandoffDraft } from "../sessionHandoff";
@@ -536,6 +539,16 @@ export function App({
   const [mcpWatchPanels, setMcpWatchPanels] = useState<Record<string, boolean>>(
     {},
   );
+  const mcpWatchSessionId = state.chatState.sessionId ?? "no-session";
+  const mcpWatchIdentities = useMcpResourceWatchReveal(
+    mcpWatchSessionId,
+    state.mcpResourceWatches,
+    () => {
+      setMcpWatchPanels((panels) => ({ ...panels, [mcpWatchSessionId]: true }));
+    },
+  );
+  const mcpWatchPanelOpen =
+    mcpWatchPanels[mcpWatchSessionId] ?? state.mcpResourceWatches.length > 0;
   const [memoryPanelSnapshot, setMemoryPanelSnapshot] =
     useState<MemoryPanelSnapshot | null>(null);
   const [memoryPanelScope, setMemoryPanelScope] =
@@ -4048,11 +4061,15 @@ export function App({
                 state.approvalRequest?.id ??
                 elicitation?.id ??
                 urlElicitation?.id ??
-                (environmentPanelOpen ? "environment" : null)
+                (environmentPanelOpen ? "environment" : null) ??
+                (mcpWatchPanelOpen
+                  ? `mcp-watches:${mcpWatchSessionId}:${mcpWatchIdentities}`
+                  : null)
               }
               revealMinHeight={Math.max(
                 approvalPanelHeight + 10,
                 environmentPanelOpen ? 320 : 0,
+                mcpWatchPanelOpen ? 220 : 0,
                 elicitation || urlElicitation ? 480 : 0,
               )}
             >
@@ -4476,10 +4493,7 @@ export function App({
               <McpResourceWatchPanel
                 key={state.chatState.sessionId ?? "no-session"}
                 watches={state.mcpResourceWatches}
-                open={
-                  mcpWatchPanels[state.chatState.sessionId ?? "no-session"] ??
-                  state.mcpResourceWatches.length > 0
-                }
+                open={mcpWatchPanelOpen}
                 onClose={() =>
                   setMcpWatchPanels((panels) => ({
                     ...panels,
