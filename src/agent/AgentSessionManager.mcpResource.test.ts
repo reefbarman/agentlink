@@ -351,6 +351,80 @@ describe("AgentSessionManager MCP resource composition", () => {
     await f.controller.dispose();
   });
 
+  it.each([false, true])(
+    "clears a notify notice only on manual admission, preserving an in-flight update: %s",
+    async (newer) => {
+      const f = fixture("notify");
+      await f.controller.watch(server, uri, "notify");
+      await vi.advanceTimersByTimeAsync(0);
+      f.session.status = "streaming";
+      f.subscription.onUpdated(uri);
+      f.onApprovalRequest.mockResolvedValueOnce("read-once");
+      f.readResource.mockImplementationOnce(async () => {
+        if (newer) f.subscription.onUpdated(uri);
+        return { content: [{ type: "text", text: "manual snapshot" }] };
+      });
+      await f.manager.handleMcpResourceWatchAction(f.session.id, {
+        server,
+        uri,
+        action: "send-once",
+      });
+      expect(f.manager.getMcpResourceWatches(f.session.id)[0].pending).toBe(
+        true,
+      );
+      const abandoned = f.session.stageMcpResourceUpdates()!;
+      abandoned.release();
+      expect(f.manager.getMcpResourceWatches(f.session.id)[0].pending).toBe(
+        true,
+      );
+      const staged = f.session.stageMcpResourceUpdates()!;
+      expect(staged.commit()).toHaveLength(1);
+      expect(f.manager.getMcpResourceWatches(f.session.id)[0]).toMatchObject({
+        mode: "notify",
+        pending: newer,
+      });
+      expect(
+        f.record.mock.calls.some(
+          ([, event]) =>
+            event.type === "mcp_resource_watches" &&
+            event.watches[0]?.pending === newer,
+        ),
+      ).toBe(true);
+      expect(f.send).not.toHaveBeenCalled();
+      await f.controller.dispose();
+    },
+  );
+
+  it.each(["empty", "error", "oversized", "denied"])(
+    "handles a %s one-off read without falsely consuming a notify notice",
+    async (kind) => {
+      const f = fixture("notify");
+      await f.controller.watch(server, uri, "notify");
+      await vi.advanceTimersByTimeAsync(0);
+      f.subscription.onUpdated(uri);
+      f.onApprovalRequest.mockResolvedValueOnce(
+        kind === "denied" ? "deny" : "read-once",
+      );
+      f.readResource.mockResolvedValueOnce({
+        isError: kind === "error",
+        content: [
+          { type: "text", text: kind === "empty" ? "" : "x".repeat(65_537) },
+        ],
+      });
+      await f.manager.handleMcpResourceWatchAction(f.session.id, {
+        server,
+        uri,
+        action: "send-once",
+      });
+      expect(f.manager.getMcpResourceWatches(f.session.id)[0].pending).toBe(
+        kind !== "empty",
+      );
+      expect(f.session.stageMcpResourceUpdates()).toBeUndefined();
+      expect(f.send).not.toHaveBeenCalled();
+      await f.controller.dispose();
+    },
+  );
+
   it("restages overlapping approved one-off reads without discarding the later arrival", async () => {
     const f = fixture("read-once");
     f.session.status = "streaming";

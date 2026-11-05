@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Send once now clears a Notify-only watch's pending indicator after successful context admission (or an empty successful read), without marking server mail read. Newer notifications, failed/denied reads and snapshots not yet admitted keep their notice, preventing stale badges without dropping concurrent updates. The host publishes the corrected state to both VS Code and browser remote chat.
+
 ## 1.83.0
 
 - Pending MCP resource updates now have a persistent, clickable indicator on the Chat Activity Shelf in VS Code and the browser remote view. It stays visible when watches are hidden or the Shelf is collapsed, without reopening the panel automatically. Clicking reveals watch controls only; Notify only still never reads/delivers content or wakes the agent. Pending approval/input cards retain focus and take precedence over opening watches.

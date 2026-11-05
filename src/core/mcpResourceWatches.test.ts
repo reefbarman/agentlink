@@ -78,6 +78,57 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("McpResourceWatches consent and lifecycle", () => {
+  it("acknowledges only the captured notify notice, preserving later notifications even in the same millisecond", async () => {
+    const h = harness();
+    await h.add("resource://one", "notify");
+    h.update();
+    const stale = h.watches.captureNoticeAcknowledgement(
+      "server",
+      "resource://one",
+    )!;
+    h.update();
+    stale();
+    expect(h.watches.snapshot()[0].pending).toBe(true);
+    const current = h.watches.captureNoticeAcknowledgement(
+      "server",
+      "resource://one",
+    )!;
+    expect(h.watches.snapshot()[0].pending).toBe(true);
+    current();
+    expect(h.watches.snapshot()[0]).toMatchObject({
+      mode: "notify",
+      pending: false,
+    });
+    h.update();
+    current();
+    expect(h.watches.snapshot()[0].pending).toBe(true);
+    expect(h.options.read).not.toHaveBeenCalled();
+    await h.watches.dispose();
+  });
+
+  it("does not acknowledge a replacement watch or a changed grant", async () => {
+    const h = harness();
+    await h.add("resource://one", "notify");
+    h.update();
+    const acknowledge = h.watches.captureNoticeAcknowledgement(
+      "server",
+      "resource://one",
+    )!;
+    await h.watches.unwatch("server", "resource://one");
+    await h.add("resource://one", "notify");
+    h.update();
+    acknowledge();
+    expect(h.watches.snapshot()[0].pending).toBe(true);
+    const changed = h.watches.captureNoticeAcknowledgement(
+      "server",
+      "resource://one",
+    )!;
+    h.watches.pause("server", "resource://one");
+    changed();
+    expect(h.watches.snapshot()[0].pending).toBe(true);
+    await h.watches.dispose();
+  });
+
   it("does nothing before explicit consent and denial creates no subscription", async () => {
     const h = harness();
     const approval = deferred<McpResourceWatchMode | "deny">();

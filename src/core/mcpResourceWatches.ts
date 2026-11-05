@@ -81,6 +81,7 @@ interface Watch {
   reason?: string;
   updatedAt?: number;
   notice: boolean;
+  noticeRevision: number;
   dirty: boolean;
   pending?: McpResourceUpdate;
   delivered?: string;
@@ -163,6 +164,7 @@ export class McpResourceWatches {
         generation: ++this.generation,
         granted: false,
         notice: false,
+        noticeRevision: 0,
         dirty: false,
       };
       this.watches.set(key, watch);
@@ -420,6 +422,32 @@ export class McpResourceWatches {
     );
   }
 
+  /** Capture before an explicit read; commit only once its snapshot is consumed. */
+  captureNoticeAcknowledgement(
+    server: string,
+    uri: string,
+  ): (() => void) | undefined {
+    this.refresh();
+    const watch = this.watches.get(this.key(server, uri));
+    if (!watch?.granted || watch.mode !== "notify" || !watch.notice)
+      return undefined;
+    const { generation, noticeRevision } = watch;
+    return () => {
+      this.refresh();
+      if (
+        this.disposed ||
+        this.watches.get(this.key(server, uri)) !== watch ||
+        watch.generation !== generation ||
+        watch.noticeRevision !== noticeRevision ||
+        !watch.notice
+      )
+        return;
+      watch.notice = false;
+      watch.dirty = false;
+      this.changed();
+    };
+  }
+
   private state(watch: Watch): McpResourceWatchState {
     return {
       server: watch.server,
@@ -514,6 +542,7 @@ export class McpResourceWatches {
             if (!current() || !watch?.granted) return;
             watch.updatedAt = this.now();
             watch.notice = true;
+            watch.noticeRevision++;
             watch.dirty = true;
             this.changed();
             if (subscription.ready) this.pump(watch);

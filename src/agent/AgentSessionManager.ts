@@ -1010,6 +1010,7 @@ export class AgentSessionManager {
       uri: string;
       text: string;
       receivedAt: number;
+      acknowledgeNotice?: () => void;
     }>
   >();
   private readonly mcpResourceWakeStarting = new Map<
@@ -5337,7 +5338,12 @@ export class AgentSessionManager {
       }
       const batch = pendingWake ?? controller.reservePending({ idle: false });
       if (!batch && !manual?.length) return undefined;
-      const updates = [...(manual ?? []), ...(batch?.updates ?? [])];
+      const updates = [
+        ...(manual ?? []).map(
+          ({ acknowledgeNotice: _acknowledgeNotice, ...update }) => update,
+        ),
+        ...(batch?.updates ?? []),
+      ];
       let committed = false;
       const isValid = () =>
         !committed &&
@@ -5355,7 +5361,10 @@ export class AgentSessionManager {
           const events = updates.map((update) =>
             session.addMcpResourceUpdate(update),
           );
-          if (manual) this.manualMcpResourceUpdates.delete(session.id);
+          if (manual) {
+            this.manualMcpResourceUpdates.delete(session.id);
+            for (const update of manual) update.acknowledgeNotice?.();
+          }
           if (batch) controller.commitPending(batch);
           if (pendingWake === batch)
             this.mcpResourceWakeStarting.delete(session.id);
@@ -5466,6 +5475,9 @@ export class AgentSessionManager {
       config !== JSON.stringify(hub.getServerConfig(server))
     )
       return;
+    const acknowledgeNotice = this.mcpResourceWatches
+      .get(session.id)
+      ?.captureNoticeAcknowledgement(server, uri);
     const result = await hub.readResource(server, uri, {
       sessionContext: this.getMcpSessionContext(session.id),
       interactive: false,
@@ -5483,7 +5495,11 @@ export class AgentSessionManager {
       .filter((part) => part.type === "text")
       .map((part) => part.text)
       .join("\n");
-    if (!text.trim() || Buffer.byteLength(text, "utf8") > 65_536) return;
+    if (Buffer.byteLength(text, "utf8") > 65_536) return;
+    if (!text.trim()) {
+      acknowledgeNotice?.();
+      return;
+    }
     const queued = this.manualMcpResourceUpdates.get(session.id) ?? [];
     if (queued.length >= 4) return;
     this.manualMcpResourceUpdates.set(session.id, [
@@ -5494,6 +5510,7 @@ export class AgentSessionManager {
         uri,
         text,
         receivedAt: Date.now(),
+        acknowledgeNotice,
       },
     ]);
     if (
