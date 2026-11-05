@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.82.0
+
 - Resource watches now use a compact, themed panel with visible action buttons and a close control. Closing hides the panel without pausing watches or changing permissions; `/mcp-watches` reopens it locally in VS Code and the browser remote view, without starting an agent turn.
 
 ## 1.81.0

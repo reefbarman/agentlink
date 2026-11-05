@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "2a3c18508b684dbed87f3234e237a7da6886dfa9",
-  "createdAt": "2026-11-05T02:11:33.644Z",
+  "sourceSha": "5704e8ded4f4120ddb7594663c42a1aba9cd6bad",
+  "createdAt": "2026-11-05T02:48:00.941Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,140 +10,108 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.80.1",
-      "baselineRef": "v1.80.1",
-      "reserved": "1.80.1",
-      "commits": ["2a3c18508b684dbed87f3234e237a7da6886dfa9"],
+      "published": "1.81.0",
+      "baselineRef": "v1.81.0",
+      "reserved": "1.81.0",
+      "commits": ["5704e8ded4f4120ddb7594663c42a1aba9cd6bad"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.81.0",
+      "version": "1.82.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.81.0",
+      "tag": "v1.82.0",
       "notes": [
         {
-          "sha": "2a3c18508b684dbed87f3234e237a7da6886dfa9",
-          "subject": "feat(mcp): add session-approved resource delivery and idle waking",
-          "summary": "VS Code chats and the browser remote view can now watch an exact MCP resource per session, with approval-gated notifications, automatic delivery and idle waking, plus new SDK resource-subscription and read-option APIs.",
+          "sha": "5704e8ded4f4120ddb7594663c42a1aba9cd6bad",
+          "subject": "fix(ui): make resource watches compact and dismissible",
+          "summary": "Resource watches panel is now compact and dismissible, and a new local /mcp-watches command reopens per-chat watch controls in VS Code and browser chat without starting an agent turn.“}]}</parameter>assistant to=json_schema_validator code<|message|>I need to emit valid JSON only; correcting the outp",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.80.1",
-      "baselineRef": "desktop-v0.80.1",
-      "reserved": "0.80.1",
-      "commits": ["2a3c18508b684dbed87f3234e237a7da6886dfa9"],
+      "published": "0.81.0",
+      "baselineRef": "desktop-v0.81.0",
+      "reserved": "0.81.0",
+      "commits": ["5704e8ded4f4120ddb7594663c42a1aba9cd6bad"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.81.0",
+      "version": "0.82.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.81.0",
+      "tag": "desktop-v0.82.0",
       "notes": [
         {
-          "sha": "2a3c18508b684dbed87f3234e237a7da6886dfa9",
-          "subject": "feat(mcp): add session-approved resource delivery and idle waking",
-          "summary": "VS Code chats and the browser remote view can now watch an exact MCP resource per session, with approval-gated notifications, automatic delivery and idle waking, plus new SDK resource-subscription and read-option APIs.",
+          "sha": "5704e8ded4f4120ddb7594663c42a1aba9cd6bad",
+          "subject": "fix(ui): make resource watches compact and dismissible",
+          "summary": "Resource watches panel is now compact and dismissible, and a new local /mcp-watches command reopens per-chat watch controls in VS Code and browser chat without starting an agent turn.“}]}</parameter>assistant to=json_schema_validator code<|message|>I need to emit valid JSON only; correcting the outp",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.57.0",
-      "baselineRef": "cli-v0.57.0",
-      "reserved": "0.57.0",
-      "commits": ["2a3c18508b684dbed87f3234e237a7da6886dfa9"],
+      "published": "0.58.0",
+      "baselineRef": "cli-v0.58.0",
+      "reserved": "0.58.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.58.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.58.0",
-      "notes": [
-        {
-          "sha": "2a3c18508b684dbed87f3234e237a7da6886dfa9",
-          "subject": "feat(mcp): add session-approved resource delivery and idle waking",
-          "summary": "VS Code chats and the browser remote view can now watch an exact MCP resource per session, with approval-gated notifications, automatic delivery and idle waking, plus new SDK resource-subscription and read-option APIs.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.47.0",
-      "baselineRef": "sdk-v0.47.0",
-      "reserved": "0.47.0",
-      "commits": ["2a3c18508b684dbed87f3234e237a7da6886dfa9"],
+      "published": "0.48.0",
+      "baselineRef": "sdk-v0.48.0",
+      "reserved": "0.48.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.48.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.48.0",
-      "notes": [
-        {
-          "sha": "2a3c18508b684dbed87f3234e237a7da6886dfa9",
-          "subject": "feat(mcp): add session-approved resource delivery and idle waking",
-          "summary": "VS Code chats and the browser remote view can now watch an exact MCP resource per session, with approval-gated notifications, automatic delivery and idle waking, plus new SDK resource-subscription and read-option APIs.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.52.1",
-      "baselineRef": "assistant-v0.52.1",
-      "reserved": "0.52.1",
-      "commits": ["2a3c18508b684dbed87f3234e237a7da6886dfa9"],
+      "published": "0.53.0",
+      "baselineRef": "assistant-v0.53.0",
+      "reserved": "0.53.0",
+      "commits": ["5704e8ded4f4120ddb7594663c42a1aba9cd6bad"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.53.0",
+      "version": "0.54.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.53.0",
+      "tag": "assistant-v0.54.0",
       "notes": [
         {
-          "sha": "2a3c18508b684dbed87f3234e237a7da6886dfa9",
-          "subject": "feat(mcp): add session-approved resource delivery and idle waking",
-          "summary": "VS Code chats and the browser remote view can now watch an exact MCP resource per session, with approval-gated notifications, automatic delivery and idle waking, plus new SDK resource-subscription and read-option APIs.",
+          "sha": "5704e8ded4f4120ddb7594663c42a1aba9cd6bad",
+          "subject": "fix(ui): make resource watches compact and dismissible",
+          "summary": "Resource watches panel is now compact and dismissible, and a new local /mcp-watches command reopens per-chat watch controls in VS Code and browser chat without starting an agent turn.“}]}</parameter>assistant to=json_schema_validator code<|message|>I need to emit valid JSON only; correcting the outp",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "dc18268a0b7701ea51574413571eaee5533d01b3": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "MCP prompt argument completions now show a labelled popup with the argument description and required status, refresh when the cursor moves into a pasted command, and support Up/Down, Tab/Enter and Escape without losing the rest of the command.\"}]}",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "2a3c18508b684dbed87f3234e237a7da6886dfa9": {
+    "5704e8ded4f4120ddb7594663c42a1aba9cd6bad": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "VS Code chats and the browser remote view can now watch an exact MCP resource per session, with approval-gated notifications, automatic delivery and idle waking, plus new SDK resource-subscription and read-option APIs.",
-      "coverage": "partial",
+      "summary": "Resource watches panel is now compact and dismissible, and a new local /mcp-watches command reopens per-chat watch controls in VS Code and browser chat without starting an agent turn.“}]}</parameter>assistant to=json_schema_validator code<|message|>I need to emit valid JSON only; correcting the outp",
+      "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     }
