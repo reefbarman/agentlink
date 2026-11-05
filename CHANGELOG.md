@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Resource watches now use a compact, themed panel with visible action buttons and a close control. Closing hides the panel without pausing watches or changing permissions; `/mcp-watches` reopens it locally in VS Code and the browser remote view, without starting an agent turn.
+
 ## 1.81.0
 
 - MCP resource updates can now notify, deliver content to, or wake an idle VS Code workspace chat after an explicit session-scoped **MCP resource watch** approval. `watch_mcp_resource` and `unwatch_mcp_resource` use standard subscriptions on both MCP protocol versions, with exact-resource read permission, bounded automatic turns, rate/loop limits and revocation controls in the Chat Activity Shelf. Automatic reads never start sign-in or server-input UI. Updates keep distinct untrusted MCP provenance in the transcript and cannot become user instructions or canonical user requests during condensation. The browser remote view shares the same approval, Shelf and transcript behaviour; tool and prompt approvals do not grant notification or wake permission.

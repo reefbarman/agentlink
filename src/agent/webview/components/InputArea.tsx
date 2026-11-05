@@ -202,6 +202,7 @@ const LOCAL_BUILTIN_COMMANDS = new Set([
   "environment",
   "memory",
   "fleet",
+  "mcp-watches",
 ]);
 
 /** Device sources offered by the composer's local media picker buttons. */
@@ -1066,6 +1067,7 @@ export function InputArea({
     "help",
     "skills",
     "mcp",
+    "mcp-watches",
     "mcp-refresh",
     "worktree",
     "pair",

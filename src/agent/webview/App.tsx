@@ -533,6 +533,9 @@ export function App({
     useState<AgentPluginManagerSnapshot | null>(null);
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
   const [environmentPanelOpen, setEnvironmentPanelOpen] = useState(false);
+  const [mcpWatchPanels, setMcpWatchPanels] = useState<Record<string, boolean>>(
+    {},
+  );
   const [memoryPanelSnapshot, setMemoryPanelSnapshot] =
     useState<MemoryPanelSnapshot | null>(null);
   const [memoryPanelScope, setMemoryPanelScope] =
@@ -3137,6 +3140,12 @@ export function App({
         case "fleet":
           setShowFleetRequest((request) => request + 1);
           break;
+        case "mcp-watches":
+          setMcpWatchPanels((panels) => ({
+            ...panels,
+            [stateRef.current.sessionId ?? "no-session"]: true,
+          }));
+          break;
         case "environment":
           setEnvironmentPanelOpen(true);
           setMemoryPanelOpen(false);
@@ -4467,6 +4476,16 @@ export function App({
               <McpResourceWatchPanel
                 key={state.chatState.sessionId ?? "no-session"}
                 watches={state.mcpResourceWatches}
+                open={
+                  mcpWatchPanels[state.chatState.sessionId ?? "no-session"] ??
+                  state.mcpResourceWatches.length > 0
+                }
+                onClose={() =>
+                  setMcpWatchPanels((panels) => ({
+                    ...panels,
+                    [state.chatState.sessionId ?? "no-session"]: false,
+                  }))
+                }
                 onAction={(request) =>
                   vscodeApi.postMessage({
                     type: "mcpResourceWatchAction",

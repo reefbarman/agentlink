@@ -232,6 +232,13 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     builtin: true,
   },
   {
+    name: "mcp-watches",
+    description:
+      "Show this chat's MCP resource watches (hiding the panel keeps watches active)",
+    source: "builtin",
+    builtin: true,
+  },
+  {
     name: "mcp-config",
     description: "Open MCP server config (status-only in Browser Ask Agent)",
     source: "builtin",

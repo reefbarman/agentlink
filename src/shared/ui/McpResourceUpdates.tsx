@@ -3,6 +3,7 @@ import type {
   McpResourceWatchView,
 } from "@agentlink/protocol/chat-transcript";
 
+import { PaneHeader } from "./Panes";
 import { useState } from "preact/hooks";
 
 export interface McpResourceWatchAction {
@@ -58,13 +59,17 @@ const permissions: Record<McpResourceWatchView["mode"], string> = {
 export function McpResourceWatchPanel({
   watches,
   onAction,
+  open = watches.length > 0,
+  onClose,
 }: {
   watches: McpResourceWatchView[];
   onAction: (request: McpResourceWatchAction) => void | Promise<void>;
+  open?: boolean;
+  onClose?: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  if (!watches.length) return null;
+  if (!open) return null;
   const submit = async (
     watch: McpResourceWatchView,
     action: McpResourceWatchAction["action"],
@@ -84,22 +89,50 @@ export function McpResourceWatchPanel({
     }
   };
   return (
-    <section class="mcp-resource-watches" aria-label="MCP resource watches">
-      <strong>MCP resource watches</strong>
+    <section
+      class="pane-card mcp-resource-watches"
+      aria-label="MCP resource watches"
+    >
+      <PaneHeader
+        title={`Resource watches (${watches.length})`}
+        right={
+          onClose && (
+            <button
+              type="button"
+              class="icon-button"
+              aria-label="Hide resource watches"
+              title="Hide panel. Watches stay active. Reopen with /mcp-watches."
+              onClick={onClose}
+            >
+              <i class="codicon codicon-close" aria-hidden="true" />
+            </button>
+          )
+        }
+      />
+      {!watches.length && (
+        <div class="mcp-resource-watches-empty">
+          No resource watches in this chat.
+        </div>
+      )}
       {watches.map((watch) => (
         <div
           key={JSON.stringify([watch.server, watch.uri])}
-          style={{ padding: "6px 0", overflowWrap: "anywhere" }}
+          class="mcp-resource-watch"
         >
-          <div>
-            <strong>{watch.server}</strong> / {watch.uri}
+          <div class="mcp-resource-watch-heading">
+            <strong>{watch.server}</strong>
+            {watch.pending && (
+              <span class="mcp-resource-watch-pending">Update pending</span>
+            )}
           </div>
-          <div>
+          <code class="mcp-resource-watch-uri" title={watch.uri}>
+            {watch.uri}
+          </code>
+          <div class="mcp-resource-watch-status">
             {permissions[watch.mode]} · {watch.paused ? "Paused" : "Watching"}
-            {watch.pending ? " · 1 update pending" : ""}
           </div>
           {watch.reason && <div role="status">{watch.reason}</div>}
-          <div class="queue-item-actions">
+          <div class="mcp-resource-watch-actions">
             <button
               type="button"
               disabled={busy !== null}
@@ -127,6 +160,10 @@ export function McpResourceWatchPanel({
           </div>
         </div>
       ))}
+      <div class="mcp-resource-watches-hint">
+        Hide this panel without stopping watches. Reopen with{" "}
+        <code>/mcp-watches</code>.
+      </div>
       {error && <div role="alert">{error}</div>}
     </section>
   );

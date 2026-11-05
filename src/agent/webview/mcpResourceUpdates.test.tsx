@@ -94,7 +94,7 @@ describe("shared MCP resource UI", () => {
         />,
       );
       expect(getByText(/Deliver and wake/)).toBeTruthy();
-      expect(getByText(/1 update pending/)).toBeTruthy();
+      expect(getByText("Update pending")).toBeTruthy();
       expect(getByText(watch.reason!)).toBeTruthy();
       fireEvent.click(getByRole("button", { name: label }));
       await waitFor(() =>
@@ -106,6 +106,41 @@ describe("shared MCP resource UI", () => {
       );
     },
   );
+
+  it("hides and reopens controls without changing a watch's permission", () => {
+    const onAction = vi.fn();
+    const onClose = vi.fn();
+    const { getByRole, queryByRole, rerender } = render(
+      <McpResourceWatchPanel
+        watches={[watch]}
+        onAction={onAction}
+        onClose={onClose}
+        open
+      />,
+    );
+    fireEvent.click(getByRole("button", { name: "Hide resource watches" }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onAction).not.toHaveBeenCalled();
+    rerender(
+      <McpResourceWatchPanel
+        watches={[watch]}
+        onAction={onAction}
+        onClose={onClose}
+        open={false}
+      />,
+    );
+    expect(queryByRole("region", { name: "MCP resource watches" })).toBeNull();
+    rerender(
+      <McpResourceWatchPanel
+        watches={[watch]}
+        onAction={onAction}
+        onClose={onClose}
+        open
+      />,
+    );
+    expect(getByRole("button", { name: "Stop watching" })).toBeTruthy();
+    expect(onAction).not.toHaveBeenCalled();
+  });
 
   it("reports failed actions without claiming the watch changed", async () => {
     const { getByRole, getByText } = render(

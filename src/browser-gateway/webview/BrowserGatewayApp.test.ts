@@ -191,6 +191,15 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
         "button",
         {
           type: "button",
+          "data-testid": "trigger-mcp-watches",
+          onClick: () => onExecuteBuiltinCommand?.("mcp-watches", ""),
+        },
+        "Trigger /mcp-watches",
+      ),
+      h(
+        "button",
+        {
+          type: "button",
           "data-testid": "trigger-plugins",
           onClick: () => onExecuteBuiltinCommand?.("plugins", ""),
         },
@@ -1940,6 +1949,41 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       await screen.findByRole("dialog", { name: "Browser settings" }),
     ).toBeTruthy();
     expect(notification.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it("opens, hides and reopens resource-watch controls locally without requesting permission or sending a turn", async () => {
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+    await selectWorkspaceTab();
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockClear();
+    fireEvent.click(await screen.findByTestId("trigger-mcp-watches"));
+    expect(
+      await screen.findByText("No resource watches in this chat."),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Hide resource watches" }),
+    );
+    expect(
+      screen.queryByRole("region", { name: "MCP resource watches" }),
+    ).toBeNull();
+    fireEvent.click(screen.getByTestId("trigger-mcp-watches"));
+    expect(
+      screen.getByRole("region", { name: "MCP resource watches" }),
+    ).toBeTruthy();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          init?.method === "POST" &&
+          /\/api\/(mcp\/resource-watch|message)/.test(String(input)),
+      ),
+    ).toBe(false);
   });
 
   it("opens workspace environment details in the Activity Shelf", async () => {

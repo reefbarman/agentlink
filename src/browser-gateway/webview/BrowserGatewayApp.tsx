@@ -2340,6 +2340,9 @@ export function BrowserGatewayApp({
     useState("");
   const [askAgentHandoffPending, setAskAgentHandoffPending] = useState(false);
   const [showMcpStatus, setShowMcpStatus] = useState(false);
+  const [mcpWatchPanels, setMcpWatchPanels] = useState<Record<string, boolean>>(
+    {},
+  );
   const [environmentPanelOpen, setEnvironmentPanelOpen] = useState(false);
   const [providerUsage, setProviderUsage] =
     useState<ProviderUsageSnapshot | null>(null);
@@ -8195,6 +8198,12 @@ export function BrowserGatewayApp({
       case "fleet":
         setShowFleetRequest((request) => request + 1);
         return;
+      case "mcp-watches":
+        setMcpWatchPanels((panels) => ({
+          ...panels,
+          [foreground?.sessionId ?? "no-session"]: true,
+        }));
+        return;
       case "handoff":
         if (!isAskAgentSelected) prepareSessionHandoff();
         return;
@@ -11190,11 +11199,22 @@ export function BrowserGatewayApp({
                     : 0,
                 )}
               >
-                {!isAskAgentSelected && foreground && !mobileReviewOpen && (
+                {!isAskAgentSelected && !mobileReviewOpen && (
                   <McpResourceWatchPanel
-                    key={foreground.sessionId}
-                    watches={foreground.mcpResourceWatches ?? []}
+                    key={foreground?.sessionId ?? "no-session"}
+                    watches={foreground?.mcpResourceWatches ?? []}
+                    open={
+                      mcpWatchPanels[foreground?.sessionId ?? "no-session"] ??
+                      (foreground?.mcpResourceWatches?.length ?? 0) > 0
+                    }
+                    onClose={() =>
+                      setMcpWatchPanels((panels) => ({
+                        ...panels,
+                        [foreground?.sessionId ?? "no-session"]: false,
+                      }))
+                    }
                     onAction={async (request) => {
+                      if (!foreground) return;
                       const origin = { ...snapshotOriginRef.current };
                       const response = await fetch(
                         buildApiPath("/api/mcp/resource-watch"),

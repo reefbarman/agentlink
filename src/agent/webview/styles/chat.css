@@ -5227,6 +5227,102 @@ body.chat-activity-shelf-resizing * {
   outline: none;
 }
 
+/* Shared resource-watch controls for the VS Code and browser Shelf. */
+.mcp-resource-watches {
+  flex-shrink: 0;
+  margin: 4px 0 8px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+  border-radius: 6px;
+  background: var(
+    --vscode-editorWidget-background,
+    var(--vscode-editor-background)
+  );
+}
+
+.mcp-resource-watches .pane-header {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.mcp-resource-watch {
+  padding: 8px 10px;
+  border-top: 1px solid var(--vscode-panel-border);
+}
+
+.mcp-resource-watch-heading,
+.mcp-resource-watch-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mcp-resource-watch-heading {
+  justify-content: space-between;
+}
+
+.mcp-resource-watch-pending {
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  color: var(--vscode-badge-foreground);
+  background: var(--vscode-badge-background);
+}
+
+.mcp-resource-watch-uri {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.mcp-resource-watch-status {
+  margin-top: 3px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.mcp-resource-watch-actions {
+  margin-top: 7px;
+}
+
+.mcp-resource-watch-actions button {
+  padding: 3px 8px;
+  border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
+  border-radius: 4px;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mcp-resource-watch-actions button:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.mcp-resource-watch-actions button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.mcp-resource-watch-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.mcp-resource-watches-hint,
+.mcp-resource-watches-empty {
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
 .queue-item-actions {
   display: flex;
   align-items: center;
