@@ -1,6 +1,6 @@
 {
   "name": "@agentlink/core",
-  "version": "0.47.0",
+  "version": "0.48.0",
   "private": true,
   "description": "Portable AgentLink conversational engine and host contracts",
   "license": "MIT",
@@ -643,7 +643,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@agentlink/protocol": "0.47.0",
+    "@agentlink/protocol": "0.48.0",
     "ajv": "8.20.0",
     "openai": "7.43.0",
     "undici": "8.12.3"

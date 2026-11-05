@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "dc18268a0b7701ea51574413571eaee5533d01b3",
-  "createdAt": "2026-11-04T23:22:14.825Z",
+  "sourceSha": "2a3c18508b684dbed87f3234e237a7da6886dfa9",
+  "createdAt": "2026-11-05T02:11:33.644Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.80.0",
-      "baselineRef": "v1.80.0",
-      "reserved": "1.80.0",
-      "commits": ["dc18268a0b7701ea51574413571eaee5533d01b3"],
+      "published": "1.80.1",
+      "baselineRef": "v1.80.1",
+      "reserved": "1.80.1",
+      "commits": ["2a3c18508b684dbed87f3234e237a7da6886dfa9"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.80.1",
-      "effectiveBump": "patch",
+      "version": "1.81.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.80.1",
+      "tag": "v1.81.0",
       "notes": [
         {
-          "sha": "dc18268a0b7701ea51574413571eaee5533d01b3",
-          "subject": "fix(mcp): refresh and clarify prompt argument completions",
-          "summary": "MCP prompt argument completions now show a labelled popup with the argument description and required status, refresh when the cursor moves into a pasted command, and support Up/Down, Tab/Enter and Escape without losing the rest of the command.\"}]}",
+          "sha": "2a3c18508b684dbed87f3234e237a7da6886dfa9",
+          "subject": "feat(mcp): add session-approved resource delivery and idle waking",
+          "summary": "VS Code chats and the browser remote view can now watch an exact MCP resource per session, with approval-gated notifications, automatic delivery and idle waking, plus new SDK resource-subscription and read-option APIs.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.80.0",
-      "baselineRef": "desktop-v0.80.0",
-      "reserved": "0.80.0",
-      "commits": ["dc18268a0b7701ea51574413571eaee5533d01b3"],
+      "published": "0.80.1",
+      "baselineRef": "desktop-v0.80.1",
+      "reserved": "0.80.1",
+      "commits": ["2a3c18508b684dbed87f3234e237a7da6886dfa9"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.80.1",
-      "effectiveBump": "patch",
+      "version": "0.81.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.80.1",
+      "tag": "desktop-v0.81.0",
       "notes": [
         {
-          "sha": "dc18268a0b7701ea51574413571eaee5533d01b3",
-          "subject": "fix(mcp): refresh and clarify prompt argument completions",
-          "summary": "MCP prompt argument completions now show a labelled popup with the argument description and required status, refresh when the cursor moves into a pasted command, and support Up/Down, Tab/Enter and Escape without losing the rest of the command.\"}]}",
+          "sha": "2a3c18508b684dbed87f3234e237a7da6886dfa9",
+          "subject": "feat(mcp): add session-approved resource delivery and idle waking",
+          "summary": "VS Code chats and the browser remote view can now watch an exact MCP resource per session, with approval-gated notifications, automatic delivery and idle waking, plus new SDK resource-subscription and read-option APIs.",
           "breaking": false
         }
       ]
@@ -61,46 +61,70 @@
       "published": "0.57.0",
       "baselineRef": "cli-v0.57.0",
       "reserved": "0.57.0",
-      "commits": [],
+      "commits": ["2a3c18508b684dbed87f3234e237a7da6886dfa9"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.58.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.58.0",
+      "notes": [
+        {
+          "sha": "2a3c18508b684dbed87f3234e237a7da6886dfa9",
+          "subject": "feat(mcp): add session-approved resource delivery and idle waking",
+          "summary": "VS Code chats and the browser remote view can now watch an exact MCP resource per session, with approval-gated notifications, automatic delivery and idle waking, plus new SDK resource-subscription and read-option APIs.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.47.0",
       "baselineRef": "sdk-v0.47.0",
       "reserved": "0.47.0",
-      "commits": [],
+      "commits": ["2a3c18508b684dbed87f3234e237a7da6886dfa9"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "assistant": {
-      "published": "0.52.0",
-      "baselineRef": "assistant-v0.52.0",
-      "reserved": "0.52.0",
-      "commits": ["dc18268a0b7701ea51574413571eaee5533d01b3"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.52.1",
-      "effectiveBump": "patch",
+      "version": "0.48.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.52.1",
+      "tag": "sdk-v0.48.0",
       "notes": [
         {
-          "sha": "dc18268a0b7701ea51574413571eaee5533d01b3",
-          "subject": "fix(mcp): refresh and clarify prompt argument completions",
-          "summary": "MCP prompt argument completions now show a labelled popup with the argument description and required status, refresh when the cursor moves into a pasted command, and support Up/Down, Tab/Enter and Escape without losing the rest of the command.\"}]}",
+          "sha": "2a3c18508b684dbed87f3234e237a7da6886dfa9",
+          "subject": "feat(mcp): add session-approved resource delivery and idle waking",
+          "summary": "VS Code chats and the browser remote view can now watch an exact MCP resource per session, with approval-gated notifications, automatic delivery and idle waking, plus new SDK resource-subscription and read-option APIs.",
+          "breaking": false
+        }
+      ]
+    },
+    "assistant": {
+      "published": "0.52.1",
+      "baselineRef": "assistant-v0.52.1",
+      "reserved": "0.52.1",
+      "commits": ["2a3c18508b684dbed87f3234e237a7da6886dfa9"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.53.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.53.0",
+      "notes": [
+        {
+          "sha": "2a3c18508b684dbed87f3234e237a7da6886dfa9",
+          "subject": "feat(mcp): add session-approved resource delivery and idle waking",
+          "summary": "VS Code chats and the browser remote view can now watch an exact MCP resource per session, with approval-gated notifications, automatic delivery and idle waking, plus new SDK resource-subscription and read-option APIs.",
           "breaking": false
         }
       ]
@@ -112,6 +136,14 @@
       "breakingUnits": [],
       "summary": "MCP prompt argument completions now show a labelled popup with the argument description and required status, refresh when the cursor moves into a pasted command, and support Up/Down, Tab/Enter and Escape without losing the rest of the command.\"}]}",
       "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "2a3c18508b684dbed87f3234e237a7da6886dfa9": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "VS Code chats and the browser remote view can now watch an exact MCP resource per session, with approval-gated notifications, automatic delivery and idle waking, plus new SDK resource-subscription and read-option APIs.",
+      "coverage": "partial",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     }

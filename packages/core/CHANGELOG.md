@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.48.0 — 2026-11-05
+
+- VS Code chats and the browser remote view can now watch an exact MCP resource per session, with approval-gated notifications, automatic delivery and idle waking, plus new SDK resource-subscription and read-option APIs.
+
 ## 0.47.0 — 2026-11-04
 
 - Ask Agent messages queued mid-turn now stay visible in the browser relay view, and the interject-at-next-break controls work again over the relay.
