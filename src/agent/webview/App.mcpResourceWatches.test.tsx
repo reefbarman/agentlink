@@ -26,6 +26,50 @@ function deliver(message: unknown): void {
 }
 
 describe("App resource-watch panel", () => {
+  it("keeps the approval card visible and focused until the decision clears", () => {
+    const vscodeApi = {
+      postMessage: vi.fn(),
+      getState: vi.fn(),
+      setState: vi.fn(),
+    };
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({
+      type: "showApproval",
+      request: {
+        id: "watch-consent",
+        kind: "mcp",
+        toolOrigin: "mcp-resource",
+        command: "Watch comms inbox",
+        mcpChoices: [
+          { label: "Deliver and wake", value: "wake" },
+          { label: "Deny", value: "deny" },
+        ],
+      },
+    });
+    const approve = screen.getByRole("button", { name: "Deliver and wake" });
+    approve.focus();
+    deliver({
+      type: "mcpResourceWatches",
+      watches: [
+        {
+          server: "comms",
+          uri: "comms://inbox/one",
+          mode: "wake",
+          paused: false,
+          pending: false,
+        },
+      ],
+    });
+    expect(
+      screen.queryByRole("region", { name: "MCP resource watches" }),
+    ).toBeNull();
+    expect(document.activeElement).toBe(approve);
+    deliver({ type: "idle", id: "watch-consent" });
+    expect(
+      screen.getByRole("region", { name: "MCP resource watches" }),
+    ).toBeTruthy();
+  });
+
   it("reveals a newly added watch after dismissal and expands a collapsed Shelf", async () => {
     const vscodeApi = {
       postMessage: vi.fn(),

@@ -5294,7 +5294,11 @@ export class AgentSessionManager {
   }
 
   getMcpResourceWatches(sessionId: string) {
-    return this.mcpResourceWatches.get(sessionId)?.snapshot() ?? [];
+    return (
+      this.mcpResourceWatches
+        .get(sessionId)
+        ?.snapshot({ includePendingApprovals: false }) ?? []
+    );
   }
 
   private ensureMcpResourceWatches(session: AgentSession): McpResourceWatches {
@@ -5313,7 +5317,7 @@ export class AgentSessionManager {
       onChange: () => {
         this.recordAndEmitEvent(session.id, {
           type: "mcp_resource_watches",
-          watches: this.mcpResourceWatches.get(session.id)?.snapshot() ?? [],
+          watches: this.getMcpResourceWatches(session.id),
         });
       },
       onPending: () =>

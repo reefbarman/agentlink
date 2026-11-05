@@ -4493,7 +4493,9 @@ export function App({
               <McpResourceWatchPanel
                 key={state.chatState.sessionId ?? "no-session"}
                 watches={state.mcpResourceWatches}
-                open={mcpWatchPanelOpen}
+                open={
+                  mcpWatchPanelOpen && !state.approvalRequest && !globalApproval
+                }
                 onClose={() =>
                   setMcpWatchPanels((panels) => ({
                     ...panels,

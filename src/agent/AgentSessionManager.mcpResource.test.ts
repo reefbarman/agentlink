@@ -109,6 +109,40 @@ afterEach(() => {
 });
 
 describe("AgentSessionManager MCP resource composition", () => {
+  it("keeps provisional watches out of UI snapshots and events until consent resolves", async () => {
+    const f = fixture("notify");
+    let decide!: (choice: string) => void;
+    f.onApprovalRequest.mockReturnValueOnce(
+      new Promise<string>((resolve) => {
+        decide = resolve;
+      }),
+    );
+    const adding = f.controller.watch(server, uri, "notify");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.manager.getMcpResourceWatches(f.session.id)).toEqual([]);
+    expect(
+      f.record.mock.calls
+        .filter(([, event]) => event.type === "mcp_resource_watches")
+        .every(
+          ([, event]) =>
+            event.type === "mcp_resource_watches" && event.watches.length === 0,
+        ),
+    ).toBe(true);
+    decide("notify");
+    await adding;
+    expect(f.manager.getMcpResourceWatches(f.session.id)).toEqual([
+      expect.objectContaining({ server, uri, mode: "notify" }),
+    ]);
+    expect(f.record).toHaveBeenCalledWith(
+      f.session.id,
+      expect.objectContaining({
+        type: "mcp_resource_watches",
+        watches: [expect.objectContaining({ server, uri, mode: "notify" })],
+      }),
+    );
+    await f.controller.dispose();
+  });
+
   it("carries a real hub wire notification through consent, idle admission and transcript projection", async () => {
     const f = fixture("wake");
     let snapshot = "";

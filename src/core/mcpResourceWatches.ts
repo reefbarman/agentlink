@@ -299,9 +299,15 @@ export class McpResourceWatches {
     if (changed) this.changed();
   }
 
-  snapshot(): McpResourceWatchState[] {
+  snapshot({
+    includePendingApprovals = true,
+  }: { includePendingApprovals?: boolean } = {}): McpResourceWatchState[] {
     this.refresh();
-    return [...this.watches.values()].map((watch) => this.state(watch));
+    return [...this.watches.values()]
+      .filter(
+        (watch) => includePendingApprovals || watch.suspension !== "approval",
+      )
+      .map((watch) => this.state(watch));
   }
 
   /** Synchronous reservation. Failed idle attempts still spend the wake-rate allowance. */

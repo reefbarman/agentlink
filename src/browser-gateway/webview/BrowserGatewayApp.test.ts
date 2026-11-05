@@ -2005,6 +2005,29 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       pending: false,
     };
     Object.assign(next.session.foreground, { mcpResourceWatches: [watch] });
+    next.ui.approval = {
+      id: "watch-consent",
+      kind: "mcp",
+      toolOrigin: "mcp-resource",
+      command: "Watch comms inbox",
+      mcpChoices: [
+        { label: "Deliver and wake", value: "wake" },
+        { label: "Deny", value: "deny" },
+      ],
+    };
+    await act(async () => {
+      source!.emit("snapshot", next);
+    });
+    expect(
+      screen.queryByRole("region", { name: "MCP resource watches" }),
+    ).toBeNull();
+    const approve = screen.getByRole("button", { name: "Deliver and wake" });
+    approve.focus();
+    await act(async () => {
+      source!.emit("snapshot", next);
+    });
+    expect(document.activeElement).toBe(approve);
+    next.ui.approval = null;
     await act(async () => {
       source!.emit("snapshot", next);
     });

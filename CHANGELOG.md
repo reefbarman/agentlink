@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Resource-watch controls now appear only after consent and stay hidden while an approval card is open, so a new watch cannot push its own approval out of view or take keyboard focus before the decision.
+
 ## 1.82.1
 
 - Adding a new MCP resource watch now reopens its panel and reveals the Chat Activity Shelf, even after dismissal. Routine notifications and status changes keep a dismissed panel closed. The behaviour is shared by VS Code and the browser remote view.

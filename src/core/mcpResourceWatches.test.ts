@@ -90,6 +90,7 @@ describe("McpResourceWatches consent and lifecycle", () => {
       paused: true,
       reason: "Approval required",
     });
+    expect(h.watches.snapshot({ includePendingApprovals: false })).toEqual([]);
     approval.resolve("deny");
     expect(await request).toEqual({
       ok: false,

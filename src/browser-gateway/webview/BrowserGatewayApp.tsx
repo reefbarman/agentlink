@@ -11226,7 +11226,7 @@ export function BrowserGatewayApp({
                   <McpResourceWatchPanel
                     key={foreground?.sessionId ?? "no-session"}
                     watches={foreground?.mcpResourceWatches ?? []}
-                    open={mcpWatchPanelOpen}
+                    open={mcpWatchPanelOpen && !visibleApproval}
                     onClose={() =>
                       setMcpWatchPanels((panels) => ({
                         ...panels,
