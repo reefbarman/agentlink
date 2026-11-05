@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "898b518ee28f9e409c7d1e03ac7fb942533e4b16",
-  "createdAt": "2026-11-05T05:08:47.956Z",
+  "sourceSha": "7f24c8873ad5f951e5d573ca1f80bd4b3afe9537",
+  "createdAt": "2026-11-05T06:01:24.722Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.82.2",
-      "baselineRef": "v1.82.2",
-      "reserved": "1.82.2",
-      "commits": ["898b518ee28f9e409c7d1e03ac7fb942533e4b16"],
+      "published": "1.82.3",
+      "baselineRef": "v1.82.3",
+      "reserved": "1.82.3",
+      "commits": ["7f24c8873ad5f951e5d573ca1f80bd4b3afe9537"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.82.3",
-      "effectiveBump": "patch",
+      "version": "1.83.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.82.3",
+      "tag": "v1.83.0",
       "notes": [
         {
-          "sha": "898b518ee28f9e409c7d1e03ac7fb942533e4b16",
-          "subject": "fix(ui): clarify MCP updates and show wake activity immediately",
-          "summary": "MCP resource updates now show as expandable tool-style blocks with the server, URI and untrusted-content notice, and activity appears immediately when an idle tab wakes before model output arrives.}]}</parameter>Wait — I need to ensure valid JSON output.{",
+          "sha": "7f24c8873ad5f951e5d573ca1f80bd4b3afe9537",
+          "subject": "fix(ui): keep pending MCP updates visible on the activity shelf",
+          "summary": "A persistent \"MCP update available\" indicator on the Chat Activity Shelf shows the count of pending MCP resource watch updates, and clicking it opens the watch controls without reading content or starting a turn.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.82.2",
-      "baselineRef": "desktop-v0.82.2",
-      "reserved": "0.82.2",
-      "commits": ["898b518ee28f9e409c7d1e03ac7fb942533e4b16"],
+      "published": "0.82.3",
+      "baselineRef": "desktop-v0.82.3",
+      "reserved": "0.82.3",
+      "commits": ["7f24c8873ad5f951e5d573ca1f80bd4b3afe9537"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.82.3",
-      "effectiveBump": "patch",
+      "version": "0.83.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.82.3",
+      "tag": "desktop-v0.83.0",
       "notes": [
         {
-          "sha": "898b518ee28f9e409c7d1e03ac7fb942533e4b16",
-          "subject": "fix(ui): clarify MCP updates and show wake activity immediately",
-          "summary": "MCP resource updates now show as expandable tool-style blocks with the server, URI and untrusted-content notice, and activity appears immediately when an idle tab wakes before model output arrives.}]}</parameter>Wait — I need to ensure valid JSON output.{",
+          "sha": "7f24c8873ad5f951e5d573ca1f80bd4b3afe9537",
+          "subject": "fix(ui): keep pending MCP updates visible on the activity shelf",
+          "summary": "A persistent \"MCP update available\" indicator on the Chat Activity Shelf shows the count of pending MCP resource watch updates, and clicking it opens the watch controls without reading content or starting a turn.",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.54.2",
-      "baselineRef": "assistant-v0.54.2",
-      "reserved": "0.54.2",
-      "commits": ["898b518ee28f9e409c7d1e03ac7fb942533e4b16"],
+      "published": "0.54.3",
+      "baselineRef": "assistant-v0.54.3",
+      "reserved": "0.54.3",
+      "commits": ["7f24c8873ad5f951e5d573ca1f80bd4b3afe9537"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.54.3",
-      "effectiveBump": "patch",
+      "version": "0.55.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.54.3",
+      "tag": "assistant-v0.55.0",
       "notes": [
         {
-          "sha": "898b518ee28f9e409c7d1e03ac7fb942533e4b16",
-          "subject": "fix(ui): clarify MCP updates and show wake activity immediately",
-          "summary": "MCP resource updates now show as expandable tool-style blocks with the server, URI and untrusted-content notice, and activity appears immediately when an idle tab wakes before model output arrives.}]}</parameter>Wait — I need to ensure valid JSON output.{",
+          "sha": "7f24c8873ad5f951e5d573ca1f80bd4b3afe9537",
+          "subject": "fix(ui): keep pending MCP updates visible on the activity shelf",
+          "summary": "A persistent \"MCP update available\" indicator on the Chat Activity Shelf shows the count of pending MCP resource watch updates, and clicking it opens the watch controls without reading content or starting a turn.",
           "breaking": false
         }
       ]
@@ -135,6 +135,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "MCP resource updates now show as expandable tool-style blocks with the server, URI and untrusted-content notice, and activity appears immediately when an idle tab wakes before model output arrives.}]}</parameter>Wait — I need to ensure valid JSON output.{",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "7f24c8873ad5f951e5d573ca1f80bd4b3afe9537": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "A persistent \"MCP update available\" indicator on the Chat Activity Shelf shows the count of pending MCP resource watch updates, and clicking it opens the watch controls without reading content or starting a turn.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
