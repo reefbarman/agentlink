@@ -224,6 +224,41 @@ function makeService(
 }
 
 describe("BrowserGatewayService", () => {
+  it.each([false, true])(
+    "publishes preparation as streaming even before status/model output (cached projection: %s)",
+    (withProjection) => {
+      const hub = new InMemoryAgentUiEventHub();
+      let starting = true;
+      const manager = {
+        ...makeSessionManagerStub(),
+        isTurnStarting: vi.fn((id: string) => starting && id === "session-1"),
+      };
+      const service = new BrowserGatewayService(
+        hub,
+        manager as never,
+        () => themeSnapshotStub,
+        () => "prompt",
+        () => true,
+        () => "high",
+        () =>
+          withProjection
+            ? (projectedForeground({ streaming: false }) as never)
+            : null,
+        () => [],
+      );
+      expect(service.getSerializableSessionState().foreground).toMatchObject({
+        status: "idle",
+        streaming: true,
+      });
+      starting = false;
+      expect(service.getSerializableSessionState().foreground?.streaming).toBe(
+        false,
+      );
+      service.dispose();
+      hub.dispose();
+    },
+  );
+
   it("serializes project catalog and foreground identity without local roots", () => {
     const hub = new InMemoryAgentUiEventHub();
     const service = makeService(hub);

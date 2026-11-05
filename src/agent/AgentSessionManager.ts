@@ -4729,6 +4729,7 @@ export class AgentSessionManager {
       sessionId,
       (this.interactiveTurnsStarting.get(sessionId) ?? 0) + 1,
     );
+    this.notifySessionsChanged();
     let released = false;
     return () => {
       if (released) return;
@@ -4739,6 +4740,7 @@ export class AgentSessionManager {
       } else {
         this.interactiveTurnsStarting.delete(sessionId);
       }
+      this.notifySessionsChanged();
     };
   }
 

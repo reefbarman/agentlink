@@ -5227,6 +5227,35 @@ body.chat-activity-shelf-resizing * {
   outline: none;
 }
 
+/* External updates look like expandable tool results, without impersonating a tool call. */
+.mcp-resource-update {
+  margin: 6px 0;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 5px;
+  background: var(
+    --vscode-editorWidget-background,
+    var(--vscode-editor-background)
+  );
+}
+
+.mcp-resource-update .tool-call-header {
+  display: flex;
+  width: 100%;
+  padding: 7px 8px;
+  opacity: 1;
+}
+
+.mcp-resource-update .tool-call-code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mcp-resource-update-notice {
+  margin: 6px 0;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
 /* Shared resource-watch controls for the VS Code and browser Shelf. */
 .mcp-resource-watches {
   flex-shrink: 0;

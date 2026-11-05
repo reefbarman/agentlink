@@ -686,11 +686,13 @@ export class BrowserGatewayService implements vscode.Disposable {
         model: projectedMatchesForeground ? projected.model : foreground.model,
         status: foreground.status,
         interactiveExecutionPhase,
-        streaming: projectedMatchesForeground
-          ? projected.streaming
-          : foreground.status === "streaming" ||
-            foreground.status === "tool_executing" ||
-            foreground.status === "awaiting_approval",
+        streaming:
+          this.sessionManager.isTurnStarting?.(foreground.id) === true ||
+          (projectedMatchesForeground
+            ? projected.streaming
+            : foreground.status === "streaming" ||
+              foreground.status === "tool_executing" ||
+              foreground.status === "awaiting_approval"),
         interrupted: projectedMatchesForeground
           ? Boolean(projected.interrupted)
           : Boolean(
@@ -851,11 +853,13 @@ export class BrowserGatewayService implements vscode.Disposable {
         model: projectedMatchesSession ? projected.model : session.model,
         status: session.status,
         interactiveExecutionPhase: sessionInfo?.interactiveExecutionPhase,
-        streaming: projectedMatchesSession
-          ? projected.streaming
-          : session.status === "streaming" ||
-            session.status === "tool_executing" ||
-            session.status === "awaiting_approval",
+        streaming:
+          this.sessionManager.isTurnStarting?.(session.id) === true ||
+          (projectedMatchesSession
+            ? projected.streaming
+            : session.status === "streaming" ||
+              session.status === "tool_executing" ||
+              session.status === "awaiting_approval"),
         interrupted: projectedMatchesSession
           ? Boolean(projected.interrupted)
           : Boolean(

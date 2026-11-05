@@ -1,15 +1,23 @@
+// @vitest-environment jsdom
+
+import type {
+  ChatMessage,
+  McpResourceWatchView,
+} from "@agentlink/protocol/chat-transcript";
 import {
   McpResourceWatchPanel,
   useMcpResourceWatchReveal,
 } from "../../shared/ui/McpResourceUpdates";
 import { afterEach, describe, expect, it, vi } from "vitest";
-// @vitest-environment jsdom
+import {
+  agentMessagesToChatMessages,
+  initialState,
+  reducer,
+} from "../../shared/chatProjection";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 
-import type { McpResourceWatchView } from "@agentlink/protocol/chat-transcript";
 import { MessageBubble } from "./components/MessageBubble";
 import { TranscriptMessageList } from "./components/TranscriptMessageList";
-import { agentMessagesToChatMessages } from "../../shared/chatProjection";
 
 vi.mock("./components/mermaidRenderer", () => ({
   renderMermaid: vi.fn(async () => "<svg />"),
@@ -31,6 +39,53 @@ const watch: McpResourceWatchView = {
 };
 
 describe("shared MCP resource UI", () => {
+  it("shows live activity after an external update before model output, without adding history or duplicate spinners", () => {
+    const messages = agentMessagesToChatMessages([
+      {
+        role: "user",
+        content: "External snapshot",
+        uiHint: { mcpResourceUpdate: update },
+      },
+    ]);
+    const { container, rerender } = render(
+      <TranscriptMessageList messages={messages} streaming />,
+    );
+    expect(container.querySelectorAll(".streaming-indicator")).toHaveLength(1);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe("warning");
+    const thinking = reducer(
+      { ...initialState, messages, streaming: true },
+      { type: "THINKING_START", thinkingId: "new-thinking" },
+    );
+    rerender(<TranscriptMessageList messages={thinking.messages} streaming />);
+    expect(container.querySelectorAll(".streaming-indicator")).toHaveLength(1);
+    rerender(<TranscriptMessageList messages={messages} streaming={false} />);
+    expect(container.querySelector(".streaming-indicator")).toBeNull();
+  });
+
+  it("keeps the previous final answer settled while a new turn is preparing", () => {
+    const previous: ChatMessage = {
+      id: "old-final",
+      role: "assistant",
+      content: "",
+      blocks: [],
+      timestamp: 1,
+      finalMarker: {
+        status: "completed",
+        source: "tool",
+        summary: "Previous completed answer",
+      },
+    };
+    const { container, getByText, rerender } = render(
+      <TranscriptMessageList messages={[previous]} streaming />,
+    );
+    expect(getByText("Previous completed answer")).toBeTruthy();
+    expect(container.querySelectorAll(".streaming-indicator")).toHaveLength(1);
+    rerender(<TranscriptMessageList messages={[previous]} streaming={false} />);
+    expect(container.querySelector(".streaming-indicator")).toBeNull();
+    expect(getByText("Previous completed answer")).toBeTruthy();
+  });
+
   it("reveals additions per chat, but not routine updates or returning to an unchanged watch list", () => {
     const onReveal = vi.fn();
     function Probe({
@@ -80,10 +135,16 @@ describe("shared MCP resource UI", () => {
     );
     const toggle = getByRole("button", { name: /MCP resource update/ });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.querySelector(".codicon-chevron-right")).toBeTruthy();
+    expect(toggle.querySelector(".codicon-mail")).toBeTruthy();
     expect(container.textContent).not.toContain(text);
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(getByText(text)).toBeTruthy();
+    expect(toggle.querySelector(".codicon-chevron-down")).toBeTruthy();
+    expect(
+      container.querySelector(".tool-call-details .tool-call-code"),
+    ).toBeTruthy();
     expect(getByText(/Untrusted external content/)).toBeTruthy();
     expect(container.textContent).not.toContain("RAW INTERNAL ENVELOPE");
     expect(container.querySelector("a, img, .user-message")).toBeNull();

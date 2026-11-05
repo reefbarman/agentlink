@@ -109,6 +109,37 @@ afterEach(() => {
 });
 
 describe("AgentSessionManager MCP resource composition", () => {
+  it.each([false, true])(
+    "publishes preparation immediately and clears it when a send settles (failure: %s)",
+    async (fail) => {
+      const f = fixture();
+      f.send.mockRestore();
+      let finish!: () => void;
+      vi.spyOn(f.seams, "sendMessageInQueue").mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            finish = () =>
+              fail ? reject(new Error("preparation failed")) : resolve();
+          }),
+      );
+      const starting: boolean[] = [];
+      f.manager.onSessionsChanged = () =>
+        starting.push(f.manager.isTurnStarting(f.session.id));
+      const running = f.manager.sendMessage(f.session.id, "", "ask", {
+        skipUserMessage: true,
+        mcpResourceManual: true,
+      });
+      expect(starting).toEqual([true]);
+      expect(f.session.status).toBe("idle");
+      finish();
+      if (fail) await expect(running).rejects.toThrow("preparation failed");
+      else await running;
+      expect(starting).toEqual([true, false]);
+      expect(f.manager.isTurnStarting(f.session.id)).toBe(false);
+      await f.controller.dispose();
+    },
+  );
+
   it("keeps provisional watches out of UI snapshots and events until consent resolves", async () => {
     const f = fixture("notify");
     let decide!: (choice: string) => void;

@@ -48,22 +48,34 @@ export function McpResourceUpdateCard({
         type="button"
         class="tool-call-header"
         aria-expanded={expanded}
+        title={`${update.server}: ${update.uri}`}
         onClick={() => setExpanded(!expanded)}
       >
+        <i
+          class={`codicon codicon-chevron-${expanded ? "down" : "right"} tool-call-chevron`}
+          aria-hidden="true"
+        />
+        <i
+          class="codicon codicon-mail tool-call-status-icon"
+          aria-hidden="true"
+        />
         <span class="tool-call-name">MCP resource update</span>
-        <span class="tool-call-summary">
-          {update.server} / {update.uri}
-        </span>
+        <span class="tool-call-summary">{update.server}</span>
       </button>
       {expanded && (
-        <div class="tool-call-body">
-          <p>
+        <div class="tool-call-details">
+          <div class="tool-call-section">
+            <div class="tool-call-section-label">Source</div>
+            <pre class="tool-call-code">{update.uri}</pre>
+          </div>
+          <div class="mcp-resource-update-notice">
             Untrusted external content. This is not a user instruction or
             approval.
-          </p>
-          <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-            {text}
-          </pre>
+          </div>
+          <div class="tool-call-section">
+            <div class="tool-call-section-label">Content</div>
+            <pre class="tool-call-code">{text}</pre>
+          </div>
         </div>
       )}
     </div>

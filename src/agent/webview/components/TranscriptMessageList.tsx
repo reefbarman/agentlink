@@ -81,6 +81,7 @@ interface TranscriptRow {
   message: ChatMessage;
   sourceMessage: ChatMessage;
   bgAgentResultOnly: boolean;
+  pendingActivity?: boolean;
   coordinationReply?: BackgroundCoordinationReply;
   coordinationShell?: boolean;
   warningMessages?: ChatMessage[];
@@ -609,6 +610,33 @@ function buildTranscriptRows(
     });
   }
 
+  // A data-only wake has no user message/assistant placeholder. Keep activity
+  // visible before the model emits anything, without mutating transcript history
+  // or making the previous completed answer look active again.
+  if (
+    streaming &&
+    lastMessage &&
+    (lastMessage.mcpResourceUpdate ||
+      (lastMessage.role === "assistant" &&
+        lastMessage.finalMarker &&
+        !lastRow?.bgAgentResultOnly))
+  ) {
+    const pending: ChatMessage = {
+      id: `${lastMessage.id}:pending-activity`,
+      role: "assistant",
+      content: "",
+      blocks: [],
+      timestamp: lastMessage.timestamp,
+    };
+    rows.push({
+      key: pending.id,
+      message: pending,
+      sourceMessage: pending,
+      bgAgentResultOnly: false,
+      pendingActivity: true,
+    });
+  }
+
   for (const row of rows) {
     if (!row.warningMessages) continue;
     const lastWarningIndex = messages.lastIndexOf(
@@ -1118,7 +1146,10 @@ export function TranscriptMessageList({
   );
   const lastMessage = messages[messages.length - 1];
   let streamingRowKey: string | null = null;
-  if (streaming && lastMessage?.role === "assistant") {
+  const pendingActivity = rows[rows.length - 1];
+  if (streaming && pendingActivity?.pendingActivity) {
+    streamingRowKey = pendingActivity.key;
+  } else if (streaming && lastMessage?.role === "assistant") {
     for (let i = rows.length - 1; i >= 0; i -= 1) {
       const row = rows[i];
       if (row.sourceMessage !== lastMessage || row.coordinationShell) continue;
