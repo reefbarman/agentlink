@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "2739c477a662e0d61eb9c3b3cc2c916a2f462d65",
-  "createdAt": "2026-11-05T03:20:37.737Z",
+  "sourceSha": "2724e3a137df6c5afebb58a151eabd1cfeec503a",
+  "createdAt": "2026-11-05T04:02:04.705Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.82.0",
-      "baselineRef": "v1.82.0",
-      "reserved": "1.82.0",
-      "commits": ["2739c477a662e0d61eb9c3b3cc2c916a2f462d65"],
+      "published": "1.82.1",
+      "baselineRef": "v1.82.1",
+      "reserved": "1.82.1",
+      "commits": ["2724e3a137df6c5afebb58a151eabd1cfeec503a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.82.1",
+      "version": "1.82.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.82.1",
+      "tag": "v1.82.2",
       "notes": [
         {
-          "sha": "2739c477a662e0d61eb9c3b3cc2c916a2f462d65",
-          "subject": "fix(ui): reveal the resource panel when a watch is added",
-          "summary": "Adding a new MCP resource watch now automatically reveals the Resource watches panel and expands the Shelf, even after dismissal, while routine updates, pause/resume and duplicate snapshots leave a dismissed panel closed.}]}</br>",
+          "sha": "2724e3a137df6c5afebb58a151eabd1cfeec503a",
+          "subject": "fix(ui): keep watch approval ahead of resource controls",
+          "summary": "Fixes the MCP Resource watches panel so pending watch approval cards stay visible and focused, and watches only appear in the panel after approval completes.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.82.0",
-      "baselineRef": "desktop-v0.82.0",
-      "reserved": "0.82.0",
-      "commits": ["2739c477a662e0d61eb9c3b3cc2c916a2f462d65"],
+      "published": "0.82.1",
+      "baselineRef": "desktop-v0.82.1",
+      "reserved": "0.82.1",
+      "commits": ["2724e3a137df6c5afebb58a151eabd1cfeec503a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.82.1",
+      "version": "0.82.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.82.1",
+      "tag": "desktop-v0.82.2",
       "notes": [
         {
-          "sha": "2739c477a662e0d61eb9c3b3cc2c916a2f462d65",
-          "subject": "fix(ui): reveal the resource panel when a watch is added",
-          "summary": "Adding a new MCP resource watch now automatically reveals the Resource watches panel and expands the Shelf, even after dismissal, while routine updates, pause/resume and duplicate snapshots leave a dismissed panel closed.}]}</br>",
+          "sha": "2724e3a137df6c5afebb58a151eabd1cfeec503a",
+          "subject": "fix(ui): keep watch approval ahead of resource controls",
+          "summary": "Fixes the MCP Resource watches panel so pending watch approval cards stay visible and focused, and watches only appear in the panel after approval completes.",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.54.0",
-      "baselineRef": "assistant-v0.54.0",
-      "reserved": "0.54.0",
-      "commits": ["2739c477a662e0d61eb9c3b3cc2c916a2f462d65"],
+      "published": "0.54.1",
+      "baselineRef": "assistant-v0.54.1",
+      "reserved": "0.54.1",
+      "commits": ["2724e3a137df6c5afebb58a151eabd1cfeec503a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.54.1",
+      "version": "0.54.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.54.1",
+      "tag": "assistant-v0.54.2",
       "notes": [
         {
-          "sha": "2739c477a662e0d61eb9c3b3cc2c916a2f462d65",
-          "subject": "fix(ui): reveal the resource panel when a watch is added",
-          "summary": "Adding a new MCP resource watch now automatically reveals the Resource watches panel and expands the Shelf, even after dismissal, while routine updates, pause/resume and duplicate snapshots leave a dismissed panel closed.}]}</br>",
+          "sha": "2724e3a137df6c5afebb58a151eabd1cfeec503a",
+          "subject": "fix(ui): keep watch approval ahead of resource controls",
+          "summary": "Fixes the MCP Resource watches panel so pending watch approval cards stay visible and focused, and watches only appear in the panel after approval completes.",
           "breaking": false
         }
       ]
@@ -119,6 +119,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Adding a new MCP resource watch now automatically reveals the Resource watches panel and expands the Shelf, even after dismissal, while routine updates, pause/resume and duplicate snapshots leave a dismissed panel closed.}]}</br>",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "2724e3a137df6c5afebb58a151eabd1cfeec503a": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes the MCP Resource watches panel so pending watch approval cards stay visible and focused, and watches only appear in the panel after approval completes.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

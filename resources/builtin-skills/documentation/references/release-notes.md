@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.82.2
+
 - Resource-watch controls now appear only after consent and stay hidden while an approval card is open, so a new watch cannot push its own approval out of view or take keyboard focus before the decision.
 
 ## 1.82.1
