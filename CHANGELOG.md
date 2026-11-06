@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Native Agent terminals receiving nonempty manual input now leave the automatic unnamed-command pool. A prepared unnamed command also refuses dispatch if input arrives before launch, preserving the unfinished input and terminal instead of appending an unrelated command to it.
+- Global skill updates/removals now find the unique existing source in the supported `.agentlink`, `.agents`, and `.claude` skill folders in VS Code and projectless Browser Ask Agent. Compatible aliases are treated as one physical source; genuine ambiguity, out-of-root targets, and source drift during review fail safely. New skills keep their existing default destination, and normal human approval remains required.
+
 ## 1.83.5
 
 - Save without Formatting now checks completion after awaited editor restoration, avoiding a false save failure when the save finishes during cleanup. Exact-preservation edits still require matching approved disk content and reject transformed saves.

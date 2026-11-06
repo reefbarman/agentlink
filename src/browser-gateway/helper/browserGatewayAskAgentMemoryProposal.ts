@@ -14,6 +14,7 @@ import type {
 } from "@agentlink/protocol/approval-transport";
 import {
   applyMemoryProposal,
+  isSameMemoryProposalDestination,
   retargetMemoryProposal,
   validateMemoryProposalName,
   validateMemoryProposalSkill,
@@ -21,6 +22,7 @@ import {
   type MemoryProposalParams,
 } from "../../shared/memoryProposalEngine.js";
 import {
+  assertGlobalSkillTargetUnchanged,
   deleteMemoryProposalTarget,
   readMemoryProposalFileIfExists,
   resolveMemoryProposalTarget,
@@ -100,7 +102,7 @@ function isPathInside(candidate: string, root: string): boolean {
 
 function assertAllowedGlobalTarget(
   target: MemoryProposalTarget,
-  params: Pick<MemoryProposalParams, "tier" | "scope">,
+  params: Pick<MemoryProposalParams, "tier" | "scope" | "name" | "operation">,
   homeDir: string,
 ): void {
   if (params.scope !== "global") {
@@ -108,7 +110,17 @@ function assertAllowedGlobalTarget(
   }
   const root = path.resolve(homeDir, ".agentlink");
   const resolved = path.resolve(target.filePath);
-  if (!isPathInside(resolved, root)) {
+  const existingSkill =
+    params.tier === "skill" &&
+    params.operation !== "add" &&
+    target.globalSkillSource?.homeDir === homeDir &&
+    target.globalSkillSource.name === params.name &&
+    [".agentlink", ".agents", ".claude"].some(
+      (directory) =>
+        resolved ===
+        path.resolve(homeDir, directory, "skills", params.name!, "SKILL.md"),
+    );
+  if (!isPathInside(resolved, root) && !existingSkill) {
     throw new Error("Memory proposal target is outside the allowed directory");
   }
 
@@ -120,8 +132,9 @@ function assertAllowedGlobalTarget(
         return resolved === path.join(root, "CLAUDE.md");
       case "skill":
         return (
-          isPathInside(resolved, path.join(root, "skills")) &&
-          path.basename(resolved) === "SKILL.md"
+          existingSkill ||
+          (isPathInside(resolved, path.join(root, "skills")) &&
+            path.basename(resolved) === "SKILL.md")
         );
       case "command":
         return (
@@ -228,13 +241,26 @@ export class BrowserGatewayAskAgentMemoryProposalBridge {
       ...retargeted,
       content: editedContent ?? retargeted.content,
     });
-    const finalTarget = await resolveMemoryProposalTarget(retargeted, {
-      homeDir: this.homeDir,
-      allowProjectScope: false,
-    });
+    const finalTarget =
+      pending.target.globalSkillSource &&
+      isSameMemoryProposalDestination(pending.params, retargeted)
+        ? pending.target
+        : await resolveMemoryProposalTarget(retargeted, {
+            homeDir: this.homeDir,
+            allowProjectScope: false,
+          });
     assertAllowedGlobalTarget(finalTarget, retargeted, this.homeDir);
+    if (
+      finalTarget.filePath !== pending.target.filePath &&
+      (pending.target.globalSkillSource || finalTarget.globalSkillSource)
+    ) {
+      throw new Error(
+        "Global skill target changed since review; propose it again",
+      );
+    }
 
     await withMemoryWriteLock(finalTarget.filePath, async () => {
+      await assertGlobalSkillTargetUnchanged(finalTarget);
       if (
         retargeted.operation === "remove" &&
         (retargeted.tier === "skill" || retargeted.tier === "command")

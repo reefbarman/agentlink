@@ -26,6 +26,7 @@ import {
   readMemoryProposalFileIfExists,
   resolveMemoryProposalTarget,
   assertMemoryProposalTargetInsideProject,
+  assertGlobalSkillTargetUnchanged,
   type MemoryProposalTarget,
 } from "./memoryProposalNode.js";
 import {
@@ -499,11 +500,13 @@ export async function handleProposeMemory(
           sessionId,
           validateTarget:
             params.tier === "skill" &&
-            params.scope === "project" &&
-            (params.skill_directory ||
-              params.operation === "update" ||
-              params.operation === "remove")
+            (target.globalSkillSource ||
+              (params.scope === "project" &&
+                (params.skill_directory ||
+                  params.operation === "update" ||
+                  params.operation === "remove")))
               ? async () => {
+                  await assertGlobalSkillTargetUnchanged(target);
                   if (params.skill_directory) {
                     await assertMemoryProposalTargetInsideProject(
                       target,
@@ -562,7 +565,13 @@ export async function handleProposeMemory(
       validateName(retargeted);
     }
 
-    finalTarget = await resolveTarget(retargeted);
+    // A successfully saved existing global skill may now have a new inode/hash.
+    // Keep its reviewed source instead of discovering a different target after
+    // review. Remove validates that original snapshot again under the lock.
+    finalTarget =
+      target.globalSkillSource && isSameMemoryDestination(params, retargeted)
+        ? target
+        : await resolveTarget(retargeted);
     if (
       retargeted.tier === "skill" &&
       (retargeted.operation === "update" || retargeted.operation === "remove")
@@ -577,7 +586,16 @@ export async function handleProposeMemory(
       retargeted.operation === "remove" &&
       (retargeted.tier === "skill" || retargeted.tier === "command")
     ) {
+      if (
+        finalTarget.filePath !== target.filePath &&
+        (target.globalSkillSource || finalTarget.globalSkillSource)
+      ) {
+        throw new Error(
+          "Global skill removal target changed; propose it again",
+        );
+      }
       await withFileLock(finalTarget.filePath, async () => {
+        await assertGlobalSkillTargetUnchanged(finalTarget);
         if (retargeted.tier === "skill") {
           await assertSkillTargetExists(finalTarget, retargeted);
         }
@@ -603,11 +621,13 @@ export async function handleProposeMemory(
           sessionId,
           validateTarget:
             retargeted.tier === "skill" &&
-            retargeted.scope === "project" &&
-            (retargeted.skill_directory ||
-              retargeted.operation === "update" ||
-              retargeted.operation === "remove")
+            (finalTarget.globalSkillSource ||
+              (retargeted.scope === "project" &&
+                (retargeted.skill_directory ||
+                  retargeted.operation === "update" ||
+                  retargeted.operation === "remove")))
               ? async () => {
+                  await assertGlobalSkillTargetUnchanged(finalTarget);
                   if (retargeted.skill_directory) {
                     await assertMemoryProposalTargetInsideProject(
                       finalTarget,

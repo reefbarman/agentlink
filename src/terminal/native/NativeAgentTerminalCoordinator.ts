@@ -504,7 +504,15 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
   write(channelId: string, data: string): boolean {
     const channel = this.channels.get(channelId);
     clearInteractivePromptWatchdog(channel?.active?.interactivePromptWatchdog);
-    return channel !== undefined && this.runtime.write(channelId, data);
+    const written =
+      channel !== undefined && this.runtime.write(channelId, data);
+    if (written && data.length > 0 && channel.implicit) {
+      // Manual input may leave an unfinished line or an untracked process.
+      // Preserve it, but never append an unrelated unnamed command afterwards.
+      channel.implicit = false;
+      this.notifyAdmission(channel.owner);
+    }
+    return written;
   }
 
   resize(channelId: string, dimensions: TerminalDimensions): boolean {
@@ -613,6 +621,15 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     if (!this.isReservedTarget(channel, before, reservation)) {
       throw new Error("Native Agent terminal target changed during startup");
     }
+    const implicitTarget =
+      options.terminal_id === undefined &&
+      options.terminal_name === undefined &&
+      options.split_from === undefined;
+    if (implicitTarget && !channel.implicit) {
+      throw new Error(
+        "Native Agent terminal received manual input before dispatch",
+      );
+    }
     // Last host check after admission and shell startup waits; nothing below
     // yields before the command is written to the shell.
     options.assertDispatchAllowed?.();
@@ -621,11 +638,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     // PATH changes, `cd`, and `exit` cannot mutate the next unrelated command.
     // Explicitly named/targeted terminals retain intentional persistent-shell
     // semantics for user-directed workflows.
-    const isolateShellState =
-      channel.implicit &&
-      options.terminal_id === undefined &&
-      options.terminal_name === undefined &&
-      options.split_from === undefined;
+    const isolateShellState = channel.implicit && implicitTarget;
     const preparedCommand = this.runtime.createCommand({
       channelId: before.channelId,
       commandId,

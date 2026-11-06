@@ -1,6 +1,7 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
+import { createHash } from "node:crypto";
 
 import type { MemoryTier } from "@agentlink/protocol/inline-approval";
 import {
@@ -12,6 +13,12 @@ import {
 export interface MemoryProposalTarget {
   filePath: string;
   displayPath: string;
+  /** Existing global skills are bound to the exact source shown for review. */
+  globalSkillSource?: {
+    homeDir: string;
+    name: string;
+    fingerprint: string;
+  };
 }
 
 export interface MemoryProposalTargetOptions {
@@ -92,6 +99,83 @@ export async function assertMemoryProposalTargetInsideProject(
   }
 }
 
+const GLOBAL_SKILL_DIRECTORIES = [".agentlink", ".agents", ".claude"] as const;
+
+async function globalSkillFingerprint(
+  homeDir: string,
+  directory: string,
+  name: string,
+): Promise<{
+  realFile: string;
+  physicalIdentity: string;
+  fingerprint: string;
+}> {
+  const realHome = await fs.realpath(homeDir);
+  const root = path.join(homeDir, directory, "skills");
+  const realRoot = await fs.realpath(root);
+  const filePath = path.join(root, name, "SKILL.md");
+  const realFile = await fs.realpath(filePath);
+  // Aliases may cross compatible skill roots, never leave their union.
+  const allowedRoots = GLOBAL_SKILL_DIRECTORIES.map((source) =>
+    path.join(realHome, source, "skills"),
+  );
+  if (
+    !allowedRoots.some(
+      (allowed) =>
+        realRoot === allowed || realRoot.startsWith(`${allowed}${path.sep}`),
+    ) ||
+    !allowedRoots.some((allowed) =>
+      realFile.startsWith(`${allowed}${path.sep}`),
+    )
+  ) {
+    throw new Error(
+      "Global skill target resolves outside its allowed directory",
+    );
+  }
+  const identities = await Promise.all(
+    [
+      homeDir,
+      path.join(homeDir, directory),
+      root,
+      path.dirname(filePath),
+      filePath,
+    ].map(async (entry) => {
+      const stat = await fs.lstat(entry);
+      return [await fs.realpath(entry), stat.dev, stat.ino];
+    }),
+  );
+  const physical = await fs.stat(filePath);
+  return {
+    realFile,
+    physicalIdentity: `${physical.dev}:${physical.ino}`,
+    fingerprint: JSON.stringify([
+      identities,
+      createHash("sha256")
+        .update(await fs.readFile(filePath))
+        .digest("hex"),
+    ]),
+  };
+}
+
+export async function assertGlobalSkillTargetUnchanged(
+  target: MemoryProposalTarget,
+): Promise<void> {
+  const source = target.globalSkillSource;
+  if (!source) return;
+  const current = await resolveMemoryProposalTarget(
+    { tier: "skill", scope: "global", operation: "update", name: source.name },
+    { homeDir: source.homeDir },
+  );
+  if (
+    current.filePath !== target.filePath ||
+    current.globalSkillSource?.fingerprint !== source.fingerprint
+  ) {
+    throw new Error(
+      "Global skill target changed since review; propose it again",
+    );
+  }
+}
+
 export async function resolveMemoryProposalTarget(
   params: Pick<
     MemoryProposalParams,
@@ -143,6 +227,62 @@ export async function resolveMemoryProposalTarget(
     case "skill": {
       validateMemoryProposalDirectory(params);
       const name = validateMemoryProposalName(params);
+      if (params.scope === "global" && params.operation !== "add") {
+        const candidates: Array<{
+          filePath: string;
+          realFile: string;
+          physicalIdentity: string;
+          fingerprint: string;
+        }> = [];
+        for (const directory of GLOBAL_SKILL_DIRECTORIES) {
+          const filePath = path.join(
+            home,
+            directory,
+            "skills",
+            name,
+            "SKILL.md",
+          );
+          try {
+            await fs.lstat(filePath);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+            throw error;
+          }
+          candidates.push({
+            filePath,
+            ...(await globalSkillFingerprint(home, directory, name)),
+          });
+        }
+        if (
+          new Set(candidates.map((candidate) => candidate.physicalIdentity))
+            .size > 1
+        ) {
+          throw new Error(
+            `Ambiguous global skill target: ${name} exists in multiple supported directories`,
+          );
+        }
+        if (candidates.length === 0) {
+          throw new Error(
+            `Skill target not found: ~/.agentlink/skills/${name}/SKILL.md`,
+          );
+        }
+        // Use the real source, not a symlink spelling. Hardlinks have no unique
+        // canonical spelling, so retain supported-root order for that one inode.
+        const relativeSource = path.relative(
+          await fs.realpath(home),
+          candidates[0].realFile,
+        );
+        return {
+          filePath: path.join(home, relativeSource),
+          displayPath: `~/${relativeSource.split(path.sep).join("/")}`,
+          globalSkillSource: {
+            homeDir: home,
+            name,
+            // Bind every alias too, so an alias/root switch after review fails.
+            fingerprint: JSON.stringify(candidates),
+          },
+        };
+      }
       const directory =
         params.scope === "project"
           ? (params.skill_directory ?? ".agentlink/skills")

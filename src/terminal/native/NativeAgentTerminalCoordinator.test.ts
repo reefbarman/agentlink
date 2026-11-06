@@ -738,6 +738,172 @@ describe("NativeAgentTerminalCoordinator", () => {
     expect(test.runtime.createCommand).toHaveBeenCalledTimes(2);
   });
 
+  it.each([false, true])(
+    "excludes manual input from unnamed reuse (while active: %s)",
+    async (whileActive) => {
+      const test = harness();
+      const first = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "printf first",
+        cwd: "/workspace",
+      });
+      await flush();
+      if (!whileActive) {
+        await finish(test.processes[0], "first\r\n");
+        await first;
+      }
+      const input = "sh run_demo.sh --window";
+      expect(test.coordinator.write("native-agent-1", input)).toBe(true);
+      if (whileActive) {
+        await finish(test.processes[0], "first\r\n");
+        await first;
+      }
+
+      const second = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "printf validation",
+        cwd: "/workspace",
+      });
+      await flush();
+      expect(test.commands[1]).toMatchObject({ channelId: "native-agent-2" });
+      await finish(test.processes[1], "validation\r\n");
+      await second;
+      expect(test.runtime.write).toHaveBeenCalledExactlyOnceWith(
+        "native-agent-1",
+        input,
+      );
+      expect(test.runtime.closeChannel).not.toHaveBeenCalled();
+      expect(test.processes[0].interrupt).not.toHaveBeenCalled();
+      expect(test.processes[0].terminate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["", true],
+    ["unfinished", false],
+  ] as const)(
+    "retains unnamed reuse for input %j accepted=%s",
+    async (input, accepted) => {
+      const test = harness();
+      const first = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "printf first",
+        cwd: "/workspace",
+      });
+      await flush();
+      await finish(test.processes[0], "first\r\n");
+      await first;
+      vi.mocked(test.runtime.write).mockReturnValueOnce(accepted);
+      expect(test.coordinator.write("native-agent-1", input)).toBe(accepted);
+      const second = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "printf second",
+        cwd: "/workspace",
+      });
+      await flush();
+      expect(test.commands[1]).toMatchObject({
+        channelId: "native-agent-1",
+        isolateShellState: true,
+      });
+      await finish(test.processes[1], "second\r\n");
+      await second;
+    },
+  );
+
+  it("rejects a prepared unnamed command after manual input without starting or closing its shell", async () => {
+    const test = harness();
+    const first = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf first",
+      cwd: "/workspace",
+    });
+    await flush();
+    await finish(test.processes[0], "first\r\n");
+    await first;
+    const prepared = await test.coordinator.prepareNativeExecution(
+      { owner: undefined, command: "printf validation", cwd: "/workspace" },
+      security,
+    );
+    expect(
+      test.coordinator.write("native-agent-1", "unfinished --window"),
+    ).toBe(true);
+    await expect(prepared.execute()).rejects.toThrow(
+      "manual input before dispatch",
+    );
+    expect(test.runtime.createCommand).toHaveBeenCalledTimes(1);
+    expect(test.starts).toHaveLength(1);
+    expect(test.runtime.closeChannel).not.toHaveBeenCalled();
+    prepared.dispose();
+    const next = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf safe",
+      cwd: "/workspace",
+    });
+    await flush();
+    expect(test.commands[1]).toMatchObject({ channelId: "native-agent-2" });
+    await finish(test.processes[1], "safe\r\n");
+    await next;
+  });
+
+  it("rejects manual input during unnamed shell startup without clearing or closing it", async () => {
+    const test = harness();
+    const startup = deferred<void>();
+    const prepareChannel = test.runtime.prepareChannel;
+    vi.mocked(test.runtime.prepareChannel).mockImplementationOnce(
+      async (request) => {
+        await prepareChannel(request);
+        await startup.promise;
+      },
+    );
+    const command = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf validation",
+      cwd: "/workspace",
+    });
+    await flush();
+    expect(test.coordinator.write("native-agent-1", "unfinished")).toBe(true);
+    const rejected = expect(command).rejects.toThrow(
+      "manual input before dispatch",
+    );
+    startup.resolve();
+    await rejected;
+    expect(test.runtime.createCommand).not.toHaveBeenCalled();
+    expect(test.runtime.closeChannel).not.toHaveBeenCalled();
+    expect(test.runtime.write).toHaveBeenCalledExactlyOnceWith(
+      "native-agent-1",
+      "unfinished",
+    );
+  });
+
+  it("preserves explicitly targeted dispatch after manual input", async () => {
+    const test = harness();
+    const first = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf first",
+      cwd: "/workspace",
+    });
+    await flush();
+    await finish(test.processes[0], "first\r\n");
+    await first;
+    const prepared = await test.coordinator.prepareNativeExecution(
+      {
+        owner: undefined,
+        command: "printf explicit",
+        cwd: "/workspace",
+        terminal_id: "native-agent-1",
+      },
+      security,
+    );
+    expect(test.coordinator.write("native-agent-1", "\r")).toBe(true);
+    const explicit = prepared.execute();
+    await flush();
+    expect(test.commands[1]).toMatchObject({ channelId: "native-agent-1" });
+    expect(test.commands[1].isolateShellState).toBeUndefined();
+    await finish(test.processes[1], "explicit\r\n");
+    await explicit;
+    prepared.dispose();
+  });
+
   it("preserves persistent-shell semantics for an explicitly named terminal", async () => {
     const test = harness();
     const first = test.coordinator.executeCommand({

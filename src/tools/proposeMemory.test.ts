@@ -157,6 +157,284 @@ afterEach(() => {
 });
 
 describe("handleProposeMemory", () => {
+  const globalSkillContent =
+    "---\nname: global-skill\ndescription: Test global skill.\n---\nOriginal\n";
+  const globalSkillUpdate = globalSkillContent.replace("Original", "Updated");
+  function globalSkillParams(operation: "add" | "update" | "remove") {
+    return {
+      tier: "skill" as const,
+      scope: "global" as const,
+      operation,
+      name: "global-skill",
+      title: "Maintain global skill",
+      rationale: "Verified user-requested correction.",
+      content: globalSkillUpdate,
+    };
+  }
+  function writeGlobalSkill(directory: string, content = globalSkillContent) {
+    const filePath = path.join(
+      tmpHome,
+      directory,
+      "skills/global-skill/SKILL.md",
+    );
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content);
+    return filePath;
+  }
+
+  describe.each([".agentlink", ".agents", ".claude"])(
+    "global skill source %s",
+    (directory) => {
+      it.each(["update", "remove"] as const)(
+        "reviews and %s the existing unique source",
+        async (operation) => {
+          const { handleProposeMemory } = await import("./proposeMemory.js");
+          const filePath = writeGlobalSkill(directory);
+          const { panel, requests } = approvingPanel();
+          const result = await handleProposeMemory(
+            globalSkillParams(operation),
+            panel as never,
+          );
+          expect(text(result)).toMatchObject({
+            status: "accepted",
+            path: `~/${directory}/skills/global-skill/SKILL.md`,
+          });
+          expect(requests[0]).toMatchObject({ targetPath: filePath });
+          if (operation === "update") {
+            expect(fs.readFileSync(filePath, "utf-8")).toBe(globalSkillUpdate);
+            expect(diffOpen).toHaveBeenCalledWith(
+              filePath,
+              `~/${directory}/skills/global-skill/SKILL.md`,
+              globalSkillUpdate,
+            );
+          } else {
+            expect(fs.existsSync(filePath)).toBe(false);
+            expect(diffOpen).not.toHaveBeenCalled();
+          }
+          if (directory !== ".agentlink")
+            expect(
+              fs.existsSync(
+                path.join(tmpHome, ".agentlink/skills/global-skill/SKILL.md"),
+              ),
+            ).toBe(false);
+        },
+      );
+    },
+  );
+
+  describe.each(["symlink", "hardlink", "root-symlink"])(
+    "global skill %s aliases",
+    (aliasKind) => {
+      it.each(["update", "remove"] as const)(
+        "reviews the actual source for %s",
+        async (operation) => {
+          const { handleProposeMemory } = await import("./proposeMemory.js");
+          const source = writeGlobalSkill(".agents");
+          const alias = path.join(
+            tmpHome,
+            ".claude/skills/global-skill/SKILL.md",
+          );
+          if (aliasKind === "root-symlink") {
+            fs.mkdirSync(path.join(tmpHome, ".claude"));
+            fs.symlinkSync(
+              path.join(tmpHome, ".agents/skills"),
+              path.join(tmpHome, ".claude/skills"),
+              "dir",
+            );
+          } else {
+            fs.mkdirSync(path.dirname(alias), { recursive: true });
+            if (aliasKind === "hardlink") fs.linkSync(source, alias);
+            else fs.symlinkSync(source, alias);
+          }
+          const { panel, requests } = approvingPanel();
+          const result = await handleProposeMemory(
+            globalSkillParams(operation),
+            panel as never,
+          );
+          expect(text(result)).toMatchObject({
+            status: "accepted",
+            path: "~/.agents/skills/global-skill/SKILL.md",
+          });
+          expect(requests[0]).toMatchObject({ targetPath: source });
+          if (operation === "update")
+            expect(fs.readFileSync(source, "utf-8")).toBe(globalSkillUpdate);
+          else expect(fs.existsSync(source)).toBe(false);
+        },
+      );
+    },
+  );
+
+  it("prefers the real source even when a symlink alias is in a higher-priority root", async () => {
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    const source = writeGlobalSkill(".agents");
+    const alias = path.join(tmpHome, ".agentlink/skills/global-skill/SKILL.md");
+    fs.mkdirSync(path.dirname(alias), { recursive: true });
+    fs.symlinkSync(source, alias);
+    const { panel, requests } = approvingPanel();
+    const result = await handleProposeMemory(
+      globalSkillParams("remove"),
+      panel as never,
+    );
+    expect(text(result).status).toBe("accepted");
+    expect(requests[0]).toMatchObject({ targetPath: source });
+    expect(fs.existsSync(source)).toBe(false);
+    expect(fs.lstatSync(alias).isSymbolicLink()).toBe(true);
+  });
+
+  it.each(["update", "remove"] as const)(
+    "rejects alias retargeting during %s review",
+    async (operation) => {
+      const { handleProposeMemory } = await import("./proposeMemory.js");
+      const source = writeGlobalSkill(".agents");
+      const alias = path.join(tmpHome, ".claude/skills/global-skill/SKILL.md");
+      fs.mkdirSync(path.dirname(alias), { recursive: true });
+      fs.symlinkSync(source, alias);
+      const other = path.join(tmpHome, ".agents/skills/other/SKILL.md");
+      fs.mkdirSync(path.dirname(other), { recursive: true });
+      fs.writeFileSync(other, globalSkillContent);
+      const { panel } = approvingPanel();
+      panel.enqueueMemoryApproval.mockImplementationOnce(() => {
+        fs.unlinkSync(alias);
+        fs.symlinkSync(other, alias);
+        return {
+          id: "approval-1",
+          promise: Promise.resolve({ decision: "accept" as const }),
+        };
+      });
+      const result = await handleProposeMemory(
+        globalSkillParams(operation),
+        panel as never,
+      );
+      expect(result.isError).toBe(true);
+      expect(fs.readFileSync(source, "utf-8")).toBe(globalSkillContent);
+      expect(fs.readFileSync(other, "utf-8")).toBe(globalSkillContent);
+      expect(diffSaveChanges).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps global skill adds at the default source", async () => {
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    const other = writeGlobalSkill(".agents");
+    const { panel } = approvingPanel();
+    const result = await handleProposeMemory(
+      globalSkillParams("add"),
+      panel as never,
+    );
+    expect(text(result)).toMatchObject({
+      path: "~/.agentlink/skills/global-skill/SKILL.md",
+    });
+    expect(fs.readFileSync(other, "utf-8")).toBe(globalSkillContent);
+  });
+
+  it.each(["update", "remove"] as const)(
+    "rejects ambiguous global skill %s before review",
+    async (operation) => {
+      const { handleProposeMemory } = await import("./proposeMemory.js");
+      const paths = [writeGlobalSkill(".agents"), writeGlobalSkill(".claude")];
+      const { panel } = approvingPanel();
+      const result = await handleProposeMemory(
+        globalSkillParams(operation),
+        panel as never,
+      );
+      expect(result.isError).toBe(true);
+      expect(text(result).error).toContain("Ambiguous global skill target");
+      expect(panel.enqueueMemoryApproval).not.toHaveBeenCalled();
+      expect(diffOpen).not.toHaveBeenCalled();
+      for (const filePath of paths)
+        expect(fs.readFileSync(filePath, "utf-8")).toBe(globalSkillContent);
+    },
+  );
+
+  it("does not review an existing global skill linked outside its supported root", async () => {
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    const filePath = writeGlobalSkill(".agents");
+    const outside = path.join(tmpHome, "outside.md");
+    fs.writeFileSync(outside, globalSkillContent);
+    fs.unlinkSync(filePath);
+    fs.symlinkSync(outside, filePath);
+    const { panel } = approvingPanel();
+    const result = await handleProposeMemory(
+      globalSkillParams("update"),
+      panel as never,
+    );
+    expect(result.isError).toBe(true);
+    expect(panel.enqueueMemoryApproval).not.toHaveBeenCalled();
+    expect(diffOpen).not.toHaveBeenCalled();
+    expect(fs.readFileSync(outside, "utf-8")).toBe(globalSkillContent);
+  });
+
+  it("requires another proposal when a global skill removal is retargeted", async () => {
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    const source = writeGlobalSkill(".agents");
+    const other = path.join(tmpHome, ".claude/skills/other-skill/SKILL.md");
+    fs.mkdirSync(path.dirname(other), { recursive: true });
+    fs.writeFileSync(
+      other,
+      globalSkillContent.replace("global-skill", "other-skill"),
+    );
+    const { panel } = approvingPanel({ memoryName: "other-skill" });
+    const result = await handleProposeMemory(
+      globalSkillParams("remove"),
+      panel as never,
+    );
+    expect(result.isError).toBe(true);
+    expect(text(result).error).toContain("removal target changed");
+    expect(fs.existsSync(source)).toBe(true);
+    expect(fs.existsSync(other)).toBe(true);
+  });
+
+  describe.each(["update", "remove"] as const)(
+    "global skill %s drift",
+    (operation) => {
+      it.each(["source", "root", "symlink", "content", "ambiguity"])(
+        "rejects %s changes during approval without mutating the replacement",
+        async (drift) => {
+          const { handleProposeMemory } = await import("./proposeMemory.js");
+          const filePath = writeGlobalSkill(".agents");
+          let replacement = filePath;
+          const { panel } = approvingPanel();
+          panel.enqueueMemoryApproval.mockImplementationOnce(() => {
+            if (drift === "source") {
+              fs.renameSync(
+                path.dirname(filePath),
+                path.join(tmpHome, "moved-skill"),
+              );
+              replacement = writeGlobalSkill(".claude");
+            } else if (drift === "root") {
+              fs.renameSync(
+                path.join(tmpHome, ".agents/skills"),
+                path.join(tmpHome, "moved-root"),
+              );
+              writeGlobalSkill(".agents");
+            } else if (drift === "symlink") {
+              replacement = path.join(tmpHome, "outside.md");
+              fs.writeFileSync(replacement, globalSkillContent);
+              fs.unlinkSync(filePath);
+              fs.symlinkSync(replacement, filePath);
+            } else if (drift === "content") {
+              fs.writeFileSync(filePath, globalSkillContent + "Concurrent\n");
+            } else {
+              replacement = writeGlobalSkill(".claude");
+            }
+            return {
+              id: "approval-1",
+              promise: Promise.resolve({ decision: "accept" as const }),
+            };
+          });
+          const result = await handleProposeMemory(
+            globalSkillParams(operation),
+            panel as never,
+          );
+          expect(result.isError).toBe(true);
+          expect(fs.readFileSync(replacement, "utf-8")).toBe(
+            globalSkillContent + (drift === "content" ? "Concurrent\n" : ""),
+          );
+          expect(diffSaveChanges).not.toHaveBeenCalled();
+          expect(diffRevertChanges).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
   it("rejects legacy low-authority memory proposals before review", async () => {
     const { handleProposeMemory } = await import("./proposeMemory.js");
     const { panel } = approvingPanel();
