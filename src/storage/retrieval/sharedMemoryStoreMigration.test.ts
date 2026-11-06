@@ -29,6 +29,8 @@ async function makeRoot(label: string): Promise<string> {
 }
 
 describe("migrateSharedMemoryStore", () => {
+  // Real native database setup, two migrations and persisted-state checks need
+  // headroom under full-suite load, not the default five-second unit budget.
   it("migrates autonomous and derived memory exactly and idempotently", async () => {
     const legacyRoot = await makeRoot("legacy");
     const canonicalRoot = await makeRoot("canonical");
@@ -151,7 +153,7 @@ describe("migrateSharedMemoryStore", () => {
       }),
     ]);
     await canonicalRetrieval.close();
-  });
+  }, 15_000);
 });
 
 function createSequentialId(): (kind: "record" | "audit") => string {
