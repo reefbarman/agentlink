@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.48.1 — 2026-11-06
+
+- find_and_replace now rejects globs matching over 500 files instead of silently editing a truncated subset, and MCP connections with stale configuration are marked as errors after a rejected tool call.
+
 ## 0.48.0 — 2026-11-05
 
 - VS Code chats and the browser remote view can now watch an exact MCP resource per session, with approval-gated notifications, automatic delivery and idle waking, plus new SDK resource-subscription and read-option APIs.

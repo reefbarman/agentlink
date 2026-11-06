@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "8bb8c6b28ad9c61280c87ab0637eec944bad4f32",
-  "createdAt": "2026-11-06T01:43:38.103Z",
+  "sourceSha": "ed11be4f235a96df72722f331c41c9cfd0e700be",
+  "createdAt": "2026-11-06T02:54:24.531Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.83.1",
-      "baselineRef": "v1.83.1",
-      "reserved": "1.83.1",
-      "commits": ["585bb059e96684925abea36d5918145065d28516"],
+      "published": "1.83.2",
+      "baselineRef": "v1.83.2",
+      "reserved": "1.83.2",
+      "commits": ["ed11be4f235a96df72722f331c41c9cfd0e700be"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.83.2",
+      "version": "1.83.3",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.83.2",
+      "tag": "v1.83.3",
       "notes": [
         {
-          "sha": "585bb059e96684925abea36d5918145065d28516",
-          "subject": "fix(mcp): release send-once controls before turn completion",
-          "summary": "MCP Send once controls now complete once the approved snapshot is queued instead of waiting for the agent turn to finish, so watch controls are usable again while the turn runs or asks a question.}]}</br>",
+          "sha": "ed11be4f235a96df72722f331c41c9cfd0e700be",
+          "subject": "fix: reject truncated bulk edits and expose stale MCP connections",
+          "summary": "find_and_replace now rejects globs matching over 500 files instead of silently editing a truncated subset, and MCP connections with stale configuration are marked as errors after a rejected tool call.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.83.1",
-      "baselineRef": "desktop-v0.83.1",
-      "reserved": "0.83.1",
-      "commits": ["585bb059e96684925abea36d5918145065d28516"],
+      "published": "0.83.2",
+      "baselineRef": "desktop-v0.83.2",
+      "reserved": "0.83.2",
+      "commits": ["ed11be4f235a96df72722f331c41c9cfd0e700be"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.83.2",
+      "version": "0.83.3",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.83.2",
+      "tag": "desktop-v0.83.3",
       "notes": [
         {
-          "sha": "585bb059e96684925abea36d5918145065d28516",
-          "subject": "fix(mcp): release send-once controls before turn completion",
-          "summary": "MCP Send once controls now complete once the approved snapshot is queued instead of waiting for the agent turn to finish, so watch controls are usable again while the turn runs or asks a question.}]}</br>",
+          "sha": "ed11be4f235a96df72722f331c41c9cfd0e700be",
+          "subject": "fix: reject truncated bulk edits and expose stale MCP connections",
+          "summary": "find_and_replace now rejects globs matching over 500 files instead of silently editing a truncated subset, and MCP connections with stale configuration are marked as errors after a rejected tool call.",
           "breaking": false
         }
       ]
@@ -61,46 +61,70 @@
       "published": "0.58.0",
       "baselineRef": "cli-v0.58.0",
       "reserved": "0.58.0",
-      "commits": [],
+      "commits": ["ed11be4f235a96df72722f331c41c9cfd0e700be"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.58.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.58.1",
+      "notes": [
+        {
+          "sha": "ed11be4f235a96df72722f331c41c9cfd0e700be",
+          "subject": "fix: reject truncated bulk edits and expose stale MCP connections",
+          "summary": "find_and_replace now rejects globs matching over 500 files instead of silently editing a truncated subset, and MCP connections with stale configuration are marked as errors after a rejected tool call.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.48.0",
       "baselineRef": "sdk-v0.48.0",
       "reserved": "0.48.0",
-      "commits": [],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "assistant": {
-      "published": "0.55.1",
-      "baselineRef": "assistant-v0.55.1",
-      "reserved": "0.55.1",
-      "commits": ["585bb059e96684925abea36d5918145065d28516"],
+      "commits": ["ed11be4f235a96df72722f331c41c9cfd0e700be"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.55.2",
+      "version": "0.48.1",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.55.2",
+      "tag": "sdk-v0.48.1",
       "notes": [
         {
-          "sha": "585bb059e96684925abea36d5918145065d28516",
-          "subject": "fix(mcp): release send-once controls before turn completion",
-          "summary": "MCP Send once controls now complete once the approved snapshot is queued instead of waiting for the agent turn to finish, so watch controls are usable again while the turn runs or asks a question.}]}</br>",
+          "sha": "ed11be4f235a96df72722f331c41c9cfd0e700be",
+          "subject": "fix: reject truncated bulk edits and expose stale MCP connections",
+          "summary": "find_and_replace now rejects globs matching over 500 files instead of silently editing a truncated subset, and MCP connections with stale configuration are marked as errors after a rejected tool call.",
+          "breaking": false
+        }
+      ]
+    },
+    "assistant": {
+      "published": "0.55.2",
+      "baselineRef": "assistant-v0.55.2",
+      "reserved": "0.55.2",
+      "commits": ["ed11be4f235a96df72722f331c41c9cfd0e700be"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "patch",
+      "status": "release",
+      "version": "0.55.3",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.55.3",
+      "notes": [
+        {
+          "sha": "ed11be4f235a96df72722f331c41c9cfd0e700be",
+          "subject": "fix: reject truncated bulk edits and expose stale MCP connections",
+          "summary": "find_and_replace now rejects globs matching over 500 files instead of silently editing a truncated subset, and MCP connections with stale configuration are marked as errors after a rejected tool call.",
           "breaking": false
         }
       ]
@@ -159,6 +183,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "MCP Send once controls now complete once the approved snapshot is queued instead of waiting for the agent turn to finish, so watch controls are usable again while the turn runs or asks a question.}]}</br>",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ed11be4f235a96df72722f331c41c9cfd0e700be": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "find_and_replace now rejects globs matching over 500 files instead of silently editing a truncated subset, and MCP connections with stale configuration are marked as errors after a rejected tool call.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
