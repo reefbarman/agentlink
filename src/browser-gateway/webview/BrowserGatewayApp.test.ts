@@ -7516,10 +7516,15 @@ describe("BrowserGatewayApp /mcp behavior", () => {
         },
       },
     );
-    MockEventSource.instances[0]?.addEventListener.mock.calls.find(
-      ([eventName]) => eventName === "snapshot",
-    )?.[1]?.({ data: JSON.stringify(errorSnapshot) });
-    fireEvent.click(await screen.findByText("Retry"));
+    await act(async () => {
+      MockEventSource.instances[0]?.addEventListener.mock.calls.find(
+        ([eventName]) => eventName === "snapshot",
+      )?.[1]?.({ data: JSON.stringify(errorSnapshot) });
+    });
+    // The previous snapshot also has Retry. Wait for the replacement error
+    // before selecting its button, rather than clicking a stale DOM node.
+    await screen.findByText("fetch failed: ETIMEDOUT");
+    fireEvent.click(screen.getByText("Retry"));
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(
