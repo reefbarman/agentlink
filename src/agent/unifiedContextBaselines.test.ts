@@ -32,7 +32,7 @@ const fixtureRoot = path.resolve(
 const repoRoot = path.resolve(__dirname, "..", "..");
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
-const isolatedHome = path.join(os.tmpdir(), "agentlink-unified-context-home");
+let isolatedHome = "";
 
 const providerCohorts = [
   { providerId: "anthropic", model: "claude-opus-4-8" },
@@ -313,16 +313,19 @@ async function buildRuntimeMeasurements() {
 }
 
 beforeAll(() => {
-  fs.rmSync(isolatedHome, { recursive: true, force: true });
-  fs.mkdirSync(isolatedHome, { recursive: true });
+  isolatedHome = fs.mkdtempSync(
+    path.join(os.tmpdir(), "agentlink-unified-context-home-"),
+  );
   process.env.HOME = isolatedHome;
   process.env.USERPROFILE = isolatedHome;
 });
 
 afterAll(() => {
-  process.env.HOME = originalHome;
-  process.env.USERPROFILE = originalUserProfile;
-  fs.rmSync(isolatedHome, { recursive: true, force: true });
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = originalUserProfile;
+  if (isolatedHome) fs.rmSync(isolatedHome, { recursive: true, force: true });
 });
 
 describe("unified context Stage 0 baselines", () => {
@@ -814,7 +817,8 @@ describe("unified context Stage 0 baselines", () => {
       );
     }
     expect(measurements).toEqual(readJson("runtime-measurements.json"));
-  }, 15_000);
+    // This measures the full real prompt/skill matrix, not a fast unit fixture.
+  }, 60_000);
 
   it("keeps every built-in mode permission resolvable", () => {
     for (const mode of BUILT_IN_MODES) {

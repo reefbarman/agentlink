@@ -10,7 +10,6 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { pathToFileURL } from "url";
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -22,6 +21,7 @@ import {
 } from "@testing-library/preact";
 
 import type { AgentConfig } from "../types.js";
+import { pathToFileURL } from "url";
 
 const mocks = vi.hoisted(() => {
   let nextId = 0;
@@ -159,14 +159,24 @@ const makeConfig = (): AgentConfig => ({
   autoCondenseThreshold: 0.9,
 });
 
-beforeAll(() => {
+beforeAll(async () => {
   Element.prototype.scrollIntoView = vi.fn();
   globalThis.ResizeObserver = class {
     observe() {}
     unobserve() {}
     disconnect() {}
   } as unknown as typeof ResizeObserver;
-});
+  // Cold host/webview module transformation belongs to fixture setup, not the
+  // measured restore/send flow (which retains its existing assertion deadlines).
+  await import("../../core/workspaceProjects.js");
+  await import("../SessionStore.js");
+  await import("../AgentSessionManager.js");
+  await import("../ChatTabController.js");
+  await import("../ChatTabHostCoordinator.js");
+  await import("../ChatViewProvider.js");
+  await import("../chatTabStartupRestore.js");
+  await import("./App.js");
+}, 60_000);
 
 afterEach(() => cleanup());
 
@@ -234,12 +244,13 @@ async function bootWorkspace() {
   });
 
   const { AgentSessionManager } = await import("../AgentSessionManager.js");
+  const store = new SessionStore(workspace);
   const manager = new AgentSessionManager(
     makeConfig(),
     workspace,
     undefined,
     false,
-    new SessionStore(workspace),
+    store,
     undefined,
     undefined,
     {
@@ -350,10 +361,15 @@ async function bootWorkspace() {
   provider.setChatTabStartupRestore(startupRestore);
 
   const sentToHost: Array<Record<string, unknown>> = [];
+  const pendingHostMessages = new Set<Promise<unknown>>();
   const vscodeApi = {
     postMessage: (message: Record<string, unknown>) => {
       sentToHost.push(message);
-      void (provider as any).handleWebviewMessage(message).catch(() => {});
+      const pending: Promise<unknown> = (provider as any)
+        .handleWebviewMessage(message)
+        .catch(() => {})
+        .finally(() => pendingHostMessages.delete(pending));
+      pendingHostMessages.add(pending);
     },
     getState: () => undefined,
     setState: () => {},
@@ -371,8 +387,16 @@ async function bootWorkspace() {
     manager,
     sentToHost,
     workspace,
-    cleanupWorkspace: () =>
-      fs.rmSync(workspace, { recursive: true, force: true }),
+    cleanupWorkspace: async () => {
+      rendered.unmount();
+      (provider as any).postMessage = () => {};
+      provider.dispose();
+      controller.dispose();
+      manager.disposeFleetVisibilityExpiry();
+      while (pendingHostMessages.size) await Promise.all(pendingHostMessages);
+      await store.flush();
+      fs.rmSync(workspace, { recursive: true, force: true });
+    },
   };
 }
 
@@ -429,7 +453,7 @@ describe("session-less chat tab restore seam", () => {
         { timeout: 15000 },
       );
     } finally {
-      cleanupWorkspaceSafe();
+      await cleanupWorkspaceSafe();
     }
   }, 30000);
 
@@ -467,7 +491,7 @@ describe("session-less chat tab restore seam", () => {
         { timeout: 15000 },
       );
     } finally {
-      boot.cleanupWorkspace();
+      await boot.cleanupWorkspace();
     }
   }, 30000);
 });
