@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.83.2
+
 - Browser resource-watch controls no longer stay disabled throughout a Send once agent turn. The action finishes after approval/read/queueing, allowing Pause and Stop watching while the agent is working or waiting for an answer. Later delivery-turn failures are reported through the normal session error UI, without automatic retries or broader watch permission.
 
 ## 1.83.1

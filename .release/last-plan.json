@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "c307c560ff5f7d1bd081ea2b3fb35213892df899",
-  "createdAt": "2026-11-05T06:38:55.036Z",
+  "sourceSha": "8bb8c6b28ad9c61280c87ab0637eec944bad4f32",
+  "createdAt": "2026-11-06T01:43:38.103Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.83.0",
-      "baselineRef": "v1.83.0",
-      "reserved": "1.83.0",
-      "commits": ["c307c560ff5f7d1bd081ea2b3fb35213892df899"],
+      "published": "1.83.1",
+      "baselineRef": "v1.83.1",
+      "reserved": "1.83.1",
+      "commits": ["585bb059e96684925abea36d5918145065d28516"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.83.1",
+      "version": "1.83.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.83.1",
+      "tag": "v1.83.2",
       "notes": [
         {
-          "sha": "c307c560ff5f7d1bd081ea2b3fb35213892df899",
-          "subject": "fix(mcp): clear notify notices after send-once admission",
-          "summary": "Notify-only MCP resource watches now clear their pending update notice after a successful Send once is admitted to the agent's context, while failed reads or newer notifications stay pending.",
+          "sha": "585bb059e96684925abea36d5918145065d28516",
+          "subject": "fix(mcp): release send-once controls before turn completion",
+          "summary": "MCP Send once controls now complete once the approved snapshot is queued instead of waiting for the agent turn to finish, so watch controls are usable again while the turn runs or asks a question.}]}</br>",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.83.0",
-      "baselineRef": "desktop-v0.83.0",
-      "reserved": "0.83.0",
-      "commits": ["c307c560ff5f7d1bd081ea2b3fb35213892df899"],
+      "published": "0.83.1",
+      "baselineRef": "desktop-v0.83.1",
+      "reserved": "0.83.1",
+      "commits": ["585bb059e96684925abea36d5918145065d28516"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.83.1",
+      "version": "0.83.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.83.1",
+      "tag": "desktop-v0.83.2",
       "notes": [
         {
-          "sha": "c307c560ff5f7d1bd081ea2b3fb35213892df899",
-          "subject": "fix(mcp): clear notify notices after send-once admission",
-          "summary": "Notify-only MCP resource watches now clear their pending update notice after a successful Send once is admitted to the agent's context, while failed reads or newer notifications stay pending.",
+          "sha": "585bb059e96684925abea36d5918145065d28516",
+          "subject": "fix(mcp): release send-once controls before turn completion",
+          "summary": "MCP Send once controls now complete once the approved snapshot is queued instead of waiting for the agent turn to finish, so watch controls are usable again while the turn runs or asks a question.}]}</br>",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.55.0",
-      "baselineRef": "assistant-v0.55.0",
-      "reserved": "0.55.0",
-      "commits": ["c307c560ff5f7d1bd081ea2b3fb35213892df899"],
+      "published": "0.55.1",
+      "baselineRef": "assistant-v0.55.1",
+      "reserved": "0.55.1",
+      "commits": ["585bb059e96684925abea36d5918145065d28516"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.55.1",
+      "version": "0.55.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.55.1",
+      "tag": "assistant-v0.55.2",
       "notes": [
         {
-          "sha": "c307c560ff5f7d1bd081ea2b3fb35213892df899",
-          "subject": "fix(mcp): clear notify notices after send-once admission",
-          "summary": "Notify-only MCP resource watches now clear their pending update notice after a successful Send once is admitted to the agent's context, while failed reads or newer notifications stay pending.",
+          "sha": "585bb059e96684925abea36d5918145065d28516",
+          "subject": "fix(mcp): release send-once controls before turn completion",
+          "summary": "MCP Send once controls now complete once the approved snapshot is queued instead of waiting for the agent turn to finish, so watch controls are usable again while the turn runs or asks a question.}]}</br>",
           "breaking": false
         }
       ]
@@ -151,6 +151,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Notify-only MCP resource watches now clear their pending update notice after a successful Send once is admitted to the agent's context, while failed reads or newer notifications stay pending.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "585bb059e96684925abea36d5918145065d28516": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "MCP Send once controls now complete once the approved snapshot is queued instead of waiting for the agent turn to finish, so watch controls are usable again while the turn runs or asks a question.}]}</br>",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
