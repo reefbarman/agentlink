@@ -210,6 +210,7 @@ export async function handleGetContext(
             providers.enrichmentProvider,
             document,
             providers.symbolTimeoutMs ?? SYMBOL_TIMEOUT_MS,
+            params.offset !== undefined ? range : undefined,
           );
     if (symbols) {
       const outline = boundSymbolOutline(symbols, range);
@@ -385,12 +386,13 @@ async function getDocumentSymbolsWithTimeout(
   provider: ContextEnrichmentProvider,
   document: ContextResolvedDocument,
   timeoutMs: number,
+  range: Parameters<ContextEnrichmentProvider["getDocumentSymbols"]>[1],
 ): Promise<Record<string, string[]> | undefined> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timedOut = Symbol("timeout");
   try {
     const symbols = await Promise.race([
-      provider.getDocumentSymbols(document),
+      provider.getDocumentSymbols(document, range),
       new Promise<typeof timedOut>((resolve) => {
         timeout = setTimeout(() => resolve(timedOut), timeoutMs);
         timeout.unref?.();
@@ -404,6 +406,7 @@ async function getDocumentSymbolsWithTimeout(
 
 export async function getContextDocumentSymbols(
   document: ContextResolvedDocument,
+  range?: Parameters<ContextEnrichmentProvider["getDocumentSymbols"]>[1],
 ): Promise<Record<string, string[]> | undefined> {
   const { uri } = getVscodeContextDocument(document);
   const languageId = document.languageId;
@@ -423,11 +426,32 @@ export async function getContextDocumentSymbols(
     string,
     string[]
   >;
-  for (const symbol of symbols) {
-    addSymbol(grouped, symbol);
-    if (CONTAINER_KINDS.has(symbol.kind)) {
-      for (const child of symbol.children.slice(0, 10)) {
-        addSymbol(grouped, child, symbol.name);
+  if (range) {
+    // Filter before flattening: start-line strings alone cannot identify an
+    // enclosing function or a local member beyond the overview's child cap.
+    const visit = (
+      symbol: vscode.DocumentSymbol,
+      parentName?: string,
+    ): void => {
+      const startLine = symbol.range.start.line + 1;
+      const endLine =
+        symbol.range.end.character === 0 &&
+        symbol.range.end.line > symbol.range.start.line
+          ? symbol.range.end.line
+          : symbol.range.end.line + 1;
+      if (startLine > range.endLine || endLine < range.startLine) return;
+      addSymbol(grouped, symbol, parentName);
+      const name = parentName ? `${parentName}.${symbol.name}` : symbol.name;
+      for (const child of symbol.children) visit(child, name);
+    };
+    for (const symbol of symbols) visit(symbol);
+  } else {
+    for (const symbol of symbols) {
+      addSymbol(grouped, symbol);
+      if (CONTAINER_KINDS.has(symbol.kind)) {
+        for (const child of symbol.children.slice(0, 10)) {
+          addSymbol(grouped, child, symbol.name);
+        }
       }
     }
   }

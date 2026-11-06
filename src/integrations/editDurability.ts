@@ -342,7 +342,6 @@ async function saveWithoutFormatting(
     await vscode.commands.executeCommand(
       "workbench.action.files.saveWithoutFormatting",
     );
-    return !document.isDirty;
   } finally {
     const activePath = vscode.window.activeTextEditor?.document.uri.fsPath;
     if (
@@ -370,6 +369,9 @@ async function saveWithoutFormatting(
       }
     }
   }
+  // Saving can finish while editor restoration awaits. Read the completion
+  // state after cleanup, not before it; callers still verify disk durability.
+  return !document.isDirty;
 }
 
 function findTextTab(

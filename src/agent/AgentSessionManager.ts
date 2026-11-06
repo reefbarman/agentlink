@@ -14417,7 +14417,6 @@ ${instruction}`
       (emptyTextMarker ||
         !partialResult?.trim() ||
         (session.fleetMetadata?.backend === "native" &&
-          isReviewTaskClass(session.fleetMetadata.taskClass) &&
           marker?.status !== "completed"));
     const parsedEnvelope = parseFleetResultEnvelopeDetailed(expected, rawText, {
       workspaceRoots: this.getWorkspaceFolders().map((folder) => folder.path),

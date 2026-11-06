@@ -11,6 +11,18 @@ export interface BackgroundDisplayStatusInput {
   statusDetail?: string;
 }
 
+// Status labels are hints, so prefer a neutral label over inventing a finding.
+function hasAffirmativeFinding(text: string): boolean {
+  return text.split(/[.!?;\n]|\bbut\b|\bhowever\b/).some((clause) => {
+    if (/\b(?:no|not|never|without|cannot|unable|\w+n['’]t)\b/.test(clause)) {
+      return false;
+    }
+    return /\b(?:i found|found|identified|confirmed)\s+(?:(?:the|a|an)\s+)?(?:(?:material|actual|likely)\s+)?(?:issue|bug|defect|problem|root cause)\b|\b(?:the )?root cause is\b|\bthe problem is\b/.test(
+      clause,
+    );
+  });
+}
+
 export function inferBackgroundDisplayStatus(
   args: BackgroundDisplayStatusInput,
 ): string {
@@ -55,11 +67,7 @@ export function inferBackgroundDisplayStatus(
     tool.includes("get_hover") ||
     tool.includes("get_completions")
   ) {
-    if (
-      /\bi found\b|\bfound the issue\b|\broot cause\b|\bproblem is\b/.test(
-        textWindow,
-      )
-    ) {
+    if (hasAffirmativeFinding(textWindow)) {
       return "Issue found";
     }
     if (/\binspect\b|\binvestigat\w*\b|\banaly\w*\b/.test(textWindow)) {
@@ -101,7 +109,7 @@ export function inferBackgroundDisplayStatus(
     if (/\bapplied patch\b|\bupdating\b|\bpatching\b/.test(textWindow)) {
       return "Updating code";
     }
-    if (/\bi found\b|\bfound the issue\b|\broot cause\b/.test(textWindow)) {
+    if (hasAffirmativeFinding(textWindow)) {
       return "Issue found";
     }
     return "Running…";
@@ -113,7 +121,7 @@ export function inferBackgroundDisplayStatus(
   if (/\bnext i('|’)ll\b|\bi('|’)m going to\b|\binspect\b/.test(textWindow)) {
     return "Inspecting code";
   }
-  if (/\bi found\b|\bfound the issue\b|\broot cause\b/.test(textWindow)) {
+  if (hasAffirmativeFinding(textWindow)) {
     return "Issue found";
   }
 

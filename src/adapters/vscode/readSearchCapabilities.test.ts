@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import * as vscode from "vscode";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -22,6 +23,7 @@ import {
 import { LanceDbRetrievalRepository } from "../../storage/retrieval/LanceDbRetrievalRepository.js";
 import { buildModuleNeighborsPayload } from "../../tools/getModuleNeighbors.js";
 import { createCodeIndexFingerprint } from "../../indexer/retrievalFingerprint.js";
+import { handleGetContext } from "../../tools/context/getContext.js";
 import { handleSearchFiles } from "../../tools/searchFiles.js";
 import { prepareCodeFilePublication } from "../../indexer/retrievalPublicationTranslation.js";
 
@@ -65,6 +67,7 @@ vi.mock("../../util/paths.js", () => ({
 }));
 vi.mock("../../tools/languageFeatures.js", () => ({
   resolveAndOpenDocument,
+  SYMBOL_KIND_NAMES: { 4: "class", 5: "method", 11: "function" },
 }));
 
 describe("createVscodeAdvertisedArtifactProvider", () => {
@@ -136,6 +139,70 @@ describe("createVscodeReadFileEnrichmentProvider", () => {
     expect(provider.getDiagnosticsSummary).toBeTypeOf("function");
   });
 });
+
+it.each([undefined, 51])(
+  "forwards context offset %s through the production enrichment adapter",
+  async (offset) => {
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-outline-wiring-"),
+    );
+    const absolutePath = path.join(workspace, "example.ts");
+    const content = Array.from({ length: 100 }, () => "source").join("\n");
+    fs.writeFileSync(absolutePath, content);
+    const uri = vscode.Uri.file(absolutePath);
+    const document = { uri, languageId: "typescript", isDirty: false };
+    const symbol = (name: string, start: number, end: number) => ({
+      name,
+      kind: vscode.SymbolKind.Function,
+      range: {
+        start: { line: start, character: 0 },
+        end: { line: end, character: 1 },
+      },
+      children: [],
+    });
+    const command = vi
+      .spyOn(vscode.commands, "executeCommand")
+      .mockResolvedValue([
+        symbol("unrelated", 0, 5),
+        symbol("enclosing", 40, 60),
+      ]);
+    try {
+      const result = await handleGetContext(
+        { path: "example.ts", offset, limit: 2 },
+        "outline-wiring",
+        {
+          documentProvider: {
+            async resolveDocument() {
+              return {
+                absolutePath,
+                relPath: "example.ts",
+                languageId: "typescript",
+                hostDocument: { uri, document },
+              };
+            },
+          },
+          workingSetProvider: createVscodeContextWorkingSetProvider(),
+          enrichmentProvider: createVscodeContextEnrichmentProvider(),
+        },
+      );
+      const first = result.content[0];
+      if (first.type !== "text") throw new Error("Expected context text");
+      const payload = JSON.parse(first.text);
+      expect(payload.symbols.function).toEqual(
+        offset === undefined
+          ? ["unrelated (line 1)", "enclosing (line 41)"]
+          : ["enclosing (line 41)"],
+      );
+      expect(command).toHaveBeenCalledWith(
+        "vscode.executeDocumentSymbolProvider",
+        uri,
+      );
+    } finally {
+      command.mockRestore();
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  },
+);
 
 describe("createVscodeSemanticSearchProvider", () => {
   beforeEach(() => {

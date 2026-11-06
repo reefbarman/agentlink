@@ -683,6 +683,67 @@ describe("commitAndVerifyEdit", () => {
     });
   });
 
+  it.each([
+    ["exact", "new", "accepted"],
+    ["transformed", "formatted new", "error"],
+    ["unchanged", undefined, "error"],
+  ] as const)(
+    "verifies a preserving save completing during editor restoration (%s)",
+    async (_label, savedContent, expectedStatus) => {
+      const target = await makeFile("example.ts", "old");
+      const document = makeDocument(target.absolutePath, "new");
+      const normalSave = vi.spyOn(document, "save");
+      const previous = {
+        document: makeDocument(
+          path.join(path.dirname(target.absolutePath), "other.ts"),
+          "other",
+        ),
+        viewColumn: vscode.ViewColumn.Two,
+      } as unknown as vscode.TextEditor;
+      const editor = { document } as unknown as vscode.TextEditor;
+      Object.assign(vscode.window, { activeTextEditor: previous });
+      vi.spyOn(vscode.window, "showTextDocument").mockImplementation(
+        async (shownDocument) => {
+          const shown =
+            (shownDocument as unknown) === document ? editor : previous;
+          if (shown === previous && savedContent !== undefined) {
+            await fs.writeFile(target.absolutePath, savedContent, "utf-8");
+            document.content = savedContent;
+            document.isDirty = false;
+          }
+          Object.assign(vscode.window, { activeTextEditor: shown });
+          return shown;
+        },
+      );
+      const command = vi
+        .spyOn(vscode.commands, "executeCommand")
+        .mockResolvedValue(undefined);
+
+      const result = await commitAndVerifyEdit({
+        ...request(document, target.absolutePath, target.relativePath, "old"),
+        saveWithoutFormatting: true,
+      });
+
+      expect(result.status).toBe(expectedStatus);
+      expect(normalSave).not.toHaveBeenCalled();
+      expect(command).toHaveBeenCalledExactlyOnceWith(
+        "workbench.action.files.saveWithoutFormatting",
+      );
+      expect(vscode.window.activeTextEditor).toBe(previous);
+      expect(await fs.readFile(target.absolutePath, "utf-8")).toBe(
+        savedContent ?? "old",
+      );
+      if (savedContent === "new") {
+        expect(result).toMatchObject({
+          finalContent: "new",
+          durability: { status: "durable", outcome: "exact" },
+        });
+      } else {
+        expect(result.durability?.status).toBe("failed");
+      }
+    },
+  );
+
   it.each([false, true])(
     "preserves sidebar focus while saving and restoring the previous editor (save fails: %s)",
     async (saveFails) => {

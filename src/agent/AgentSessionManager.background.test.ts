@@ -1261,6 +1261,12 @@ describe("AgentSessionManager background agents", () => {
       parent.sessionId,
     );
     expect(mgr.getBackgroundStatus(child.sessionId).status).toBe("queued");
+    (mgr as any).sessions
+      .get(child.sessionId)
+      .getLastFinalMarker.mockReturnValue({
+        status: "completed",
+        summary: "background result",
+      });
 
     // The parent occupies the only slot, but blocking on the child's result
     // must release it so the queued child can start and finish.
@@ -1349,6 +1355,12 @@ describe("AgentSessionManager background agents", () => {
       spawned.sessionId,
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
+    (mgr as any).sessions
+      .get(spawned.sessionId)
+      .getLastFinalMarker.mockReturnValue({
+        status: "completed",
+        summary: "background result",
+      });
     releaseBackground?.();
     await expect(resumedWait).resolves.toBe("background result");
   });
@@ -1438,6 +1450,10 @@ describe("AgentSessionManager background agents", () => {
     const firstSession = (mgr as any).sessions.get(first.sessionId);
     const secondSession = (mgr as any).sessions.get(second.sessionId);
     firstSession.getLastAssistantText.mockReturnValue("first result");
+    firstSession.getLastFinalMarker.mockReturnValue({
+      status: "completed",
+      summary: "first result",
+    });
     firstSession.getAllMessages.mockReturnValue([
       {
         role: "assistant",
@@ -4993,8 +5009,12 @@ describe("AgentSessionManager background agents", () => {
       taskClass: "research",
       budget: { maxToolCalls: 2 },
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
     const session = (mgr as any).sessions.get(spawned.sessionId);
+    session.getLastFinalMarker.mockReturnValue({
+      status: "completed",
+      summary: "background result",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     // Reaching the nominal value neither rushes nor kills the run; only the
     // hard boundary (3x for non-review work) stops it.
@@ -5056,6 +5076,10 @@ describe("AgentSessionManager background agents", () => {
     });
     const session = (mgr as any).sessions.get(spawned.sessionId);
     session.setPendingInterjection.mockReturnValue(false);
+    session.getLastFinalMarker.mockReturnValue({
+      status: "completed",
+      summary: "background result",
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(session.abort).not.toHaveBeenCalled();
@@ -7338,42 +7362,53 @@ describe("AgentSessionManager background agents", () => {
     ).toHaveLength(2);
   });
 
-  it("preserves unfinalized native text-review narration as incomplete evidence", () => {
+  it.each([
+    ["review_plan", "text"],
+    ["readonly-research", "text"],
+    ["general", "text"],
+    ["readonly-research", undefined],
+    ["general", undefined],
+  ])(
+    "preserves unfinalized native %s / %s narration as incomplete evidence",
+    (taskClass, expectedResult) => {
+      const mgr = new AgentSessionManager(config, "/tmp");
+      const resolved = (mgr as any).resolveBackgroundResult(
+        {
+          id: "bg-text-review",
+          status: "idle",
+          getLastFinalMarker: () => undefined,
+          getLastAssistantText: () => "I'll inspect the plan.",
+          fleetMetadata: {
+            backend: "native",
+            taskClass,
+            delegation: { expectedResult },
+          },
+        },
+        "fallback",
+      );
+      expect(resolved).toMatchObject({
+        resultState: "incomplete_expected_result",
+        partialResult: "I'll inspect the plan.",
+      });
+      expect(JSON.parse(resolved.resultText)).toMatchObject({
+        status: "incomplete_expected_result",
+        partialOutput: "I'll inspect the plan.",
+        agentRetryable: false,
+      });
+    },
+  );
+
+  it("keeps ACP text completion independent of native final markers", () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     const resolved = (mgr as any).resolveBackgroundResult(
       {
-        id: "bg-text-review",
+        id: "bg-acp-text",
         status: "idle",
         getLastFinalMarker: () => undefined,
-        getLastAssistantText: () => "I'll inspect the plan.",
+        getLastAssistantText: () => "Completed offline probe findings.",
         fleetMetadata: {
-          backend: "native",
-          taskClass: "review_plan",
-          delegation: { expectedResult: "text" },
-        },
-      },
-      "fallback",
-    );
-    expect(resolved).toMatchObject({
-      resultState: "incomplete_expected_result",
-      partialResult: "I'll inspect the plan.",
-    });
-  });
-
-  it("returns the final text summary rather than earlier progress narration", () => {
-    const mgr = new AgentSessionManager(config, "/tmp");
-    const resolved = (mgr as any).resolveBackgroundResult(
-      {
-        id: "bg-text-summary",
-        status: "idle",
-        getLastFinalMarker: () => ({
-          status: "completed",
-          summary: "No actionable findings.",
-        }),
-        getLastAssistantText: () => "I'll inspect the plan.",
-        fleetMetadata: {
-          backend: "native",
-          taskClass: "review_plan",
+          backend: "acp",
+          taskClass: "readonly-research",
           delegation: { expectedResult: "text" },
         },
       },
@@ -7381,9 +7416,69 @@ describe("AgentSessionManager background agents", () => {
     );
     expect(resolved).toMatchObject({
       resultState: "completed",
-      resultText: "No actionable findings.",
+      resultText: "Completed offline probe findings.",
     });
   });
+
+  it.each(["review_plan", "readonly-research", "general"])(
+    "returns the final %s text summary rather than earlier progress narration",
+    (taskClass) => {
+      const mgr = new AgentSessionManager(config, "/tmp");
+      const resolved = (mgr as any).resolveBackgroundResult(
+        {
+          id: "bg-text-summary",
+          status: "idle",
+          getLastFinalMarker: () => ({
+            status: "completed",
+            summary: "No actionable findings.",
+          }),
+          getLastAssistantText: () => "I'll inspect the plan.",
+          fleetMetadata: {
+            backend: "native",
+            taskClass,
+            delegation: { expectedResult: "text" },
+          },
+        },
+        "fallback",
+      );
+      expect(resolved).toMatchObject({
+        resultState: "completed",
+        resultText: "No actionable findings.",
+      });
+    },
+  );
+
+  it.each([
+    ["blocked", "interrupted"],
+    ["cancelled", "cancelled"],
+  ] as const)(
+    "preserves a native research %s marker without promoting narration",
+    (status, resultState) => {
+      const mgr = new AgentSessionManager(config, "/tmp");
+      const resolved = (mgr as any).resolveBackgroundResult(
+        {
+          id: "bg-text-stopped",
+          status: "idle",
+          getLastFinalMarker: () => ({
+            status,
+            summary: "Cannot finish the probes.",
+          }),
+          getMessages: () => [],
+          getLastAssistantText: () => "I'll inspect the plan.",
+          fleetMetadata: {
+            backend: "native",
+            taskClass: "readonly-research",
+            delegation: { expectedResult: "text" },
+          },
+        },
+        "fallback",
+      );
+      expect(resolved).toMatchObject({ resultState });
+      expect(JSON.parse(resolved.resultText)).toMatchObject({
+        partialOutput: "Cannot finish the probes.",
+      });
+    },
+  );
 
   it.each(["max_tokens", "refusal"] as const)(
     "does not promote native provider %s partial output to success",
@@ -7976,11 +8071,17 @@ describe("AgentSessionManager background agents", () => {
       notifyDone();
     };
 
-    await mgr.spawnBackground({
+    const spawned = await mgr.spawnBackground({
       task: "review task",
       message: "review thoroughly",
       expectedResult: "text",
     });
+    (mgr as any).sessions
+      .get(spawned.sessionId)
+      .getLastFinalMarker.mockReturnValue({
+        status: "completed",
+        summary: "background result",
+      });
     await terminalSaveStarted;
 
     expect(doneLifecycle).toBeUndefined();
@@ -8074,6 +8175,12 @@ describe("AgentSessionManager background agents", () => {
       task: "eventful",
       message: "work",
     });
+    (mgr as any).sessions
+      .get(spawned.sessionId)
+      .getLastFinalMarker.mockReturnValue({
+        status: "completed",
+        summary: "background result",
+      });
     await waitFor(
       () =>
         (mgr as any).sessions.get(spawned.sessionId).fleetMetadata.lifecycle,

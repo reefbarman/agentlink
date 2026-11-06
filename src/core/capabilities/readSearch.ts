@@ -200,6 +200,7 @@ export interface ContextEnrichmentProvider {
   ): string | undefined | Promise<string | undefined>;
   getDocumentSymbols(
     document: ContextResolvedDocument,
+    range?: Pick<ContextWorkingSetRange, "startLine" | "endLine">,
   ): Promise<Record<string, string[]> | undefined>;
   getDiagnosticsSummary(document: ContextResolvedDocument):
     | {

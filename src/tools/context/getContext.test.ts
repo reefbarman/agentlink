@@ -373,6 +373,37 @@ describe("handleGetContext", () => {
     },
   );
 
+  it.each([
+    [undefined, undefined, undefined],
+    [1, undefined, { startLine: 1, endLine: 400 }],
+    [490, undefined, { startLine: 490, endLine: 500 }],
+    [490, false, undefined],
+  ] as const)(
+    "forwards only explicit offset ranges (%s, include_symbols=%s)",
+    async (offset, include_symbols, expectedRange) => {
+      const workspace = makeTempWorkspace();
+      const filePath = path.join(workspace, "example.ts");
+      const content = Array.from({ length: 500 }, () => "line").join("\n");
+      fs.writeFileSync(filePath, content);
+      const providers = makeProviders(filePath, "example.ts", content);
+      const { handleGetContext } = await import("./getContext.js");
+      await handleGetContext(
+        { path: "example.ts", offset, limit: 900, include_symbols },
+        "outline-range",
+        providers,
+      );
+      const lookup = providers.enrichmentProvider.getDocumentSymbols;
+      if (include_symbols === false) {
+        expect(lookup).not.toHaveBeenCalled();
+      } else {
+        expect(lookup).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ absolutePath: filePath }),
+          expectedRange,
+        );
+      }
+    },
+  );
+
   it("keeps unchanged-content deduplication when symbol suppression changes", async () => {
     const workspace = makeTempWorkspace();
     const filePath = path.join(workspace, "example.ts");
@@ -805,6 +836,53 @@ describe("handleGetContext", () => {
     ).resolves.toMatchObject({
       class: ["Example (line 1)"],
       constructor: ["Example.constructor (line 2)"],
+    });
+  });
+
+  it("keeps enclosing functions and deep local symbols while excluding unrelated ranges", async () => {
+    const document = makeDocument("/workspace/example.ts", "source");
+    const symbol = (
+      name: string,
+      start: number,
+      end: number,
+      children: unknown[] = [],
+    ) => ({
+      name,
+      kind: 11,
+      range: {
+        start: { line: start, character: 0 },
+        end: { line: end, character: 0 },
+      },
+      children,
+    });
+    vscodeMock.executeCommand.mockResolvedValue([
+      symbol("unrelated", 0, 3),
+      symbol("enclosing", 10, 80, [
+        ...Array.from({ length: 12 }, (_, index) =>
+          symbol(`earlier${index}`, 11 + index, 12 + index),
+        ),
+        symbol("local", 49, 60, [symbol("nested", 50, 52)]),
+        symbol("endsBeforeSlice", 40, 50),
+        symbol("startsAfterSlice", 52, 55),
+      ]),
+    ]);
+    const { getContextDocumentSymbols } = await import("./getContext.js");
+    await expect(
+      getContextDocumentSymbols(
+        {
+          absolutePath: document.uri.fsPath,
+          relPath: "example.ts",
+          languageId: "typescript",
+          hostDocument: { uri: document.uri, document },
+        },
+        { startLine: 51, endLine: 52 },
+      ),
+    ).resolves.toEqual({
+      function: [
+        "enclosing (line 11)",
+        "enclosing.local (line 50)",
+        "enclosing.local.nested (line 51)",
+      ],
     });
   });
 

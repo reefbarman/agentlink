@@ -50,6 +50,50 @@ describe("inferBackgroundDisplayStatus", () => {
     ).toBe(expected);
   });
 
+  describe.each([
+    ["streaming", "read_file", "Reading code"],
+    ["tool_executing", undefined, "Running…"],
+    ["streaming", undefined, "Thinking…"],
+  ] as const)(
+    "finding inference for %s / %s",
+    (status, currentTool, neutral) => {
+      it.each([
+        "I found no material issue in the acknowledgement or projection paths.",
+        "I found src/agent/AgentSession.ts and its tests.",
+        "I have not found the issue.",
+        "I haven't found the issue.",
+        "I haven’t found the issue.",
+        "I haven't identified a bug.",
+        "I haven’t identified a bug.",
+        "I couldn't confirm the root cause.",
+        "I couldn’t confirm the root cause.",
+        "I could not identify the root cause.",
+        "The root cause is not established.",
+        "No root cause was found. Validation was blocked by read-only command policy.",
+        "I found no issues. Validation was unavailable.",
+        "I found no issue, but validation was blocked.",
+      ])("keeps a neutral label for %j", (streamingText) => {
+        expect(
+          inferBackgroundDisplayStatus({ status, currentTool, streamingText }),
+        ).toBe(neutral);
+      });
+
+      it.each([
+        "I found the issue.",
+        "I found a bug in the projection.",
+        "I found the root cause.",
+        "The root cause is a dropped callback.",
+        "The problem is a dropped callback.",
+        "I found no issue in the handler. I found a bug in the projection.",
+        "I found no issue in the handler, but I found the root cause elsewhere.",
+      ])("retains affirmative findings for %j", (streamingText) => {
+        expect(
+          inferBackgroundDisplayStatus({ status, currentTool, streamingText }),
+        ).toBe("Issue found");
+      });
+    },
+  );
+
   it.each([
     ["rerun the test", "Running tests"],
     ["updating the patch", "Updating code"],

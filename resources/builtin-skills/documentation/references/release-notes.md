@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Save without Formatting now checks completion after awaited editor restoration, avoiding a false save failure when the save finishes during cleanup. Exact-preservation edits still require matching approved disk content and reject transformed saves.
+- Background activity no longer labels negated findings or ordinary file discovery as “Issue found”. Native research and general text tasks without a completed final status now retain opening narration as incomplete output instead of reporting success.
+- In VS Code-backed context reads, an explicit line offset now limits the symbol outline to intersecting or enclosing symbols and relevant children. Reads without an offset retain the whole-file overview; symbol limits and `include_symbols: false` remain unchanged.
+
 ## 1.83.4
 
 - Approved MCP resource watches no longer stop after three delivery batches, throttle idle wakes by count, or impose a four-round/twelve-tool wake-turn budget. Updates from any subscribed MCP server use normal agent execution and the session's existing Auto Continue setting in VS Code workspace chat and its browser remote view. Exact-resource consent, ordinary approvals, manual pause/Stop, read throttling and payload bounds remain; revoked or unsubmitted updates cannot continue an old task. Approved notifications can cause sustained work and token use until paused or revoked.

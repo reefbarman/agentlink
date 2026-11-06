@@ -865,7 +865,7 @@ VS Code workspace sessions, mirrored browser workspace chat, and workspace-host 
 - `path`, `total_lines`, `showing`, `truncated` — target and pagination info
 - `size`, `modified`, `language`, `git_status` — file metadata when available; Git state is refreshed before it is read
 - `diagnostics` — `{ errors: N, warnings: N }` summary when diagnostics exist
-- `symbols` — document symbol outline capped at 60 entries and 6,000 serialized UTF-8 bytes, prioritising symbols starting in the requested line range
+- `symbols`: document symbol outline capped at 60 entries and 6,000 serialized UTF-8 bytes. VS Code-backed context reads with an explicit `offset` restrict it to intersecting or enclosing symbols and relevant children; omit `offset` for a whole-file overview. Standalone hosts retain their existing whole-file prioritisation.
 - `symbols_truncated`, `symbols_omitted` — present when entries from the supplied outline were omitted by its independent budget; use `get_symbols` for a fuller view
 - `working_set` — `status`, `content_hash`, optional `previous_content_hash`, `range`, `should_include_content`, and `last_read_at`
 - `content` — numbered preview, capped at 2,000 UTF-16 characters per source line and 20,000 total including line numbers; omitted when `working_set.should_include_content` is false
