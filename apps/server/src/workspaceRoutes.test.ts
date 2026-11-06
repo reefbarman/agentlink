@@ -480,7 +480,9 @@ function isTaskState(state: string, status?: string) {
   };
 }
 
-describe("assistant workspace routes", () => {
+// Real TLS, session persistence and delegated runs need an outer budget longer
+// than the bounded child waits; this is not the fast unit-test fixture.
+describe("assistant workspace routes", { timeout: 30_000 }, () => {
   it("keeps hidden projects out of the list but reachable, until removed", async () => {
     const harness = await startHarness();
     const { owner, request } = harness;
@@ -1433,7 +1435,6 @@ describe("assistant workspace routes", () => {
     expect(notified.data).toMatchObject({
       event: { kind: "agent", state: "approval_required" },
     });
-    live.close();
 
     const listed = await request({ path: `${base}/agents`, session: owner });
     const [agent] = (
@@ -1480,14 +1481,20 @@ describe("assistant workspace routes", () => {
         decision: "allow",
       }),
     ).resolves.toMatchObject({ status: 200 });
-    await vi.waitFor(async () => {
-      await expect(
-        request({ path: `${base}/agents`, session: owner }),
-      ).resolves.toMatchObject({
-        body: {
-          agents: [{ lifecycle: "completed", resultText: "child done" }],
-        },
-      });
+    await live.waitFor(
+      (event) =>
+        event.event === "session" &&
+        (event.data as { event: { lifecycle?: string } }).event.lifecycle ===
+          "completed",
+      CHILD_RUN_WAIT.timeout,
+    );
+    live.close();
+    await expect(
+      request({ path: `${base}/agents`, session: owner }),
+    ).resolves.toMatchObject({
+      body: {
+        agents: [{ lifecycle: "completed", resultText: "child done" }],
+      },
     });
     await expect(
       fs.readFile(path.join(harness.projectRoot, "child.txt"), "utf8"),
@@ -1781,6 +1788,8 @@ describe("assistant workspace routes", () => {
       fs.readFile(path.join(harness.projectRoot, "child.txt"), "utf8"),
     ).resolves.toBe("from child\n");
 
+    // Child completion is not the parent's turn-completion signal.
+    await harness.routes.whenIdle("home", sessionId);
     // A chat set to ask: its child asks too.
     await request({
       method: "POST",
@@ -1810,15 +1819,13 @@ describe("assistant workspace routes", () => {
             write_paths: [{ path: "second.txt", kind: "file" }],
           });
     });
-    await vi.waitFor(async () => {
-      const turn = await request({
-        method: "POST",
-        path: `${base}/turns`,
-        session: owner,
-        body: { text: "delegate again" },
-      });
-      expect(turn.status).toBe(202);
+    const turn = await request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: owner,
+      body: { text: "delegate again" },
     });
+    expect(turn.status).toBe(202);
     await vi.waitFor(async () => {
       const listed = await request({ path: `${base}/agents`, session: owner });
       expect(

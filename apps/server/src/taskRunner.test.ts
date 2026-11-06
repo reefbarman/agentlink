@@ -1,5 +1,6 @@
 import type { AgentModelReference } from "@agentlink/core";
 import type { EmbeddedAgentTurnEvent } from "@agentlink/protocol";
+import { EventEmitter, once } from "node:events";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -67,6 +68,8 @@ interface ReviewReply {
 
 function createFakeOperations(events: SessionEventHub) {
   let next = 0;
+  let closing = false;
+  const turnChanges = new EventEmitter();
   /** Implementation turns only; review turns are in `reviewTurns`. */
   const turns: Array<{ sessionId: string; projectId: string; text: string }> =
     [];
@@ -105,7 +108,7 @@ function createFakeOperations(events: SessionEventHub) {
     });
   };
   const requireValid = async (auth: AssistantServerAuth) => {
-    if (!(await auth.revalidate()).valid) {
+    if (!(await auth.revalidate()).valid || closing) {
       throw new HttpError(401, "authentication_required");
     }
   };
@@ -140,6 +143,7 @@ function createFakeOperations(events: SessionEventHub) {
           operation: "turn",
           actor: { subjectId: "owner", deviceId: auth.session.deviceId },
         });
+        if (!review) turnChanges.emit("started");
         if (review) {
           // The reviewer answers by itself, after the turn has started.
           const reply = reviewReplies.shift() ?? {
@@ -257,6 +261,14 @@ function createFakeOperations(events: SessionEventHub) {
     reviewReplies,
     endTurn,
     completeTool,
+    async waitForTurns(count: number) {
+      while (turns.length < count) await once(turnChanges, "started");
+      expect(turns).toHaveLength(count);
+    },
+    close() {
+      closing = true;
+      turnChanges.removeAllListeners();
+    },
   };
 }
 
@@ -353,6 +365,7 @@ async function setup(
   const store = await openTaskStore({ directory: dir });
   await options.prepareStore?.(store);
   const events = new SessionEventHub();
+  const taskChanges = new EventEmitter();
   const fake = createFakeOperations(events);
   const fakeWorkspaces = createFakeWorkspaces();
   const projects = {
@@ -427,6 +440,7 @@ async function setup(
           ),
         }
       : {}),
+    onTaskChanged: () => taskChanges.emit("changed"),
     onTaskRecovered: (task) => recovered.push(task),
     ...(options.failureDetail ? { failureDetail: options.failureDetail } : {}),
     ...(options.approvalTimeoutMs
@@ -434,12 +448,21 @@ async function setup(
       : {}),
     ...(options.paused ? { paused: options.paused } : {}),
   });
-  cleanup.push(() => runner.close());
+  cleanup.push(async () => {
+    // close() can arrive during a disk save, before the runner has a turn
+    // outcome to resolve. Refuse any fake starts that arrive after teardown.
+    fake.close();
+    taskChanges.removeAllListeners();
+    await runner.close();
+  });
   await runner.start();
-  const waitFor = (taskId: string, state: TaskRun["state"]) =>
-    vi.waitFor(() => expect(store.get(taskId)?.state).toBe(state));
-  const waitForTurns = (count: number) =>
-    vi.waitFor(() => expect(fake.turns).toHaveLength(count));
+  const waitFor = async (taskId: string, state: TaskRun["state"]) => {
+    while (store.get(taskId)?.state !== state) {
+      await once(taskChanges, "changed");
+    }
+    await store.flush();
+    expect(store.get(taskId)?.state).toBe(state);
+  };
   return {
     store,
     runner,
@@ -449,7 +472,6 @@ async function setup(
     recovered,
     publisher,
     waitFor,
-    waitForTurns,
   };
 }
 
@@ -1388,10 +1410,9 @@ describe("follow-ups", () => {
       test.runner.continueTask(created.id, "more"),
     ).rejects.toMatchObject({ code: "task_busy" });
     test.endTurn("failed");
-    await vi.waitFor(() =>
-      expect(test.store.get(created.id)?.state).not.toMatch(
-        /queued|preparing|implementing/u,
-      ),
+    await test.waitFor(created.id, "failed");
+    expect(test.store.get(created.id)?.state).not.toMatch(
+      /queued|preparing|implementing/u,
     );
     await expect(
       test.runner.continueTask(created.id, "   "),
@@ -1524,13 +1545,12 @@ describe("publishing tasks", () => {
     const created = await test.runner.create(REQUEST);
     await test.waitForTurns(1);
     test.endTurn("completed", { text: "Done." });
-    await vi.waitFor(() =>
-      expect(test.store.get(created.id)).toMatchObject({
-        state: "ready",
-        error: "connection_signed_out",
-        errorDetail: "Sign in again",
-      }),
-    );
+    await test.waitFor(created.id, "ready");
+    expect(test.store.get(created.id)).toMatchObject({
+      state: "ready",
+      error: "connection_signed_out",
+      errorDetail: "Sign in again",
+    });
     expect(test.store.get(created.id)?.effects).toEqual([
       expect.objectContaining({
         kind: "push",

@@ -354,7 +354,9 @@ async function setup(
   };
 }
 
-describe("session runners", () => {
+// These integration cases cross real runner HTTP boundaries and persist sessions.
+// Keep their outer test budget above those operations under full-suite load.
+describe("session runners", { timeout: 30_000 }, () => {
   it("run a task's turns, commands and tools in the runner, with models and tools on the control plane", async () => {
     const harness = await setup(async function* (request) {
       const results = request.messages.filter(
@@ -786,9 +788,12 @@ describe("session runners", () => {
   });
 
   it("stops a running turn when the owner presses Stop", async () => {
-    let seenAbort: AbortSignal | undefined;
+    let markStarted!: (signal: AbortSignal | undefined) => void;
+    const started = new Promise<AbortSignal | undefined>((resolve) => {
+      markStarted = resolve;
+    });
     const harness = await setup(async function* (request) {
-      seenAbort = request.signal;
+      markStarted(request.signal);
       // A model call that streams once, then only ends when it is aborted.
       yield { type: "text_delta", text: "Working" };
       await new Promise<void>((resolve) => {
@@ -809,7 +814,9 @@ describe("session runners", () => {
       sessionId,
       "Work forever",
     );
-    await vi.waitFor(() => expect(seenAbort).toBeDefined());
+    // Wait for the actual model entry across HTTP/persistence, not a one-second poll.
+    const seenAbort = await started;
+    expect(seenAbort).toBeDefined();
     await harness.routes.operations.cancel(auth(), "task-t1", sessionId);
     await harness.routes.whenIdle("task-t1", sessionId);
     expect(seenAbort!.aborted).toBe(true);
@@ -820,7 +827,7 @@ describe("session runners", () => {
     );
     // The session is idle again and can take the next message.
     expect(read.messages.length).toBeGreaterThan(0);
-  });
+  }, 15_000);
 
   it("refuses callers without the runner's token", async () => {
     const harness = await setup(async function* () {
