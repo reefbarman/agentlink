@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.83.5
+
 - Save without Formatting now checks completion after awaited editor restoration, avoiding a false save failure when the save finishes during cleanup. Exact-preservation edits still require matching approved disk content and reject transformed saves.
 - Background activity no longer labels negated findings or ordinary file discovery as “Issue found”. Native research and general text tasks without a completed final status now retain opening narration as incomplete output instead of reporting success.
 - In VS Code-backed context reads, an explicit line offset now limits the symbol outline to intersecting or enclosing symbols and relevant children. Reads without an offset retain the whole-file overview; symbol limits and `include_symbols: false` remain unchanged.

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "64ed23381c883c74bf9b393fd3c30702a09d001e",
-  "createdAt": "2026-11-06T04:39:41.916Z",
+  "sourceSha": "275a873c738f6da5c0cf5ca33e9a7930e9282500",
+  "createdAt": "2026-11-06T05:52:06.599Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.83.3",
-      "baselineRef": "v1.83.3",
-      "reserved": "1.83.3",
-      "commits": ["64ed23381c883c74bf9b393fd3c30702a09d001e"],
+      "published": "1.83.4",
+      "baselineRef": "v1.83.4",
+      "reserved": "1.83.4",
+      "commits": ["275a873c738f6da5c0cf5ca33e9a7930e9282500"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.83.4",
+      "version": "1.83.5",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.83.4",
+      "tag": "v1.83.5",
       "notes": [
         {
-          "sha": "64ed23381c883c74bf9b393fd3c30702a09d001e",
-          "subject": "fix(mcp): use normal execution for approved resource updates",
-          "summary": "Approved MCP resource watch updates and idle wakes now run as normal agent turns with the session's Auto Continue setting, replacing the special batch, wake-rate and model-round caps. Only transport bounds remain. Documentation and tool descriptions are updated to match.",
+          "sha": "275a873c738f6da5c0cf5ca33e9a7930e9282500",
+          "subject": "fix: harden edit completion and background result reporting",
+          "summary": "Fixes Save without Formatting falsely reporting failure, stops background research/general tasks with only opening narration from counting as complete, avoids false \"Issue found\" hints, and narrows symbol outlines for context reads with an explicit offset in VS Code.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.83.3",
-      "baselineRef": "desktop-v0.83.3",
-      "reserved": "0.83.3",
-      "commits": ["64ed23381c883c74bf9b393fd3c30702a09d001e"],
+      "published": "0.83.4",
+      "baselineRef": "desktop-v0.83.4",
+      "reserved": "0.83.4",
+      "commits": ["275a873c738f6da5c0cf5ca33e9a7930e9282500"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.83.4",
+      "version": "0.83.5",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.83.4",
+      "tag": "desktop-v0.83.5",
       "notes": [
         {
-          "sha": "64ed23381c883c74bf9b393fd3c30702a09d001e",
-          "subject": "fix(mcp): use normal execution for approved resource updates",
-          "summary": "Approved MCP resource watch updates and idle wakes now run as normal agent turns with the session's Auto Continue setting, replacing the special batch, wake-rate and model-round caps. Only transport bounds remain. Documentation and tool descriptions are updated to match.",
+          "sha": "275a873c738f6da5c0cf5ca33e9a7930e9282500",
+          "subject": "fix: harden edit completion and background result reporting",
+          "summary": "Fixes Save without Formatting falsely reporting failure, stops background research/general tasks with only opening narration from counting as complete, avoids false \"Issue found\" hints, and narrows symbol outlines for context reads with an explicit offset in VS Code.",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.55.3",
-      "baselineRef": "assistant-v0.55.3",
-      "reserved": "0.55.3",
-      "commits": ["64ed23381c883c74bf9b393fd3c30702a09d001e"],
+      "published": "0.55.4",
+      "baselineRef": "assistant-v0.55.4",
+      "reserved": "0.55.4",
+      "commits": ["275a873c738f6da5c0cf5ca33e9a7930e9282500"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.55.4",
+      "version": "0.55.5",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.55.4",
+      "tag": "assistant-v0.55.5",
       "notes": [
         {
-          "sha": "64ed23381c883c74bf9b393fd3c30702a09d001e",
-          "subject": "fix(mcp): use normal execution for approved resource updates",
-          "summary": "Approved MCP resource watch updates and idle wakes now run as normal agent turns with the session's Auto Continue setting, replacing the special batch, wake-rate and model-round caps. Only transport bounds remain. Documentation and tool descriptions are updated to match.",
+          "sha": "275a873c738f6da5c0cf5ca33e9a7930e9282500",
+          "subject": "fix: harden edit completion and background result reporting",
+          "summary": "Fixes Save without Formatting falsely reporting failure, stops background research/general tasks with only opening narration from counting as complete, avoids false \"Issue found\" hints, and narrows symbol outlines for context reads with an explicit offset in VS Code.",
           "breaking": false
         }
       ]
@@ -111,6 +111,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Approved MCP resource watch updates and idle wakes now run as normal agent turns with the session's Auto Continue setting, replacing the special batch, wake-rate and model-round caps. Only transport bounds remain. Documentation and tool descriptions are updated to match.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "275a873c738f6da5c0cf5ca33e9a7930e9282500": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes Save without Formatting falsely reporting failure, stops background research/general tasks with only opening narration from counting as complete, avoids false \"Issue found\" hints, and narrows symbol outlines for context reads with an explicit offset in VS Code.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
