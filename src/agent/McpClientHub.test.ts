@@ -1153,7 +1153,113 @@ describe("McpClientHub protocol correctness", () => {
     expect(mocks.stdioTransportOptions).toBeUndefined();
   });
 
-  it("does not dispatch stale or policy-denied tool calls", async () => {
+  it.each([false, true])(
+    "publishes stale configuration errors and hides catalogs (plugin=%s)",
+    async (plugin) => {
+      setCatalogPages(mocks.listTools, "tools", {
+        first: { items: [tool("write")] },
+      });
+      setCatalogPages(mocks.listResources, "resources", {
+        first: { items: [resource("read")] },
+      });
+      setCatalogPages(mocks.listPrompts, "prompts", {
+        first: { items: [prompt("ask")] },
+      });
+      const isConfigCurrent = vi.fn(async () => true);
+      const onBeforeToolCall = vi.fn(async () => "allow" as const);
+      const hub = new McpClientHub(new FakeMemento(), "unknown", {
+        isConfigCurrent,
+        onBeforeToolCall,
+      });
+      await hub.connect([
+        plugin
+          ? {
+              name: "fixture",
+              type: "streamable-http",
+              url: "https://example.test/mcp",
+              provenance: {
+                kind: "agent-plugin",
+                scope: { kind: "global" },
+                installInstanceId: "install-a",
+                packageDigest: "a".repeat(64),
+                portableServerName: "fixture",
+                runtimeServerName: "fixture",
+              },
+            }
+          : config,
+      ]);
+      expect(hub.getToolDefs()).toHaveLength(1);
+      expect(hub.getAllResources()).toHaveLength(1);
+      expect(hub.getAllPrompts()).toHaveLength(1);
+      const onStatusChange = vi.fn();
+      hub.onStatusChange = onStatusChange;
+      isConfigCurrent.mockResolvedValue(false);
+
+      const result = await hub.callTool("fixture__write", {});
+
+      expect(result).toMatchObject({
+        isError: true,
+        error: { kind: "mcp_catalog_changed" },
+      });
+      expect(hub.getServerInfos()).toMatchObject([
+        {
+          name: "fixture",
+          status: "error",
+          error: expect.stringContaining(
+            plugin
+              ? "no longer authorized"
+              : "configuration changed or was disabled",
+          ),
+        },
+      ]);
+      expect(onStatusChange).toHaveBeenCalledExactlyOnceWith(
+        hub.getServerInfos(),
+      );
+      expect(hub.getToolDefs()).toEqual([]);
+      expect(hub.getReadOnlyToolDefs()).toEqual([]);
+      expect(hub.getAllResources()).toEqual([]);
+      expect(hub.getAllPrompts()).toEqual([]);
+      expect(onBeforeToolCall).not.toHaveBeenCalled();
+      expect(mocks.callTool).not.toHaveBeenCalled();
+      await hub.disconnectAll();
+    },
+  );
+
+  it("does not invalidate a replacement while checking the old connection", async () => {
+    const isConfigCurrent = vi.fn(async () => true);
+    const hub = new McpClientHub(new FakeMemento(), "unknown", {
+      isConfigCurrent,
+    });
+    await hub.connect([config]);
+    let rejectOld!: (current: boolean) => void;
+    isConfigCurrent.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          rejectOld = resolve;
+        }),
+    );
+    const staleCall = hub.callTool("fixture__write", {});
+    await hub.connect([{ ...config, args: ["replacement.js"] }], {
+      reconcileChangedServers: true,
+    });
+    expect(hub.getServerConfig("fixture")?.args).toEqual(["replacement.js"]);
+    const onStatusChange = vi.fn();
+    hub.onStatusChange = onStatusChange;
+    rejectOld(false);
+
+    expect(await staleCall).toMatchObject({
+      isError: true,
+      error: { kind: "mcp_catalog_changed" },
+    });
+    expect(hub.getServerInfos()).toMatchObject([
+      { name: "fixture", status: "connected" },
+    ]);
+    expect(onStatusChange).not.toHaveBeenCalled();
+    expect(mocks.callTool).not.toHaveBeenCalled();
+    await hub.disconnectAll();
+  });
+
+  it("does not dispatch policy-denied tool calls or invalidate the connection", async () => {
     const isConfigCurrent = vi.fn(async () => true);
     const onBeforeToolCall = vi.fn(async () => "deny" as const);
     const hub = new McpClientHub(new FakeMemento(), "unknown", {
@@ -1161,25 +1267,10 @@ describe("McpClientHub protocol correctness", () => {
       onBeforeToolCall,
     });
     await hub.connect([config]);
-    isConfigCurrent.mockResolvedValueOnce(false);
-
-    const stale = await hub.callTool("fixture__write", {});
-    expect(stale).toMatchObject({
-      isError: true,
-      error: { kind: "mcp_catalog_changed" },
-      content: [
-        {
-          type: "text",
-          text: expect.stringContaining(
-            "configuration changed or was disabled",
-          ),
-        },
-      ],
-    });
-    expect(onBeforeToolCall).not.toHaveBeenCalled();
-    expect(mocks.callTool).not.toHaveBeenCalled();
-
     const denied = await hub.callTool("fixture__write", { value: 1 });
+    expect(hub.getServerInfos()).toMatchObject([
+      { name: "fixture", status: "connected" },
+    ]);
     expect(denied).toMatchObject({
       isError: true,
       error: { kind: "mcp_tool_not_authorized" },

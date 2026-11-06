@@ -167,9 +167,96 @@ describe("handleFindAndReplace", () => {
     expect(mockWorkspace.findFiles).toHaveBeenCalledWith(
       expect.objectContaining({ base: workspaceDir, pattern: "**/*.meta" }),
       undefined,
-      500,
+      501,
     );
   });
+
+  it.each([0, 500])(
+    "rejects an incomplete glob scan with a match at index %s before opening documents or requesting review",
+    async (matchingIndex) => {
+      const uris = Array.from({ length: 501 }, (_, index) => ({
+        fsPath: path.join(workspaceDir, `${index}.ts`),
+      }));
+      mockWorkspace.findFiles.mockImplementation(
+        async (_include, _exclude, limit) => uris.slice(0, limit),
+      );
+      mockWorkspace.openTextDocument.mockImplementation(async (uri) =>
+        createDocument(
+          uri.fsPath,
+          uri === uris[matchingIndex] ? "old" : "unchanged",
+        ),
+      );
+      const reviewAndApply = vi.fn<
+        MultiFileEditReviewProvider["reviewAndApply"]
+      >(async () => ({ content: [] }));
+      const { handleFindAndReplace } = await import("./findAndReplace.js");
+
+      const result = await handleFindAndReplace(
+        { glob: "**/*.ts", find: "old", replace: "new", max_replacements: 1 },
+        { isPathTrusted: vi.fn(() => true) } as never,
+        {} as never,
+        "session-1",
+        {} as never,
+        undefined,
+        { multiFileEditReviewProvider: { reviewAndApply } },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(toolJson(result)).toMatchObject({
+        reason: "glob_file_limit_exceeded",
+        glob: "**/*.ts",
+        file_limit: 500,
+        error: expect.stringContaining("Narrow the glob"),
+      });
+      expect(mockWorkspace.openTextDocument).not.toHaveBeenCalled();
+      expect(reviewAndApply).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "searches all 500 files at the glob limit (matching last file: %s)",
+    async (matchingLastFile) => {
+      const uris = Array.from({ length: 500 }, (_, index) => ({
+        fsPath: path.join(workspaceDir, `${index}.ts`),
+      }));
+      mockWorkspace.findFiles.mockResolvedValue(uris);
+      mockWorkspace.openTextDocument.mockImplementation(async (uri) =>
+        createDocument(
+          uri.fsPath,
+          matchingLastFile && uri === uris[499] ? "old" : "unchanged",
+        ),
+      );
+      const reviewAndApply = vi.fn<
+        MultiFileEditReviewProvider["reviewAndApply"]
+      >(async () => ({ content: [] }));
+      const { handleFindAndReplace } = await import("./findAndReplace.js");
+
+      const result = await handleFindAndReplace(
+        { glob: "**/*.ts", find: "old", replace: "new" },
+        { isPathTrusted: vi.fn(() => true) } as never,
+        {} as never,
+        "session-1",
+        {} as never,
+        undefined,
+        { multiFileEditReviewProvider: { reviewAndApply } },
+      );
+
+      expect(mockWorkspace.openTextDocument).toHaveBeenCalledTimes(500);
+      if (matchingLastFile) {
+        expect(reviewAndApply).toHaveBeenCalledOnce();
+        expect(reviewAndApply.mock.calls[0][0]).toMatchObject({
+          totalMatches: 1,
+          files: [{ absolutePath: uris[499].fsPath }],
+        });
+      } else {
+        expect(toolJson(result)).toMatchObject({
+          status: "no_matches",
+          files_searched: 500,
+        });
+        expect(reviewAndApply).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each([
     { find: "old", replace: "values ($1, $9)", expected: "values ($1, $9)" },

@@ -13,6 +13,8 @@ The MCP Manager has four views: **Overview** (config + status + enabled/disabled
 
 Failed server rows can be expanded even when no tools loaded. The expanded details show the complete, selectable error with wrapped text and preserved line breaks; hovering the shortened summary also shows the full error. This uses the same Manager in VS Code and browser workspace chat.
 
+If a tool call detects that its connection's configuration is no longer current, AgentLink rejects the call and marks that connection as an error. Subsequent discovery no longer advertises its tools, resources or prompts as usable. Inspect the configuration diagnostic and use **Reconnect** with the current configuration when appropriate. This does not reconnect automatically or bypass tool approvals or plugin authorisation.
+
 Server rows stay compact and single-line when space permits. Narrow panels hide secondary counts and badges before wrapping the action buttons; the status icon and server-name tooltips retain the full status, counts, transport, and source labels. The status icon also exposes these details to screen readers. The layout follows the Manager's own width, including a narrow chat pane inside a wider browser window.
 
 ### Desktop MCP window

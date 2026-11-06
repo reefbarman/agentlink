@@ -28,6 +28,8 @@ import type { PathAccessProvider } from "../core/capabilities/readSearch.js";
 
 export { expandReplacement } from "@agentlink/core/find-and-replace";
 
+const MAX_GLOB_FILES = 500;
+
 interface FileReplacement {
   absolutePath: string;
   relPath: string;
@@ -139,7 +141,23 @@ export async function handleFindAndReplace(
       // workspace search exclusions. Supplying a narrow exclude here overrides
       // those defaults and can unexpectedly propose edits to excluded caches.
       const relGlob = new vscode.RelativePattern(workspaceRoot, params.glob);
-      fileUris = await vscode.workspace.findFiles(relGlob, undefined, 500);
+      // Request a sentinel beyond the limit so a truncated scan can never
+      // produce a partial edit proposal or a misleading no_matches result.
+      fileUris = await vscode.workspace.findFiles(
+        relGlob,
+        undefined,
+        MAX_GLOB_FILES + 1,
+      );
+      if (fileUris.length > MAX_GLOB_FILES) {
+        return errorResult(
+          `Glob matched more than ${MAX_GLOB_FILES} files. Narrow the glob or use an exact path; no files were edited.`,
+          {
+            reason: "glob_file_limit_exceeded",
+            glob: params.glob,
+            file_limit: MAX_GLOB_FILES,
+          },
+        );
+      }
       if (fileUris.length === 0) {
         return errorResult(`No files matched glob pattern: ${params.glob}`);
       }

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- VS Code's `find_and_replace` now rejects globs matching more than 500 candidate files before reading files or proposing edits, with guidance to narrow the glob. Previously it silently searched only the first 500 files, which could produce incomplete edits or a false `no_matches` result.
+- An MCP tool call rejected because its connection's configuration is stale now marks that exact connection as an error and publishes the diagnostic. Subsequent discovery stops advertising its tools, resources and prompts as usable. Configuration and approval checks remain unchanged, and a replacement connection is not invalidated by an older call.
+
 ## 1.83.2
 
 - Browser resource-watch controls no longer stay disabled throughout a Send once agent turn. The action finishes after approval/read/queueing, allowing Pause and Stop watching while the agent is working or waiting for an answer. Later delivery-turn failures are reported through the normal session error UI, without automatic retries or broader watch permission.

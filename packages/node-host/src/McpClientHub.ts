@@ -3569,16 +3569,22 @@ export class McpClientHub {
         !this.options.isConfigCurrent) ||
       !(await this.configIsCurrent(server.config))
     ) {
+      const error =
+        server.config.provenance?.kind === "agent-plugin"
+          ? `MCP server '${serverName}' is no longer authorized by the current plugin catalog`
+          : `MCP server '${serverName}' configuration changed or was disabled. Reconnect using the current configuration.`;
+      // The async configuration check can finish after a replacement connects.
+      // Invalidate only the rejected connection, never its current successor.
+      if (this.servers.get(serverName) === server) {
+        server.status = "error";
+        server.error = error;
+        this.onStatusChange?.(this.getServerInfos());
+      }
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify({
-              error:
-                server.config.provenance?.kind === "agent-plugin"
-                  ? `MCP server '${serverName}' is no longer authorized by the current plugin catalog`
-                  : `MCP server '${serverName}' configuration changed or was disabled. Reconnect using the current configuration.`,
-            }),
+            text: JSON.stringify({ error }),
           },
         ],
         isError: true,

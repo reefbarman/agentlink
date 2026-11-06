@@ -9,6 +9,7 @@ import {
   McpClientHub,
   MCP_SESSION_CONTEXT_EXTENSION,
   type McpHubHost,
+  type McpClientHubOptions,
   type McpHubOAuthProvider,
   type McpSessionContext,
 } from "./McpClientHub.js";
@@ -163,6 +164,7 @@ async function setup(
   modern: boolean,
   sessionMeta = true,
   oauthProvider?: McpHubOAuthProvider,
+  options: McpClientHubOptions = {},
 ) {
   const peer = new PeerTransport(modern);
   peer.sessionMeta = sessionMeta;
@@ -187,7 +189,7 @@ async function setup(
       ? { createOAuthProvider: async () => oauthProvider }
       : {}),
   };
-  const hub = new McpClientHub(host, "test");
+  const hub = new McpClientHub(host, "test", options);
   hubs.push(hub);
   const transportFactory = vi
     .spyOn(
@@ -225,6 +227,39 @@ const notificationsDrained = async () => {
 };
 
 describe.each([true, false])("resource transport (modern=%s)", (modern) => {
+  it("publishes a stale configuration diagnostic without dispatching to the peer", async () => {
+    const isConfigCurrent = vi.fn(() => true);
+    const onBeforeToolCall = vi.fn(() => "allow" as const);
+    const { hub, peer } = await setup(modern, true, undefined, {
+      isConfigCurrent,
+      onBeforeToolCall,
+    });
+    expect(hub.getAllResources()).not.toEqual([]);
+    const onStatusChange = vi.fn();
+    hub.onStatusChange = onStatusChange;
+    isConfigCurrent.mockReturnValue(false);
+
+    const result = await hub.callTool("peer__write", {});
+
+    expect(result).toMatchObject({
+      isError: true,
+      error: { kind: "mcp_catalog_changed" },
+    });
+    expect(hub.getServerInfos()).toMatchObject([
+      {
+        name: "peer",
+        status: "error",
+        error: expect.stringContaining("configuration changed or was disabled"),
+      },
+    ]);
+    expect(onStatusChange).toHaveBeenCalledExactlyOnceWith(
+      hub.getServerInfos(),
+    );
+    expect(hub.getAllResources()).toEqual([]);
+    expect(peer.requests("tools/call")).toEqual([]);
+    expect(onBeforeToolCall).not.toHaveBeenCalled();
+  });
+
   it("uses one connection, routes only watched updates and releases handles idempotently", async () => {
     const { hub, peer, transportFactory } = await setup(modern);
     const a = callbacks();
