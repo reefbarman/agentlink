@@ -68,6 +68,9 @@ import {
   isNonReplayableResponsesError,
   ResponsesTransportPolicy,
   type ResponsesWebSocketConnector,
+  type CodexRequestIdentityObserver,
+  createCodexIdentityDiagnosticFetch,
+  createCodexIdentityDiagnosticConnector,
   getCodexErrorHandlingAction,
   translateCodexMessages,
   type CodexCredentialProvider,
@@ -168,6 +171,7 @@ export interface BrowserGatewayAskAgentModelClientOptions {
   sessionId: string;
   webFetch?: typeof globalThis.fetch;
   responsesWebSocketConnector?: ResponsesWebSocketConnector;
+  onCodexRequestIdentity?: CodexRequestIdentityObserver;
   codexCredentialProvider?: CodexCredentialProvider<{
     sessionId: string;
   }>;
@@ -793,7 +797,12 @@ export class BrowserGatewayAskAgentModelClient {
           apiKey: params.credential.bearerToken,
           baseURL: endpoint.baseURL,
           defaultHeaders: endpoint.defaultHeaders,
-          fetch: agentLinkFetch,
+          fetch: this.options.onCodexRequestIdentity
+            ? createCodexIdentityDiagnosticFetch(
+                agentLinkFetch,
+                this.options.onCodexRequestIdentity,
+              )
+            : agentLinkFetch,
           maxRetries: 0,
         });
 
@@ -839,7 +848,12 @@ export class BrowserGatewayAskAgentModelClient {
         webSocket:
           this.options.responsesWebSocketConnector && params.codexRouting
             ? {
-                connector: this.options.responsesWebSocketConnector,
+                connector: this.options.onCodexRequestIdentity
+                  ? createCodexIdentityDiagnosticConnector(
+                      this.options.responsesWebSocketConnector,
+                      this.options.onCodexRequestIdentity,
+                    )
+                  : this.options.responsesWebSocketConnector,
                 enabled: params.codexUseWebSocket !== false,
                 ...getCodexWebSocketConfig(
                   {

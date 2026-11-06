@@ -4,6 +4,7 @@ export * from "./codex/credentialResolution.js";
 export * from "./codex/errors.js";
 export * from "./codex/models.js";
 export * from "./codex/openaiClient.js";
+export * from "./codex/requestIdentityDiagnostics.js";
 export {
   createCodexOAuthProvider,
   createCodexProvider,

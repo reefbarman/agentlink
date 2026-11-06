@@ -1605,6 +1605,10 @@ export class BrowserGatewayHelper {
             ? createResponsesWebSocketConnector()
             : undefined,
         codexCredentialProvider: this.sharedCodexOAuth?.provider,
+        onCodexRequestIdentity: (diagnostics) =>
+          logHelper(
+            `[codex] request-identity source=browser-gateway-helper ${JSON.stringify(diagnostics)}`,
+          ),
       });
     this.askAgentMemoryStore = injectables.askAgentMemoryStore;
     this.askAgentDerivedSessionRuntime =

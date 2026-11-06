@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "testbed": {
+      "command": "node",
+      "args": [
+        "/Users/tristan/workspace/agentlink/packages/node-host/test-fixtures/testbedMcpServer.mjs"
+      ],
+      "cwd": "/Users/tristan/workspace/agentlink/packages/node-host",
+      "toolPolicy": "allow"
+    },
+    "testbed-legacy": {
+      "command": "node",
+      "args": [
+        "/Users/tristan/workspace/agentlink/packages/node-host/test-fixtures/testbedMcpServer.mjs"
+      ],
+      "cwd": "/Users/tristan/workspace/agentlink/packages/node-host",
+      "env": { "TESTBED_ERA": "legacy" },
+      "protocol": "legacy",
+      "toolPolicy": "allow"
+    },
+    "agent-comms": {
+      "command": "node",
+      "args": [
+        "/Users/tristan/workspace/agentlink-agent-comms/dist/index.js",
+        "--scope",
+        "/Users/tristan/workspace/agentlink"
+      ]
+    }
+  }
+}

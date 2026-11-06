@@ -48,6 +48,9 @@ import {
   buildCodexContextWindowExceededError,
   buildCodexEndpointRequestBody,
   createCodexRequestError,
+  createCodexIdentityDiagnosticFetch,
+  createCodexIdentityDiagnosticConnector,
+  type CodexRequestIdentityDiagnostics,
   createOpenAiResponsesClient,
   executeCodexResponsesStream,
   getCodexErrorHandlingAction,
@@ -173,7 +176,12 @@ export class CodexProvider implements ModelProvider {
     this.log = log ?? (() => {});
     this.getTextVerbositySetting =
       options?.getTextVerbositySetting ?? (() => undefined);
-    this.webSocketConnector = options?.webSocketConnector;
+    this.webSocketConnector = options?.webSocketConnector
+      ? createCodexIdentityDiagnosticConnector(
+          options.webSocketConnector,
+          this.logRequestIdentity,
+        )
+      : undefined;
     this.getUseWebSocketSetting =
       options?.getUseWebSocketSetting ?? (() => true);
     // Warm the auth-method cache so capabilities reflect the active endpoint
@@ -308,6 +316,14 @@ export class CodexProvider implements ModelProvider {
     );
   }
 
+  private readonly logRequestIdentity = (
+    diagnostics: CodexRequestIdentityDiagnostics,
+  ): void => {
+    this.log(
+      `[codex] request-identity source=extension ${JSON.stringify(diagnostics)}`,
+    );
+  };
+
   private getClient(auth: OpenAiCodexResolvedAuth): OpenAI {
     const endpoint = getCodexEndpointConfig(auth, this.sessionId);
     const key = buildCodexClientCacheKey(
@@ -329,7 +345,10 @@ export class CodexProvider implements ModelProvider {
     if (existing) return existing;
 
     const client = createOpenAiResponsesClient(auth, endpoint, {
-      fetch: agentLinkFetch,
+      fetch: createCodexIdentityDiagnosticFetch(
+        agentLinkFetch,
+        this.logRequestIdentity,
+      ),
     });
     this.clients.set(key, client);
     return client;

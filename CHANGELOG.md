@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Codex/OpenAI Responses requests now log a fixed allowlist of public client-identity and protocol headers in the VS Code agent output and Desktop/browser Ask Agent helper log. Diagnostics exclude credentials, account/session identifiers, routing state and request bodies, and do not change request identity or telemetry.
+
 ## 1.83.6
 
 - Native Agent terminals receiving nonempty manual input now leave the automatic unnamed-command pool. A prepared unnamed command also refuses dispatch if input arrives before launch, preserving the unfinished input and terminal instead of appending an unrelated command to it.

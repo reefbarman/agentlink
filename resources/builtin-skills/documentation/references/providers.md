@@ -14,6 +14,14 @@ AgentLink requests detailed reasoning summaries for reasoning-enabled OpenAI/Cod
 
 This is separate from OpenAI-compatible connections such as Meridian. Those connections display visible thinking text returned in streamed `reasoning` or `reasoning_content` fields; reasoning-effort configuration alone does not guarantee visible thinking text.
 
+## Codex request identity diagnostics
+
+Codex/OpenAI Responses requests in VS Code write `[codex] request-identity source=extension` entries to the **AgentLink Agent** Output channel. Desktop and browser Ask Agent write `source=browser-gateway-helper` entries to the helper's stderr log. Browser workspace chats use their VS Code host's entries.
+
+Each entry contains only the transport (`http` or `websocket`) and the final outgoing `originator`, `User-Agent`, `version`, `OpenAI-Beta`, and `x-openai-internal-codex-responses-lite` header values. Missing headers are `null`; values longer than 512 characters are truncated with a `[truncated]` marker. HTTP entries observe the SDK's merged headers immediately before fetch; WebSocket entries observe connection attempts, not every message on a reused socket. They show attempted client identity, not server acceptance or dashboard attribution.
+
+These local diagnostics do not include credentials, account/session/thread identifiers, opaque turn-routing state, request bodies, or arbitrary headers. They do not change request identity, protocol flags, or telemetry. The SDK exports opt-in `createCodexIdentityDiagnosticFetch` and `createCodexIdentityDiagnosticConnector` wrappers for hosts that need the same fixed allowlist.
+
 ## Configure an OpenAI-compatible provider
 
 1. Open the VS Code Command Palette and run **AgentLink: Configure OpenAI-compatible Model**, or choose **Configure another provider** in an empty chat.
