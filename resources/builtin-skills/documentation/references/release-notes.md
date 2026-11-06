@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.83.4
+
 - Approved MCP resource watches no longer stop after three delivery batches, throttle idle wakes by count, or impose a four-round/twelve-tool wake-turn budget. Updates from any subscribed MCP server use normal agent execution and the session's existing Auto Continue setting in VS Code workspace chat and its browser remote view. Exact-resource consent, ordinary approvals, manual pause/Stop, read throttling and payload bounds remain; revoked or unsubmitted updates cannot continue an old task. Approved notifications can cause sustained work and token use until paused or revoked.
 
 ## 1.83.3

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "ed11be4f235a96df72722f331c41c9cfd0e700be",
-  "createdAt": "2026-11-06T02:54:24.531Z",
+  "sourceSha": "64ed23381c883c74bf9b393fd3c30702a09d001e",
+  "createdAt": "2026-11-06T04:39:41.916Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,187 +10,107 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.83.2",
-      "baselineRef": "v1.83.2",
-      "reserved": "1.83.2",
-      "commits": ["ed11be4f235a96df72722f331c41c9cfd0e700be"],
+      "published": "1.83.3",
+      "baselineRef": "v1.83.3",
+      "reserved": "1.83.3",
+      "commits": ["64ed23381c883c74bf9b393fd3c30702a09d001e"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.83.3",
+      "version": "1.83.4",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.83.3",
+      "tag": "v1.83.4",
       "notes": [
         {
-          "sha": "ed11be4f235a96df72722f331c41c9cfd0e700be",
-          "subject": "fix: reject truncated bulk edits and expose stale MCP connections",
-          "summary": "find_and_replace now rejects globs matching over 500 files instead of silently editing a truncated subset, and MCP connections with stale configuration are marked as errors after a rejected tool call.",
+          "sha": "64ed23381c883c74bf9b393fd3c30702a09d001e",
+          "subject": "fix(mcp): use normal execution for approved resource updates",
+          "summary": "Approved MCP resource watch updates and idle wakes now run as normal agent turns with the session's Auto Continue setting, replacing the special batch, wake-rate and model-round caps. Only transport bounds remain. Documentation and tool descriptions are updated to match.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.83.2",
-      "baselineRef": "desktop-v0.83.2",
-      "reserved": "0.83.2",
-      "commits": ["ed11be4f235a96df72722f331c41c9cfd0e700be"],
+      "published": "0.83.3",
+      "baselineRef": "desktop-v0.83.3",
+      "reserved": "0.83.3",
+      "commits": ["64ed23381c883c74bf9b393fd3c30702a09d001e"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.83.3",
+      "version": "0.83.4",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.83.3",
+      "tag": "desktop-v0.83.4",
       "notes": [
         {
-          "sha": "ed11be4f235a96df72722f331c41c9cfd0e700be",
-          "subject": "fix: reject truncated bulk edits and expose stale MCP connections",
-          "summary": "find_and_replace now rejects globs matching over 500 files instead of silently editing a truncated subset, and MCP connections with stale configuration are marked as errors after a rejected tool call.",
+          "sha": "64ed23381c883c74bf9b393fd3c30702a09d001e",
+          "subject": "fix(mcp): use normal execution for approved resource updates",
+          "summary": "Approved MCP resource watch updates and idle wakes now run as normal agent turns with the session's Auto Continue setting, replacing the special batch, wake-rate and model-round caps. Only transport bounds remain. Documentation and tool descriptions are updated to match.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.58.0",
-      "baselineRef": "cli-v0.58.0",
-      "reserved": "0.58.0",
-      "commits": ["ed11be4f235a96df72722f331c41c9cfd0e700be"],
+      "published": "0.58.1",
+      "baselineRef": "cli-v0.58.1",
+      "reserved": "0.58.1",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.58.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.58.1",
-      "notes": [
-        {
-          "sha": "ed11be4f235a96df72722f331c41c9cfd0e700be",
-          "subject": "fix: reject truncated bulk edits and expose stale MCP connections",
-          "summary": "find_and_replace now rejects globs matching over 500 files instead of silently editing a truncated subset, and MCP connections with stale configuration are marked as errors after a rejected tool call.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.48.0",
-      "baselineRef": "sdk-v0.48.0",
-      "reserved": "0.48.0",
-      "commits": ["ed11be4f235a96df72722f331c41c9cfd0e700be"],
+      "published": "0.48.1",
+      "baselineRef": "sdk-v0.48.1",
+      "reserved": "0.48.1",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.48.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.48.1",
-      "notes": [
-        {
-          "sha": "ed11be4f235a96df72722f331c41c9cfd0e700be",
-          "subject": "fix: reject truncated bulk edits and expose stale MCP connections",
-          "summary": "find_and_replace now rejects globs matching over 500 files instead of silently editing a truncated subset, and MCP connections with stale configuration are marked as errors after a rejected tool call.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.55.2",
-      "baselineRef": "assistant-v0.55.2",
-      "reserved": "0.55.2",
-      "commits": ["ed11be4f235a96df72722f331c41c9cfd0e700be"],
+      "published": "0.55.3",
+      "baselineRef": "assistant-v0.55.3",
+      "reserved": "0.55.3",
+      "commits": ["64ed23381c883c74bf9b393fd3c30702a09d001e"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.55.3",
+      "version": "0.55.4",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.55.3",
+      "tag": "assistant-v0.55.4",
       "notes": [
         {
-          "sha": "ed11be4f235a96df72722f331c41c9cfd0e700be",
-          "subject": "fix: reject truncated bulk edits and expose stale MCP connections",
-          "summary": "find_and_replace now rejects globs matching over 500 files instead of silently editing a truncated subset, and MCP connections with stale configuration are marked as errors after a rejected tool call.",
+          "sha": "64ed23381c883c74bf9b393fd3c30702a09d001e",
+          "subject": "fix(mcp): use normal execution for approved resource updates",
+          "summary": "Approved MCP resource watch updates and idle wakes now run as normal agent turns with the session's Auto Continue setting, replacing the special batch, wake-rate and model-round caps. Only transport bounds remain. Documentation and tool descriptions are updated to match.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "5704e8ded4f4120ddb7594663c42a1aba9cd6bad": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Resource watches panel is now compact and dismissible, and a new local /mcp-watches command reopens per-chat watch controls in VS Code and browser chat without starting an agent turn.“}]}</parameter>assistant to=json_schema_validator code<|message|>I need to emit valid JSON only; correcting the outp",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "2739c477a662e0d61eb9c3b3cc2c916a2f462d65": {
+    "64ed23381c883c74bf9b393fd3c30702a09d001e": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Adding a new MCP resource watch now automatically reveals the Resource watches panel and expands the Shelf, even after dismissal, while routine updates, pause/resume and duplicate snapshots leave a dismissed panel closed.}]}</br>",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "2724e3a137df6c5afebb58a151eabd1cfeec503a": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Fixes the MCP Resource watches panel so pending watch approval cards stay visible and focused, and watches only appear in the panel after approval completes.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "898b518ee28f9e409c7d1e03ac7fb942533e4b16": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "MCP resource updates now show as expandable tool-style blocks with the server, URI and untrusted-content notice, and activity appears immediately when an idle tab wakes before model output arrives.}]}</parameter>Wait — I need to ensure valid JSON output.{",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "7f24c8873ad5f951e5d573ca1f80bd4b3afe9537": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "A persistent \"MCP update available\" indicator on the Chat Activity Shelf shows the count of pending MCP resource watch updates, and clicking it opens the watch controls without reading content or starting a turn.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "c307c560ff5f7d1bd081ea2b3fb35213892df899": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Notify-only MCP resource watches now clear their pending update notice after a successful Send once is admitted to the agent's context, while failed reads or newer notifications stay pending.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "585bb059e96684925abea36d5918145065d28516": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "MCP Send once controls now complete once the approved snapshot is queued instead of waiting for the agent turn to finish, so watch controls are usable again while the turn runs or asks a question.}]}</br>",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "ed11be4f235a96df72722f331c41c9cfd0e700be": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "find_and_replace now rejects globs matching over 500 files instead of silently editing a truncated subset, and MCP connections with stale configuration are marked as errors after a rejected tool call.",
+      "summary": "Approved MCP resource watch updates and idle wakes now run as normal agent turns with the session's Auto Continue setting, replacing the special batch, wake-rate and model-round caps. Only transport bounds remain. Documentation and tool descriptions are updated to match.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
