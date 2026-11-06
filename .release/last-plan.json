@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "f9e5daaba9768a2c1d3cddca701ee0f41e044927",
-  "createdAt": "2026-11-06T06:41:47.851Z",
+  "sourceSha": "08f9adfb2331652652274089ba550aaa47cef914",
+  "createdAt": "2026-11-06T21:48:05.145Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.83.5",
-      "baselineRef": "v1.83.5",
-      "reserved": "1.83.5",
-      "commits": ["f9e5daaba9768a2c1d3cddca701ee0f41e044927"],
+      "published": "1.83.6",
+      "baselineRef": "v1.83.6",
+      "reserved": "1.83.6",
+      "commits": ["08f9adfb2331652652274089ba550aaa47cef914"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.83.6",
-      "effectiveBump": "patch",
+      "version": "1.84.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.83.6",
+      "tag": "v1.84.0",
       "notes": [
         {
-          "sha": "f9e5daaba9768a2c1d3cddca701ee0f41e044927",
-          "subject": "fix: preserve terminal input and reviewed global skill targets",
-          "summary": "Manual input in a Native Agent terminal now stops it being reused for unnamed commands, and global skill update/removal proposals target the unique existing skill across ~/.agentlink, ~/.agents and ~/.claude with drift checks.",
+          "sha": "08f9adfb2331652652274089ba550aaa47cef914",
+          "subject": "feat(codex): add allowlisted request identity diagnostics",
+          "summary": "Adds allowlisted Codex request identity diagnostics logged in the VS Code Output channel and helper stderr, and exports opt-in fetch and WebSocket connector wrappers from the SDK core package.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.83.5",
-      "baselineRef": "desktop-v0.83.5",
-      "reserved": "0.83.5",
-      "commits": ["f9e5daaba9768a2c1d3cddca701ee0f41e044927"],
+      "published": "0.83.6",
+      "baselineRef": "desktop-v0.83.6",
+      "reserved": "0.83.6",
+      "commits": ["08f9adfb2331652652274089ba550aaa47cef914"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.83.6",
-      "effectiveBump": "patch",
+      "version": "0.84.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.83.6",
+      "tag": "desktop-v0.84.0",
       "notes": [
         {
-          "sha": "f9e5daaba9768a2c1d3cddca701ee0f41e044927",
-          "subject": "fix: preserve terminal input and reviewed global skill targets",
-          "summary": "Manual input in a Native Agent terminal now stops it being reused for unnamed commands, and global skill update/removal proposals target the unique existing skill across ~/.agentlink, ~/.agents and ~/.claude with drift checks.",
+          "sha": "08f9adfb2331652652274089ba550aaa47cef914",
+          "subject": "feat(codex): add allowlisted request identity diagnostics",
+          "summary": "Adds allowlisted Codex request identity diagnostics logged in the VS Code Output channel and helper stderr, and exports opt-in fetch and WebSocket connector wrappers from the SDK core package.",
           "breaking": false
         }
       ]
@@ -61,46 +61,70 @@
       "published": "0.58.1",
       "baselineRef": "cli-v0.58.1",
       "reserved": "0.58.1",
-      "commits": [],
+      "commits": ["08f9adfb2331652652274089ba550aaa47cef914"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.59.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.59.0",
+      "notes": [
+        {
+          "sha": "08f9adfb2331652652274089ba550aaa47cef914",
+          "subject": "feat(codex): add allowlisted request identity diagnostics",
+          "summary": "Adds allowlisted Codex request identity diagnostics logged in the VS Code Output channel and helper stderr, and exports opt-in fetch and WebSocket connector wrappers from the SDK core package.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.48.1",
       "baselineRef": "sdk-v0.48.1",
       "reserved": "0.48.1",
-      "commits": [],
+      "commits": ["08f9adfb2331652652274089ba550aaa47cef914"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "assistant": {
-      "published": "0.55.5",
-      "baselineRef": "assistant-v0.55.5",
-      "reserved": "0.55.5",
-      "commits": ["f9e5daaba9768a2c1d3cddca701ee0f41e044927"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.55.6",
-      "effectiveBump": "patch",
+      "version": "0.49.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.55.6",
+      "tag": "sdk-v0.49.0",
       "notes": [
         {
-          "sha": "f9e5daaba9768a2c1d3cddca701ee0f41e044927",
-          "subject": "fix: preserve terminal input and reviewed global skill targets",
-          "summary": "Manual input in a Native Agent terminal now stops it being reused for unnamed commands, and global skill update/removal proposals target the unique existing skill across ~/.agentlink, ~/.agents and ~/.claude with drift checks.",
+          "sha": "08f9adfb2331652652274089ba550aaa47cef914",
+          "subject": "feat(codex): add allowlisted request identity diagnostics",
+          "summary": "Adds allowlisted Codex request identity diagnostics logged in the VS Code Output channel and helper stderr, and exports opt-in fetch and WebSocket connector wrappers from the SDK core package.",
+          "breaking": false
+        }
+      ]
+    },
+    "assistant": {
+      "published": "0.55.6",
+      "baselineRef": "assistant-v0.55.6",
+      "reserved": "0.55.6",
+      "commits": ["08f9adfb2331652652274089ba550aaa47cef914"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.56.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.56.0",
+      "notes": [
+        {
+          "sha": "08f9adfb2331652652274089ba550aaa47cef914",
+          "subject": "feat(codex): add allowlisted request identity diagnostics",
+          "summary": "Adds allowlisted Codex request identity diagnostics logged in the VS Code Output channel and helper stderr, and exports opt-in fetch and WebSocket connector wrappers from the SDK core package.",
           "breaking": false
         }
       ]
@@ -127,6 +151,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Manual input in a Native Agent terminal now stops it being reused for unnamed commands, and global skill update/removal proposals target the unique existing skill across ~/.agentlink, ~/.agents and ~/.claude with drift checks.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "08f9adfb2331652652274089ba550aaa47cef914": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Adds allowlisted Codex request identity diagnostics logged in the VS Code Output channel and helper stderr, and exports opt-in fetch and WebSocket connector wrappers from the SDK core package.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

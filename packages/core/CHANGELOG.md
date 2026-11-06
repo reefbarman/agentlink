@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.49.0 — 2026-11-06
+
+- Adds allowlisted Codex request identity diagnostics logged in the VS Code Output channel and helper stderr, and exports opt-in fetch and WebSocket connector wrappers from the SDK core package.
+
 ## 0.48.1 — 2026-11-06
 
 - find_and_replace now rejects globs matching over 500 files instead of silently editing a truncated subset, and MCP connections with stale configuration are marked as errors after a rejected tool call.

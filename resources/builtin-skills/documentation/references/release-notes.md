@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.84.0
+
 - Codex/OpenAI Responses requests now log a fixed allowlist of public client-identity and protocol headers in the VS Code agent output and Desktop/browser Ask Agent helper log. Diagnostics exclude credentials, account/session identifiers, routing state and request bodies, and do not change request identity or telemetry.
 
 ## 1.83.6
