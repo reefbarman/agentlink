@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "275a873c738f6da5c0cf5ca33e9a7930e9282500",
-  "createdAt": "2026-11-06T05:52:06.599Z",
+  "sourceSha": "f9e5daaba9768a2c1d3cddca701ee0f41e044927",
+  "createdAt": "2026-11-06T06:41:47.851Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.83.4",
-      "baselineRef": "v1.83.4",
-      "reserved": "1.83.4",
-      "commits": ["275a873c738f6da5c0cf5ca33e9a7930e9282500"],
+      "published": "1.83.5",
+      "baselineRef": "v1.83.5",
+      "reserved": "1.83.5",
+      "commits": ["f9e5daaba9768a2c1d3cddca701ee0f41e044927"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.83.5",
+      "version": "1.83.6",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.83.5",
+      "tag": "v1.83.6",
       "notes": [
         {
-          "sha": "275a873c738f6da5c0cf5ca33e9a7930e9282500",
-          "subject": "fix: harden edit completion and background result reporting",
-          "summary": "Fixes Save without Formatting falsely reporting failure, stops background research/general tasks with only opening narration from counting as complete, avoids false \"Issue found\" hints, and narrows symbol outlines for context reads with an explicit offset in VS Code.",
+          "sha": "f9e5daaba9768a2c1d3cddca701ee0f41e044927",
+          "subject": "fix: preserve terminal input and reviewed global skill targets",
+          "summary": "Manual input in a Native Agent terminal now stops it being reused for unnamed commands, and global skill update/removal proposals target the unique existing skill across ~/.agentlink, ~/.agents and ~/.claude with drift checks.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.83.4",
-      "baselineRef": "desktop-v0.83.4",
-      "reserved": "0.83.4",
-      "commits": ["275a873c738f6da5c0cf5ca33e9a7930e9282500"],
+      "published": "0.83.5",
+      "baselineRef": "desktop-v0.83.5",
+      "reserved": "0.83.5",
+      "commits": ["f9e5daaba9768a2c1d3cddca701ee0f41e044927"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.83.5",
+      "version": "0.83.6",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.83.5",
+      "tag": "desktop-v0.83.6",
       "notes": [
         {
-          "sha": "275a873c738f6da5c0cf5ca33e9a7930e9282500",
-          "subject": "fix: harden edit completion and background result reporting",
-          "summary": "Fixes Save without Formatting falsely reporting failure, stops background research/general tasks with only opening narration from counting as complete, avoids false \"Issue found\" hints, and narrows symbol outlines for context reads with an explicit offset in VS Code.",
+          "sha": "f9e5daaba9768a2c1d3cddca701ee0f41e044927",
+          "subject": "fix: preserve terminal input and reviewed global skill targets",
+          "summary": "Manual input in a Native Agent terminal now stops it being reused for unnamed commands, and global skill update/removal proposals target the unique existing skill across ~/.agentlink, ~/.agents and ~/.claude with drift checks.",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.55.4",
-      "baselineRef": "assistant-v0.55.4",
-      "reserved": "0.55.4",
-      "commits": ["275a873c738f6da5c0cf5ca33e9a7930e9282500"],
+      "published": "0.55.5",
+      "baselineRef": "assistant-v0.55.5",
+      "reserved": "0.55.5",
+      "commits": ["f9e5daaba9768a2c1d3cddca701ee0f41e044927"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.55.5",
+      "version": "0.55.6",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.55.5",
+      "tag": "assistant-v0.55.6",
       "notes": [
         {
-          "sha": "275a873c738f6da5c0cf5ca33e9a7930e9282500",
-          "subject": "fix: harden edit completion and background result reporting",
-          "summary": "Fixes Save without Formatting falsely reporting failure, stops background research/general tasks with only opening narration from counting as complete, avoids false \"Issue found\" hints, and narrows symbol outlines for context reads with an explicit offset in VS Code.",
+          "sha": "f9e5daaba9768a2c1d3cddca701ee0f41e044927",
+          "subject": "fix: preserve terminal input and reviewed global skill targets",
+          "summary": "Manual input in a Native Agent terminal now stops it being reused for unnamed commands, and global skill update/removal proposals target the unique existing skill across ~/.agentlink, ~/.agents and ~/.claude with drift checks.",
           "breaking": false
         }
       ]
@@ -119,6 +119,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Fixes Save without Formatting falsely reporting failure, stops background research/general tasks with only opening narration from counting as complete, avoids false \"Issue found\" hints, and narrows symbol outlines for context reads with an explicit offset in VS Code.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "f9e5daaba9768a2c1d3cddca701ee0f41e044927": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Manual input in a Native Agent terminal now stops it being reused for unnamed commands, and global skill update/removal proposals target the unique existing skill across ~/.agentlink, ~/.agents and ~/.claude with drift checks.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

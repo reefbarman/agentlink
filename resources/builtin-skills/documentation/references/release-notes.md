@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.83.6
+
 - Native Agent terminals receiving nonempty manual input now leave the automatic unnamed-command pool. A prepared unnamed command also refuses dispatch if input arrives before launch, preserving the unfinished input and terminal instead of appending an unrelated command to it.
 - Global skill updates/removals now find the unique existing source in the supported `.agentlink`, `.agents`, and `.claude` skill folders in VS Code and projectless Browser Ask Agent. Compatible aliases are treated as one physical source; genuine ambiguity, out-of-root targets, and source drift during review fail safely. New skills keep their existing default destination, and normal human approval remains required.
 
