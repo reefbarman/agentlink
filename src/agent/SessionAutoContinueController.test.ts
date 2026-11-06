@@ -52,19 +52,19 @@ function makeController(
 }
 
 describe("SessionAutoContinueController", () => {
-  it("does not extend an MCP-started turn through Auto Continue", () => {
+  it("suppresses unsubmitted MCP turns but applies normal Auto Continue once admission completes", () => {
     const { controller, sent, finishTurn } = makeController();
     controller.setEnabled("session-a", true);
     controller.observe({
       type: "agentFinalMarker",
       sessionId: "session-a",
       marker: { status: "completed" } as never,
-      externalTurn: true,
+      mcpResourceAdmissionPending: true,
     });
     controller.observe({
       type: "agentDone",
       sessionId: "session-a",
-      externalTurn: true,
+      mcpResourceAdmissionPending: true,
     });
     expect(sent).toHaveLength(0);
     finishTurn("session-a");

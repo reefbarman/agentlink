@@ -1602,7 +1602,7 @@ export const watchMcpResourceSchema = {
   delivery: z
     .enum(["notify", "deliver", "wake"])
     .describe(
-      "Requested level: notify only, automatic resource reads/delivery, or automatic delivery plus bounded idle waking. The user chooses the actual permission on a session approval card.",
+      "Requested level: notify only, automatic resource reads/delivery, or automatic delivery plus idle waking. The user chooses the actual permission on a session approval card.",
     ),
 };
 

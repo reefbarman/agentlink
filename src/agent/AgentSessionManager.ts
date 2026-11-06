@@ -998,7 +998,7 @@ export class AgentSessionManager {
   /** Coordinators with an internally queued question turn not yet reflected in status. */
   private backgroundCoordinatorTurnsStarting = new Set<string>();
   private readonly mcpResourceWatches = new Map<string, McpResourceWatches>();
-  private readonly mcpResourceExternalTurns = new Set<string>();
+  private readonly mcpResourceTurnsAwaitingAdmission = new Set<string>();
   private readonly mcpResourceReconsiderPending = new Set<string>();
   private mcpResourceInteractionPending: (sessionId: string) => boolean = () =>
     false;
@@ -5292,8 +5292,8 @@ export class AgentSessionManager {
     });
   }
 
-  isMcpResourceExternalTurn(sessionId: string): boolean {
-    return this.mcpResourceExternalTurns.has(sessionId);
+  isMcpResourceTurnAwaitingAdmission(sessionId: string): boolean {
+    return this.mcpResourceTurnsAwaitingAdmission.has(sessionId);
   }
 
   getMcpResourceWatches(sessionId: string) {
@@ -5369,6 +5369,7 @@ export class AgentSessionManager {
           if (pendingWake === batch)
             this.mcpResourceWakeStarting.delete(session.id);
           committed = true;
+          this.mcpResourceTurnsAwaitingAdmission.delete(session.id);
           // Publish synchronously at provider submission, not while preparing a request.
           for (const event of events)
             this.recordAndEmitEvent(session.id, event);
@@ -7747,7 +7748,7 @@ export class AgentSessionManager {
     }
     const releaseTurnStart = this.markTurnStarting(session.id);
     if (opts?.mcpResourceWake || opts?.mcpResourceManual)
-      this.mcpResourceExternalTurns.add(session.id);
+      this.mcpResourceTurnsAwaitingAdmission.add(session.id);
     try {
       return await this.sendMessageInQueue(
         session,
@@ -7758,7 +7759,7 @@ export class AgentSessionManager {
     } finally {
       releaseTurnStart();
       if (opts?.mcpResourceWake || opts?.mcpResourceManual)
-        this.mcpResourceExternalTurns.delete(session.id);
+        this.mcpResourceTurnsAwaitingAdmission.delete(session.id);
       queueMicrotask(() => this.tryWakeForMcpResource(session));
     }
   }
@@ -8242,12 +8243,8 @@ export class AgentSessionManager {
               this.applySessionIdentity(session);
 
               for await (const event of engine.run(session, {
-                requireMcpResourceUpdate: !!(
-                  opts?.mcpResourceWake || opts?.mcpResourceManual
-                ),
-                ...(opts?.mcpResourceWake
-                  ? { maxApiTurns: 4, maxToolCalls: 12 }
-                  : {}),
+                requireMcpResourceUpdate:
+                  this.mcpResourceTurnsAwaitingAdmission.has(session.id),
                 automaticMemoryContext,
                 composeEnabled: session.composeEnabled,
                 getHandoffSourceTranscript:
@@ -8360,8 +8357,7 @@ export class AgentSessionManager {
 
               if (
                 naturalDone &&
-                !opts?.mcpResourceWake &&
-                !opts?.mcpResourceManual &&
+                !this.mcpResourceTurnsAwaitingAdmission.has(session.id) &&
                 hookRuntime &&
                 autoContinueCount < MAX_AUTO_CONTINUE
               ) {
@@ -8374,10 +8370,12 @@ export class AgentSessionManager {
                 });
                 if (stopHook.stop?.continue) {
                   autoContinueCount++;
-                  session.addUserMessage(
+                  const resumePrompt =
                     stopHook.stop.reason ??
-                      "A Stop lifecycle hook requested another agent pass.",
-                  );
+                    "A Stop lifecycle hook requested another agent pass.";
+                  if (opts?.mcpResourceWake || opts?.mcpResourceManual)
+                    session.addUserMessage(resumePrompt, { automated: true });
+                  else session.addUserMessage(resumePrompt);
                   session.status = "streaming";
                   continue;
                 }
@@ -8391,7 +8389,9 @@ export class AgentSessionManager {
                 : null;
               if (modeResumePrompt) {
                 modeSwitchResumeCount++;
-                session.addUserMessage(modeResumePrompt);
+                if (opts?.mcpResourceWake || opts?.mcpResourceManual)
+                  session.addUserMessage(modeResumePrompt, { automated: true });
+                else session.addUserMessage(modeResumePrompt);
                 session.status = "streaming";
                 continue;
               }
@@ -8415,8 +8415,7 @@ export class AgentSessionManager {
               // Check if we should auto-continue due to pending todos
               if (
                 naturalDone &&
-                !opts?.mcpResourceWake &&
-                !opts?.mcpResourceManual &&
+                !this.mcpResourceTurnsAwaitingAdmission.has(session.id) &&
                 !explicitFinalMarker &&
                 !hasQueuedUserMessages &&
                 autoContinueCount < MAX_AUTO_CONTINUE &&
@@ -8428,6 +8427,9 @@ export class AgentSessionManager {
                 );
                 session.addUserMessage(TODO_AUTO_CONTINUE_MODEL_PROMPT, {
                   hidden: true,
+                  ...(opts?.mcpResourceWake || opts?.mcpResourceManual
+                    ? { automated: true }
+                    : {}),
                 });
                 session.status = "streaming";
                 continue;

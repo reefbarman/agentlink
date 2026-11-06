@@ -63,13 +63,7 @@ export type McpResourceWatchResult =
   | { ok: true; watch: McpResourceWatchState }
   | { ok: false; error: string };
 
-type Suspension =
-  | "approval"
-  | "identity"
-  | "manual"
-  | "stop"
-  | "budget"
-  | "error";
+type Suspension = "approval" | "identity" | "manual" | "stop" | "error";
 interface Watch {
   server: string;
   uri: string;
@@ -102,7 +96,6 @@ const rank: Record<McpResourceWatchMode, number> = {
   wake: 2,
 };
 const encoder = new TextEncoder();
-const AUTOMATIC_LIMIT = "Paused, automatic-update limit reached";
 
 /**
  * One loaded session's in-memory grants and latest-snapshot queue. No grant is inherited or persisted.
@@ -114,11 +107,9 @@ export class McpResourceWatches {
   private readonly servers = new Map<string, ServerSubscription>();
   private readonly lastReads = new Map<string, number>();
   private readTimes: number[] = [];
-  private wakeTimes: number[] = [];
   private generation = 0;
   private serial = 0;
   private readonly deliveryNamespace = randomId();
-  private admissions = 0;
   private reservation?: McpResourceUpdateBatch;
   private disposed = false;
   private stopped = false;
@@ -203,9 +194,6 @@ export class McpResourceWatches {
     watch.suspension = undefined;
     watch.reason = undefined;
     if (this.stopped) this.suspend(watch, "stop", "Session stopped");
-    // Creating/upgrading a watch is not a human-turn budget reset.
-    else if (this.admissions >= 3 && approved !== "notify")
-      this.suspend(watch, "budget", AUTOMATIC_LIMIT);
     this.syncServer(server);
     this.changed();
     if (this.servers.get(server)?.ready) this.catchUp(watch);
@@ -237,7 +225,6 @@ export class McpResourceWatches {
     const watch = this.watches.get(this.key(server, uri));
     if (!watch?.granted) return false;
     this.stopped = false;
-    this.admissions = 0;
     watch.suspension = undefined;
     watch.reason = undefined;
     this.syncServer(server, true);
@@ -250,14 +237,10 @@ export class McpResourceWatches {
     if (this.disposed) return;
     this.refresh();
     this.stopped = false;
-    this.admissions = 0;
     // A genuine user start wins over a reserved idle wake, retaining its pending content.
     if (this.reservation?.idle) this.reservation = undefined;
     for (const watch of this.watches.values()) {
-      if (
-        watch.granted &&
-        (watch.suspension === "stop" || watch.suspension === "budget")
-      ) {
+      if (watch.granted && watch.suspension === "stop") {
         watch.suspension = undefined;
         watch.reason = undefined;
         this.catchUp(watch);
@@ -312,7 +295,7 @@ export class McpResourceWatches {
       .map((watch) => this.state(watch));
   }
 
-  /** Synchronous reservation. Failed idle attempts still spend the wake-rate allowance. */
+  /** Synchronous reservation; the host still enforces session and approval gates. */
   reservePending({
     idle,
   }: {
@@ -320,37 +303,13 @@ export class McpResourceWatches {
   }): McpResourceUpdateBatch | undefined {
     this.refresh();
     if (this.disposed || this.reservation) return undefined;
-    if (this.admissions >= 3) {
-      this.pauseBudget();
-      return undefined;
-    }
     const updates = [...this.watches.values()]
       .filter(
         (watch) => this.canRead(watch) && (!idle || watch.mode === "wake"),
       )
       .flatMap((watch) => (watch.pending ? [watch.pending] : []));
     if (!updates.length) return undefined;
-    if (idle) {
-      const now = this.now();
-      this.wakeTimes = this.wakeTimes.filter((time) => now - time < 3_600_000);
-      if (
-        this.wakeTimes.length >= 6 ||
-        this.wakeTimes.some((time) => now - time < 300_000)
-      ) {
-        for (const watch of this.watches.values()) {
-          if (watch.mode === "wake" && !watch.suspension) {
-            this.suspend(
-              watch,
-              "budget",
-              "Paused, automatic-wake limit reached",
-            );
-          }
-        }
-        this.changed();
-        return undefined;
-      }
-      this.wakeTimes.push(now);
-    }
+
     const batch: McpResourceUpdateBatch = Object.freeze({
       id: `mcp-batch-${this.deliveryNamespace}-${++this.serial}`,
       idle,
@@ -365,7 +324,6 @@ export class McpResourceWatches {
     return (
       !this.disposed &&
       this.reservation === batch &&
-      this.admissions < 3 &&
       batch.updates.every((update) => {
         const watch = this.watches.get(this.key(update.server, update.uri));
         return (
@@ -389,9 +347,7 @@ export class McpResourceWatches {
       watch.notice = false;
     }
     this.reservation = undefined;
-    this.admissions++;
-    if (this.admissions >= 3) this.pauseBudget();
-    else this.changed();
+    this.changed();
     return true;
   }
 
@@ -485,15 +441,6 @@ export class McpResourceWatches {
     this.invalidate(watch);
     watch.suspension = suspension;
     watch.reason = reason;
-  }
-
-  private pauseBudget(): void {
-    for (const watch of this.watches.values()) {
-      if (watch.granted && watch.mode !== "notify" && !watch.suspension) {
-        this.suspend(watch, "budget", AUTOMATIC_LIMIT);
-      }
-    }
-    this.changed();
   }
 
   private canRead(watch: Watch): boolean {

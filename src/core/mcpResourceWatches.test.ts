@@ -505,77 +505,53 @@ describe("McpResourceWatches read queue", () => {
 });
 
 describe("McpResourceWatches session-wide automatic budgets", () => {
-  it("counts active batches, pauses after three, and watch recreation cannot reset the limit", async () => {
-    const h = harness();
-    await h.add();
-    for (let i = 0; i < 3; i++) {
-      if (i) {
-        h.options.read.mockResolvedValue({ text: `body-${i}` });
-        h.update();
-        await vi.advanceTimersByTimeAsync(5_000);
+  it.each(["deliver", "wake"] as const)(
+    "keeps %s delivery active beyond three batches across servers without human input or Resume",
+    async (mode) => {
+      const h = harness();
+      await h.add("resource://one", mode);
+      await h.add("resource://two", mode, "other");
+      for (let i = 0; i < 8; i++) {
+        if (i) {
+          // Stay within read throttles while exceeding the former wake limits.
+          await vi.advanceTimersByTimeAsync(60_000);
+          h.options.read.mockResolvedValue({ text: `body-${i}` });
+          h.update();
+          h.update("resource://two", "other");
+          await h.settle();
+        }
+        const batch = h.watches.reservePending({ idle: mode === "wake" })!;
+        expect(batch.updates).toHaveLength(2);
+        expect(h.watches.isBatchValid(batch)).toBe(true);
+        expect(h.watches.commitPending(batch)).toBe(true);
+        expect(h.watches.snapshot().every((watch) => !watch.paused)).toBe(true);
       }
-      const batch = h.watches.reservePending({ idle: false })!;
-      expect(h.watches.commitPending(batch)).toBe(true);
-    }
-    expect(h.watches.snapshot()[0]).toMatchObject({
-      paused: true,
-      reason: "Paused, automatic-update limit reached",
-    });
-    h.watches.unwatch("server", "resource://one");
-    await h.add();
-    expect(h.watches.snapshot()[0]!.paused).toBe(true);
-    const count = h.options.read.mock.calls.length;
-    h.update();
-    await vi.advanceTimersByTimeAsync(3_600_000);
-    expect(h.options.read).toHaveBeenCalledTimes(count);
-    h.watches.noteUserTurn();
-    await h.settle();
-    expect(h.watches.reservePending({ idle: false })).toBeDefined();
-  });
+      await vi.advanceTimersByTimeAsync(60_000);
+      h.watches.unwatch("server", "resource://one");
+      await h.add("resource://one", mode);
+      const recreated = h.watches.reservePending({ idle: mode === "wake" })!;
+      expect(h.watches.commitPending(recreated)).toBe(true);
+      expect(h.watches.snapshot().every((watch) => !watch.paused)).toBe(true);
+      expect(h.options.requestApproval).toHaveBeenCalledTimes(3);
+      await h.watches.dispose();
+    },
+  );
 
-  it("reserves wake attempts globally, release does not refund, and timers cannot resume", async () => {
+  it("keeps a single reservation and allows released idle data to be retried without pausing", async () => {
     const h = harness();
     await h.add("resource://one", "wake");
     await h.add("resource://two", "wake", "other");
     const first = h.watches.reservePending({ idle: true })!;
     expect(first.updates).toHaveLength(2);
+    expect(h.watches.reservePending({ idle: true })).toBeUndefined();
     h.watches.releasePending(first);
+    const retry = h.watches.reservePending({ idle: true })!;
+    expect(h.watches.isBatchValid(first)).toBe(false);
+    expect(retry.updates).toEqual(first.updates);
+    expect(h.watches.snapshot().every((watch) => !watch.paused)).toBe(true);
+    expect(h.watches.commitPending(retry)).toBe(true);
     expect(h.watches.reservePending({ idle: true })).toBeUndefined();
-    expect(h.watches.snapshot().every((watch) => watch.paused)).toBe(true);
-    await vi.advanceTimersByTimeAsync(300_000);
-    h.update();
-    await h.settle();
-    expect(h.watches.reservePending({ idle: true })).toBeUndefined();
-    h.watches.noteUserTurn();
-    await h.settle();
-    expect(h.watches.reservePending({ idle: true })).toBeDefined();
-  });
-
-  it("allows six wake attempts per rolling hour even across genuine user turns", async () => {
-    const h = harness();
-    await h.add("resource://one", "wake");
-    for (let i = 0; i < 6; i++) {
-      if (i) {
-        await vi.advanceTimersByTimeAsync(300_000);
-        h.watches.noteUserTurn();
-        h.options.read.mockResolvedValue({ text: `body-${i}` });
-        h.update();
-        await h.settle();
-      }
-      const batch = h.watches.reservePending({ idle: true });
-      expect(batch).toBeDefined();
-      expect(h.watches.commitPending(batch!)).toBe(true);
-    }
-    await vi.advanceTimersByTimeAsync(300_000);
-    h.watches.noteUserTurn();
-    h.options.read.mockResolvedValue({ text: "seventh" });
-    h.update();
-    await h.settle();
-    expect(h.watches.reservePending({ idle: true })).toBeUndefined();
-    expect(h.watches.snapshot()[0]).toMatchObject({
-      paused: true,
-      reason: "Paused, automatic-wake limit reached",
-    });
+    await h.watches.dispose();
   });
 
   it("a genuine user start supersedes an idle reservation without consuming the content", async () => {

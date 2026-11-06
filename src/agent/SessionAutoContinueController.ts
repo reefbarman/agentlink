@@ -38,8 +38,8 @@ export type SessionAutoContinueObservedMessage = {
   sessionId?: string;
   marker?: FinalMessageMarker | null;
   toolName?: string;
-  /** Host-set only. External data turns must not chain into Auto Continue. */
-  externalTurn?: boolean;
+  /** Host-set only. A revoked/unsubmitted update must not continue an old task. */
+  mcpResourceAdmissionPending?: boolean;
 };
 
 /** One continue turn for a surface to commit. */
@@ -167,7 +167,7 @@ export class SessionAutoContinueController {
     if (!sessionId) return;
     const record = this.sessions.get(sessionId);
     if (!record?.enabled) return;
-    if (message.externalTurn) {
+    if (message.mcpResourceAdmissionPending) {
       record.generation += 1;
       record.latestMarker = null;
       return;

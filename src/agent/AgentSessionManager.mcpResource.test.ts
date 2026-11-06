@@ -287,7 +287,7 @@ describe("AgentSessionManager MCP resource composition", () => {
     }
   });
 
-  it("replays a card-clear reconsideration after an in-flight wake releases its marker, without bypassing wake limits", async () => {
+  it("replays a card-clear reconsideration after an in-flight wake releases its marker without pausing", async () => {
     const f = fixture("wake");
     let pending = false;
     f.manager.setMcpResourceInteractionGate(() => pending);
@@ -309,11 +309,8 @@ describe("AgentSessionManager MCP resource composition", () => {
     expect(f.controller.snapshot()[0]?.paused).toBe(false);
     finish();
     await vi.advanceTimersByTimeAsync(0);
-    expect(f.controller.snapshot()[0]).toMatchObject({
-      paused: true,
-      reason: "Paused, automatic-wake limit reached",
-    });
-    expect(f.send).toHaveBeenCalledOnce();
+    expect(f.controller.snapshot()[0]).toMatchObject({ paused: false });
+    expect(f.send).toHaveBeenCalledTimes(2);
     await f.controller.dispose();
   });
 
@@ -612,7 +609,7 @@ describe("AgentSessionManager MCP resource composition", () => {
     },
   );
 
-  it("does not let automated continuations reset the three-batch budget or resume budget-paused watches", async () => {
+  it("delivers beyond three batches without human turns while automated continuations still cannot resume stopped watches", async () => {
     const f = fixture();
     const queuedSend = vi
       .spyOn(f.seams, "sendMessageInQueue")
@@ -620,7 +617,7 @@ describe("AgentSessionManager MCP resource composition", () => {
     const noteUserTurn = vi.spyOn(f.controller, "noteUserTurn");
     await f.controller.watch(server, uri, "deliver");
     await vi.advanceTimersByTimeAsync(0);
-    for (let index = 0; index < 3; index++) {
+    for (let index = 0; index < 5; index++) {
       expect(f.session.admitMcpResourceUpdates()).toHaveLength(1);
       await AgentSessionManager.prototype.sendMessage.call(
         f.manager,
@@ -642,15 +639,13 @@ describe("AgentSessionManager MCP resource composition", () => {
       f.subscription.onUpdated(uri);
       await vi.advanceTimersByTimeAsync(5_000);
     }
-    expect(queuedSend).toHaveBeenCalledTimes(3);
+    expect(queuedSend).toHaveBeenCalledTimes(5);
     expect(noteUserTurn).not.toHaveBeenCalled();
-    expect(f.session.admitMcpResourceUpdates()).toEqual([]);
+    expect(f.session.admitMcpResourceUpdates()).toHaveLength(1);
     expect(f.controller.snapshot()).toEqual([
-      expect.objectContaining({
-        paused: true,
-        reason: expect.stringContaining("automatic-update limit"),
-      }),
+      expect.objectContaining({ paused: false }),
     ]);
+    f.controller.pauseAll();
     await AgentSessionManager.prototype.sendMessage.call(
       f.manager,
       f.session.id,
@@ -714,7 +709,7 @@ describe("AgentSessionManager MCP resource composition", () => {
   });
 
   it.each(["complete", "prepare", "save"])(
-    "keeps real wake sends bounded and cancels revoked %s work without leaking running state",
+    "uses normal turn limits and continuations after admission, cancelling revoked %s work without leaking running state",
     async (boundary) => {
       const f = fixture("wake");
       let release!: () => void;
@@ -748,6 +743,9 @@ describe("AgentSessionManager MCP resource composition", () => {
         .fn<AgentEngine["run"]>()
         .mockImplementation(async function* (session) {
           for (const event of session.admitMcpResourceUpdates()) yield event;
+          expect(f.manager.isMcpResourceTurnAwaitingAdmission(session.id)).toBe(
+            false,
+          );
           yield {
             type: "todo_update",
             todos: [
@@ -833,16 +831,21 @@ describe("AgentSessionManager MCP resource composition", () => {
         return;
       }
       await f.send.mock.results[0]!.value;
-      expect(run).toHaveBeenCalledExactlyOnceWith(
+      expect(run.mock.calls[0]).toEqual([
         f.session,
-        expect.objectContaining({
-          maxApiTurns: 4,
-          maxToolCalls: 12,
-          requireMcpResourceUpdate: true,
-        }),
-      );
-      expect(stop).not.toHaveBeenCalled();
-      expect(f.session.messageCount).toBe(1);
+        expect.objectContaining({ requireMcpResourceUpdate: true }),
+      ]);
+      expect(run.mock.calls.length).toBeGreaterThan(1);
+      for (const [, options] of run.mock.calls) {
+        expect(options).not.toHaveProperty("maxApiTurns");
+        expect(options).not.toHaveProperty("maxToolCalls");
+      }
+      for (const [, options] of run.mock.calls.slice(1))
+        expect(options?.requireMcpResourceUpdate).toBe(false);
+      expect(stop).toHaveBeenCalled();
+      expect(
+        f.session.getAllMessages().filter((message) => message.externalData),
+      ).toHaveLength(1);
       expect(f.session.getAllMessages()[0]?.externalData).toBe(true);
       expect(f.session.humanInputRevision).toBe(0);
       expect(

@@ -15075,10 +15075,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // After delivery, so surfaces see the turn end before any continue prompt.
     this.autoContinue.observe({
       ...msg,
-      externalTurn:
+      mcpResourceAdmissionPending:
         "sessionId" in msg && typeof msg.sessionId === "string"
-          ? this.sessionManager?.isMcpResourceExternalTurn?.(msg.sessionId) ===
-            true
+          ? this.sessionManager?.isMcpResourceTurnAwaitingAdmission?.(
+              msg.sessionId,
+            ) === true
           : false,
     });
   }

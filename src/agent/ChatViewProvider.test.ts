@@ -6422,80 +6422,91 @@ describe("ChatViewProvider session state sync", () => {
     );
   });
 
-  it("runs Auto Continue in the host and shares its state with the browser", async () => {
-    vi.useFakeTimers();
-    try {
-      const session = makeBrowserQueueSession("session-auto", "streaming");
-      const { provider, sendMessage } = await makeBrowserQueueProvider(
-        [session],
-        { current: session },
-      );
-      const host = provider as unknown as {
-        handleWebviewMessage(message: unknown): Promise<void>;
-        postMessage(message: unknown): void;
-      };
+  it.each(["normal", "admitted MCP", "unsubmitted MCP"])(
+    "runs Auto Continue with browser parity for %s turns, but never before MCP admission",
+    async (turn) => {
+      vi.useFakeTimers();
+      try {
+        const session = makeBrowserQueueSession("session-auto", "streaming");
+        const { provider, sendMessage } = await makeBrowserQueueProvider(
+          [session],
+          { current: session },
+        );
+        const host = provider as unknown as {
+          handleWebviewMessage(message: unknown): Promise<void>;
+          postMessage(message: unknown): void;
+          sessionManager: object;
+        };
+        Object.assign(host.sessionManager, {
+          isMcpResourceTurnAwaitingAdmission: () => turn === "unsubmitted MCP",
+        });
 
-      await host.handleWebviewMessage({
-        command: "agentSetAutoContinue",
-        sessionId: session.id,
-        enabled: true,
-      });
-      expect(
-        provider.getBrowserDetachedSessionState(session.id).autoContinue,
-      ).toMatchObject({ enabled: true });
-
-      host.postMessage({
-        type: "agentFinalMarker",
-        sessionId: session.id,
-        marker: {
-          status: "completed",
-          source: "tool",
-          summary: "Slice done.",
-          continueAction: { label: "Continue", prompt: "Do the next slice." },
-        },
-      });
-      session.status = "idle";
-      host.postMessage({
-        type: "agentDone",
-        sessionId: session.id,
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalCacheReadTokens: 0,
-        totalCacheCreationTokens: 0,
-      });
-      await vi.runAllTimersAsync();
-
-      expect(sendMessage).toHaveBeenCalledTimes(1);
-      // The model is told the turn is automated and the step is its own
-      // proposal; the transcript shows only the prompt.
-      expect(sendMessage).toHaveBeenCalledWith(
-        session.id,
-        formatAutoContinueModelPrompt("Do the next slice.", "agent_proposed"),
-        "code",
-        expect.objectContaining({
-          origin: "vscode",
-          displayText: "Do the next slice.",
-        }),
-      );
-      expect(
-        provider.getBrowserDetachedSessionState(session.id).autoContinue,
-      ).toEqual({
-        enabled: true,
-        status: `Auto Continue sent 1/${AUTO_CONTINUE_MAX_TURNS}.`,
-      });
-
-      // The browser can turn it off for both surfaces.
-      expect(
-        provider.setBrowserAutoContinue({
+        await host.handleWebviewMessage({
+          command: "agentSetAutoContinue",
           sessionId: session.id,
-          projectId: "project-a",
-          enabled: false,
-        }),
-      ).toMatchObject({ ok: true, autoContinue: { enabled: false } });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+          enabled: true,
+        });
+        expect(
+          provider.getBrowserDetachedSessionState(session.id).autoContinue,
+        ).toMatchObject({ enabled: true });
+
+        host.postMessage({
+          type: "agentFinalMarker",
+          sessionId: session.id,
+          marker: {
+            status: "completed",
+            source: "tool",
+            summary: "Slice done.",
+            continueAction: { label: "Continue", prompt: "Do the next slice." },
+          },
+        });
+        session.status = "idle";
+        host.postMessage({
+          type: "agentDone",
+          sessionId: session.id,
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheCreationTokens: 0,
+        });
+        await vi.runAllTimersAsync();
+
+        if (turn === "unsubmitted MCP") {
+          expect(sendMessage).not.toHaveBeenCalled();
+          return;
+        }
+        expect(sendMessage).toHaveBeenCalledTimes(1);
+        // The model is told the turn is automated and the step is its own
+        // proposal; the transcript shows only the prompt.
+        expect(sendMessage).toHaveBeenCalledWith(
+          session.id,
+          formatAutoContinueModelPrompt("Do the next slice.", "agent_proposed"),
+          "code",
+          expect.objectContaining({
+            origin: "vscode",
+            displayText: "Do the next slice.",
+          }),
+        );
+        expect(
+          provider.getBrowserDetachedSessionState(session.id).autoContinue,
+        ).toEqual({
+          enabled: true,
+          status: `Auto Continue sent 1/${AUTO_CONTINUE_MAX_TURNS}.`,
+        });
+
+        // The browser can turn it off for both surfaces.
+        expect(
+          provider.setBrowserAutoContinue({
+            sessionId: session.id,
+            projectId: "project-a",
+            enabled: false,
+          }),
+        ).toMatchObject({ ok: true, autoContinue: { enabled: false } });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("continues an already-completed idle turn when Auto Continue is turned on", async () => {
     vi.useFakeTimers();
