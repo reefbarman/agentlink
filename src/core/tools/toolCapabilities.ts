@@ -181,6 +181,7 @@ const toolCapabilities = [
   ),
 
   // Read/search/context
+  metadata("list_models", "read", ["models.discover"], "read", "never", true),
   metadata(
     "find_native_tools",
     "search",

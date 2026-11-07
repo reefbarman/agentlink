@@ -491,6 +491,15 @@
       "definitionSource": "adapter-definition"
     },
     {
+      "name": "list_models",
+      "parameters": ["limit", "offset", "provider", "query"],
+      "cluster": "read",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
       "name": "load_rule",
       "parameters": ["path"],
       "cluster": "read",
@@ -928,5 +937,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "40f3c1411e697fe5b74c67f965076a5f1b3455c2afec0c9a88bc8de6f214085d"
+  "revision": "f586710b57638529bba9233201dc37f1435d0c7359634b0541c85981e20b6966"
 }

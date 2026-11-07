@@ -30,6 +30,8 @@ import { createNativeToolDisclosureSnapshot } from "../core/tools/nativeToolDisc
 import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
 import { BUILT_IN_MODES, buildUnionAgentMode } from "./modes.js";
 import { TODO_TOOL_NAME } from "./todoTool.js";
+import { providerRegistry } from "./providers/index.js";
+import { LIST_MODELS_TOOL } from "@agentlink/core/model-discovery";
 import type { ToolDefinition } from "./providers/types.js";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { collectNativeWebToolResult } from "@agentlink/core/native-web-tools";
@@ -313,6 +315,104 @@ function parseRecallPayload(result: ToolResult): Record<string, any> {
   if (!match?.[1]) throw new Error(`Missing recall payload: ${text}`);
   return JSON.parse(match[1]) as Record<string, any>;
 }
+
+describe("list_models", () => {
+  it("advertises the shared discovery contract in every built-in mode and defers it", () => {
+    const definition = getAgentTools().find(
+      (tool) => tool.name === "list_models",
+    );
+    expect(definition?.description).toBe(LIST_MODELS_TOOL.description);
+    expect(definition?.input_schema).toMatchObject({
+      properties: LIST_MODELS_TOOL.input_schema.properties,
+    });
+    for (const mode of BUILT_IN_MODES) {
+      expect(getAgentTools(mode).map((tool) => tool.name)).toContain(
+        "list_models",
+      );
+    }
+    const snapshot = createNativeToolDisclosureSnapshot(getAgentTools());
+    expect(snapshot.deferredTools.map((tool) => tool.name)).toContain(
+      "list_models",
+    );
+    expect(READ_ONLY_TOOLS.has("list_models")).toBe(true);
+  });
+
+  it("searches the current provider catalog and returns exact background selector IDs", async () => {
+    const snapshot = vi
+      .spyOn(providerRegistry, "getModelCatalogSnapshot")
+      .mockResolvedValue({
+        models: [
+          {
+            id: "local-argon-4",
+            displayName: "Gemini 4 Argon",
+            providerId: "openai-compatible:gemini",
+            providerDisplayName: "Gemini bridge",
+            supportsToolUse: true,
+            supportsImages: true,
+            contextWindow: 1000000,
+            authenticated: true,
+            readiness: { status: "ready" },
+          },
+        ],
+        publishedByOwnerId: "test-session",
+        publishedAt: 1,
+      });
+    try {
+      const result = await dispatchToolCall(
+        "list_models",
+        { query: "gemini argon" },
+        mockCtx,
+      );
+      expect(result.isError).not.toBe(true);
+      expect(snapshot).toHaveBeenCalledWith({
+        publishedByOwnerId: "test-session",
+      });
+      expect(result.data).toMatchObject({
+        total: 1,
+        models: [
+          {
+            id: "local-argon-4",
+            providerId: "openai-compatible:gemini",
+            readiness: "ready",
+          },
+        ],
+      });
+      snapshot.mockResolvedValueOnce({
+        models: [],
+        publishedByOwnerId: "test-session",
+        publishedAt: 2,
+      });
+      expect(
+        (await dispatchToolCall("list_models", {}, mockCtx)).data,
+      ).toMatchObject({ models: [], total: 0 });
+    } finally {
+      snapshot.mockRestore();
+    }
+  });
+
+  it("rejects invalid input before reading the catalog and hides provider failure details", async () => {
+    const snapshot = vi
+      .spyOn(providerRegistry, "getModelCatalogSnapshot")
+      .mockRejectedValue(new Error("secret endpoint token"));
+    try {
+      const invalid = await dispatchToolCall(
+        "list_models",
+        { limit: 101 },
+        mockCtx,
+      );
+      expect(invalid.isError).toBe(true);
+      expect(snapshot).not.toHaveBeenCalled();
+      const failure = await dispatchToolCall("list_models", {}, mockCtx);
+      expect(failure.isError).toBe(true);
+      expect(JSON.stringify(failure)).not.toContain("secret endpoint token");
+      expect(failure.data).toMatchObject({
+        status: "model_catalog_unavailable",
+      });
+    } finally {
+      snapshot.mockRestore();
+    }
+  });
+});
 
 const ddgMcpTools: ToolDefinition[] = [
   {
@@ -1508,9 +1608,9 @@ const READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT = [
 ] as const;
 
 describe("READ_ONLY_TOOLS", () => {
-  it("matches the pre-core compatibility snapshot", () => {
-    expect([...READ_ONLY_TOOLS].sort()).toEqual(
-      [...READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT].sort(),
+  it("preserves the pre-core compatibility snapshot while allowing new tools", () => {
+    expect([...READ_ONLY_TOOLS]).toEqual(
+      expect.arrayContaining([...READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT]),
     );
   });
 
@@ -1581,8 +1681,8 @@ describe("READ_ONLY_TOOLS", () => {
   });
 
   it("matches the core parallel-safe metadata", () => {
-    expect([...PARALLEL_SAFE_TOOLS].sort()).toEqual(
-      [...READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT].sort(),
+    expect([...READ_ONLY_TOOLS].sort()).toEqual(
+      [...PARALLEL_SAFE_TOOLS].sort(),
     );
   });
 

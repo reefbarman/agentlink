@@ -270,6 +270,7 @@ import type {
   FinalMessageStatus,
 } from "@agentlink/protocol/final-status";
 import { handleTodoWrite, type TodoToolInput } from "../../agent/todoTool.js";
+import { discoverModels } from "@agentlink/core/model-discovery";
 import { getBundledSkillDirs } from "../../agent/skillLoader.js";
 import { presentImages } from "../../tools/presentImages.js";
 import { resolveMarkdownImage } from "../../tools/markdownImageResolver.js";
@@ -9132,6 +9133,47 @@ export class BrowserGatewayHelper {
         signal,
         mcpInvocation?.turnId,
       );
+    }
+
+    if (toolCall.name === "list_models") {
+      const respond = (
+        result: unknown,
+        isError = false,
+      ): AskAgentToolExecutionResult => {
+        const content = JSON.stringify(result);
+        return {
+          content,
+          stop: false,
+          toolMessage: this.buildAskAgentToolResultMessage(
+            toolCall,
+            content,
+            isError,
+          ),
+        };
+      };
+      try {
+        discoverModels([], toolCall.input);
+      } catch {
+        return respond(
+          {
+            status: "invalid_model_discovery_input",
+            error: "Invalid list_models input",
+          },
+          true,
+        );
+      }
+      const snapshot = this.getModelCatalogSnapshot(modelOwnerId);
+      if (!snapshot) {
+        return respond(
+          {
+            status: "model_catalog_unavailable",
+            error:
+              "The configured model catalog could not be read. Check provider configuration and try again.",
+          },
+          true,
+        );
+      }
+      return respond(discoverModels(snapshot.models, toolCall.input));
     }
 
     if (toolCall.name === "todo_write") {

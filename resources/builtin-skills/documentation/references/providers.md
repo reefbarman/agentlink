@@ -74,6 +74,12 @@ The file uses this envelope. If it already exists, merge entries into its `conne
 - Optional model-level `modelFamily: "anthropic"` or `"openai"` selects vendor-appropriate prompt guidance. It does not change the endpoint, credential, or API format.
 - Optional model-level `promptProfile: "compatibility"` or `"reasoning"` selects the fuller or compact instruction profile. Omit it for automatic selection. This is local AgentLink configuration, not an upstream API parameter; invalid values are rejected.
 
+### Discover model IDs for background tasks
+
+Ask the foreground agent to call `list_models` with a name query, for example `{ "query": "gemini argon" }`. The tool returns the configured local model ID, provider ID, declared capabilities and authentication readiness without reading the connection file into chat. In VS Code, it can be discovered through `find_native_tools` when deferred.
+
+For a background task on that model, use the returned local `id` in `spawn_background_agent.model`, not the display name or upstream wire ID. An explicit model override takes precedence over automatic background tier routing and does not switch the foreground model. If there is no match, configure the model first using the wizard above. Catalog presence and authentication readiness do not verify upstream availability, entitlement or quota. See [model discovery](tools.md#discover-configured-models) for filters and standalone parameter differences.
+
 ### Instruction profiles
 
 For example, add `"promptProfile": "reasoning"` to a Claude model's object to try the compact profile through Meridian. `modelFamily`, thinking support, effort, and transport do not automatically select it. Keep `"compatibility"` as a rollback if a model needs more guidance. Shorter instructions do not by themselves establish better behaviour.

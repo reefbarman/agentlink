@@ -173,13 +173,12 @@ describe("BrowserGatewayAskAgentModelClient", () => {
       ...ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
       ...ASK_AGENT_NATIVE_DISCLOSURE_BRIDGE_TOOLS,
     ]);
-    expect(disclosure.deferredTools.map((tool) => tool.name)).toEqual([
-      "manage_memory",
-      "recall_memory",
-      "generate_image",
-      "present_images",
-      "inspect_page_images",
-    ]);
+    expect(disclosure.deferredTools.map((tool) => tool.name)).toEqual(
+      Object.keys(ASK_AGENT_DEFERRED_NATIVE_TOOL_VALIDATORS),
+    );
+    expect(disclosure.deferredTools.map((tool) => tool.name)).toContain(
+      "list_models",
+    );
     expect(Object.keys(ASK_AGENT_DEFERRED_NATIVE_TOOL_VALIDATORS)).toEqual(
       disclosure.deferredTools.map((tool) => tool.name),
     );
@@ -906,19 +905,10 @@ describe("BrowserGatewayAskAgentModelClient", () => {
       .map((tool) => tool.name)
       .filter(Boolean);
 
-    expect(toolNames).toEqual([
-      "manage_memory",
-      "recall_memory",
-      "ask_user",
-      "todo_write",
-      "set_task_status",
-      "read_file",
-      "list_files",
-      "search_files",
-      "generate_image",
-      "present_images",
-      "inspect_page_images",
-    ]);
+    expect(toolNames).toEqual(
+      ASK_AGENT_SAFE_PROJECTLESS_TOOLS.map((tool) => tool.name),
+    );
+    expect(toolNames).toContain("list_models");
     const askUserTool = (
       (body.tools as
         | Array<{ name?: string; description?: string }>

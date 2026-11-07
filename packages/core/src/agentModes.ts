@@ -99,6 +99,7 @@ export const BUILT_IN_MODES: AgentMode[] = [
  */
 export const TOOL_GROUPS: Record<string, string[]> = {
   read: [
+    "list_models",
     "web_fetch",
     "read_file",
     "get_context",

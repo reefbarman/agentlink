@@ -293,6 +293,17 @@ Browser relay sessions load structured final results automatically through the e
 
 Exact session-tool parameters: [orchestration tools](complete-reference.md#built-in-agent-orchestration-tools).
 
+## Discover configured models
+
+`list_models` returns the current host's configured model catalog without opening provider configuration files or exposing credentials. In VS Code workspace chats (including their browser remote view), discover it through `find_native_tools` when deferred. It is also available in the CLI, Assistant, and projectless Ask Agent when the host supplies a model catalog.
+
+- `query`: optional case-insensitive AND-word search across local model IDs, display names, provider IDs and provider names. For example, `{ "query": "gemini argon" }` finds a configured Gemini Argon entry even when its local ID has a different spelling.
+- `provider`: optional exact provider ID filter.
+- `limit`: integer 1 to 100, default 50. `offset`: nonnegative integer, default 0.
+- Results contain `models`, `total`, `offset`, `limit`, and `nextOffset` when more matches remain. Each model includes its exact local `id`, display name, provider ID, declared tool/image support and limits, reasoning efforts when declared, authentication flag and readiness status. No endpoint, credential, or raw provider error details are returned.
+
+For VS Code background tasks, pass the returned `id` as `spawn_background_agent.model` and, when specifying a provider, the returned `providerId` as `provider`. CLI and Assistant background tools use `model_id` and `provider_id` instead. Listing a model does not prove account entitlement, quota, endpoint connectivity or successful execution. The tool reads the configured catalog, not an upstream `/models` refresh, and does not change the foreground model or routing settings.
+
 ## Delegate work
 
 For native writable debugging, use `mode: "code"` or `taskClass: "debug"` with non-empty `ownedPaths`. The latter defaults to Code only from a Code-mode parent, when no explicit mode or review-only permission profile prevents it. Unscoped Debug remains investigative; foreground modes and ACP defaults are unchanged. Other mode/profile/skill/ownership restrictions still apply.

@@ -116,6 +116,70 @@ function readProfileConfig(fetch: typeof globalThis.fetch) {
 }
 
 describe("createWorkspaceHost", () => {
+  it("offers opt-in list_models through the production runtime and reads its live catalog", async () => {
+    const parent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "workspace-model-discovery-"),
+    );
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    const requests: Array<Record<string, unknown>> = [];
+    const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return requests.length === 1
+        ? toolCall("list_models", {
+            query: "reasoning profiles",
+            provider: "profiles",
+            limit: 1,
+          })
+        : completion("Catalog read.");
+    }) as typeof globalThis.fetch;
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "discovery-owner",
+      ...readProfileConfig(fetch),
+      modelDiscovery: true,
+      modes: { enabled: true },
+    });
+    const listCatalog = vi.spyOn(host.engine.models, "listCatalog");
+    try {
+      const session = await host.createSession({ mode: "ask" });
+      const result = await host.runTurn(session.sessionId, "Find models");
+      expect(result.status).toBe("completed");
+      expect(listCatalog).toHaveBeenCalledWith({
+        principal: host.principal,
+        authContext: undefined,
+      });
+      const offered = requests[0]?.tools as Array<{
+        function: { name: string };
+      }>;
+      expect(offered.some((tool) => tool.function.name === "list_models")).toBe(
+        true,
+      );
+      const messages = requests[1]?.messages as Array<{
+        role: string;
+        content: string;
+      }>;
+      const payload = JSON.parse(
+        messages.find((message) => message.role === "tool")!.content,
+      );
+      expect(payload).toMatchObject({
+        total: 1,
+        limit: 1,
+        models: [
+          {
+            id: "reasoning-model",
+            providerId: "profiles",
+            authenticated: true,
+          },
+        ],
+      });
+      expect(JSON.stringify(payload)).not.toContain("example.invalid");
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
   it("rejects retired OAuth models before composing or dispatching instructions", async () => {
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-remap-"));
     const projectRoot = path.join(parent, "project");

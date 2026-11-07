@@ -53,6 +53,18 @@ const SHELL_FILE_WRITE = {
 
 export const GOLDEN_TASKS: readonly GoldenTask[] = [
   {
+    id: "discover-background-model",
+    mode: "code",
+    intent:
+      "Resolve a display name through the configured model catalog instead of guessing IDs or reading credentials.",
+    prompt:
+      "Find the exact configured model ID for Gemini 4 Argon so I can use it for background tasks. Do not launch a task yet.",
+    expect: {
+      anyOf: ["list_models", "find_native_tools"],
+      forbid: [...NO_DELEGATION, "read_file", "execute_command"],
+    },
+  },
+  {
     id: "known-file-read",
     mode: "code",
     intent: "A named file is read directly, not searched for or delegated.",

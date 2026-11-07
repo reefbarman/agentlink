@@ -357,6 +357,39 @@ async function setup(
 // These integration cases cross real runner HTTP boundaries and persist sessions.
 // Keep their outer test budget above those operations under full-suite load.
 describe("session runners", { timeout: 30_000 }, () => {
+  it("discovers models through the task runner's production host", async () => {
+    let discovered: unknown;
+    const harness = await setup(async function* (request) {
+      expect(request.tools?.some((tool) => tool.name === "list_models")).toBe(
+        true,
+      );
+      const result = request.messages
+        .flatMap((message) =>
+          Array.isArray(message.content) ? message.content : [],
+        )
+        .find((block) => block.type === "tool_result");
+      if (!result || result.type !== "tool_result") {
+        yield* toolCall("list_models", {
+          query: "Fake",
+          provider: "fake",
+          limit: 1,
+        });
+      } else {
+        discovered = JSON.parse(String(result.content));
+        yield* final("Models found.");
+      }
+    });
+    const { sessionId } = await harness.routes.operations.createSession(
+      auth(),
+      "task-t1",
+    );
+    await harness.run(sessionId, "Find models");
+    expect(discovered).toMatchObject({
+      total: 1,
+      limit: 1,
+      models: [{ id: "model-a", providerId: "fake", authenticated: false }],
+    });
+  });
   it("run a task's turns, commands and tools in the runner, with models and tools on the control plane", async () => {
     const harness = await setup(async function* (request) {
       const results = request.messages.filter(

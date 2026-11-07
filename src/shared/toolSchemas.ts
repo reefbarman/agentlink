@@ -8,6 +8,33 @@
 import { APPLY_DIFF_INPUT_GRAMMAR } from "./applyDiffFormat.js";
 import { z } from "zod";
 
+// ─── Model discovery ─────────────────────────────────────────────────────────
+
+export const listModelsSchema = {
+  query: z
+    .string()
+    .max(500)
+    .optional()
+    .describe(
+      "Case-insensitive AND-word search across local model IDs, display names, and provider names/IDs",
+    ),
+  provider: z.string().optional().describe("Filter by exact provider ID"),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("Maximum models to return (default: 50, maximum: 100)"),
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .max(Number.MAX_SAFE_INTEGER)
+    .optional()
+    .describe("Number of matching models to skip (default: 0)"),
+};
+
 // ─── Web tools ───────────────────────────────────────────────────────────────
 
 export const webSearchSchema = {

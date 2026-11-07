@@ -1027,7 +1027,33 @@ describe("assistant service system prompt", () => {
             `data: ${JSON.stringify({
               id: "r",
               choices: [
-                { index: 0, delta: { content: "Hi." }, finish_reason: "stop" },
+                requests.length === 1
+                  ? {
+                      index: 0,
+                      delta: {
+                        tool_calls: [
+                          {
+                            index: 0,
+                            id: "discover-models",
+                            type: "function",
+                            function: {
+                              name: "list_models",
+                              arguments: JSON.stringify({
+                                query: "fixture",
+                                provider: "local",
+                                limit: 1,
+                              }),
+                            },
+                          },
+                        ],
+                      },
+                      finish_reason: "tool_calls",
+                    }
+                  : {
+                      index: 0,
+                      delta: { content: "Hi." },
+                      finish_reason: "stop",
+                    },
               ],
             })}\n\ndata: [DONE]\n\n`,
           );
@@ -1164,6 +1190,20 @@ describe("assistant service system prompt", () => {
       // VS Code's delegation guidance follows the Assistant's background
       // tools, without the spawn inputs it does not take.
       expect(tools.has("spawn_background_agent")).toBe(true);
+      expect(tools.has("list_models")).toBe(true);
+      const discoveryResult = await vi.waitFor(() => {
+        const message = requests[1]?.messages.find(
+          (message) => message.role === "tool",
+        );
+        expect(message).toBeDefined();
+        return JSON.parse(String(message!.content));
+      });
+      expect(discoveryResult).toMatchObject({
+        total: 1,
+        limit: 1,
+        models: [{ id: "fixture", providerId: "local", authenticated: true }],
+      });
+      expect(JSON.stringify(discoveryResult)).not.toContain("127.0.0.1");
       if (profile === "compatibility") {
         expect(prompt).toContain("## Background Agent Tools — Usage Guidance");
       }

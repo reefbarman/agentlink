@@ -1,6 +1,7 @@
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
 
+import { LIST_MODELS_TOOL } from "@agentlink/core/model-discovery";
 import {
   collectOpenAiCompatibleCompletion,
   streamOpenAiCompatibleCompletion,
@@ -32,6 +33,7 @@ import {
   callNativeToolSchema,
   findNativeToolsSchema,
   inspectPageImagesSchema,
+  listModelsSchema,
   presentImagesSchema,
   manageMemorySchema,
   recallMemorySchema,
@@ -240,6 +242,7 @@ export type BrowserGatewayAskAgentCompletionParams = {
 };
 
 export const ASK_AGENT_LOCAL_TOOL_NAMES = [
+  "list_models",
   "ask_user",
   "todo_write",
   "set_task_status",
@@ -333,6 +336,7 @@ const ASK_AGENT_PRESENT_IMAGES_SCHEMA = {
 const ASK_AGENT_INSPECT_PAGE_IMAGES_SCHEMA = inspectPageImagesSchema;
 
 export const ASK_AGENT_DEFERRED_NATIVE_TOOL_VALIDATORS = Object.freeze({
+  list_models: z.object(listModelsSchema).strict(),
   manage_memory: z.object(ASK_AGENT_MANAGE_MEMORY_SCHEMA).strict(),
   recall_memory: z.object(ASK_AGENT_RECALL_MEMORY_SCHEMA).strict(),
   generate_image: z.object(ASK_AGENT_GENERATE_IMAGE_SCHEMA).strict(),
@@ -385,6 +389,7 @@ export const ASK_AGENT_NATIVE_DISCLOSURE_BRIDGE_TOOLS: readonly CoreModelToolDef
   ]);
 
 export const ASK_AGENT_SAFE_PROJECTLESS_TOOLS: CoreModelToolDefinition[] = [
+  LIST_MODELS_TOOL,
   {
     name: "manage_memory",
     description: `${TOOL_REGISTRY.manage_memory!.description} Browser Ask Agent is projectless, so only global scope is available here.`,

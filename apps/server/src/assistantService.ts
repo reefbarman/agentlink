@@ -1460,6 +1460,7 @@ export async function startAssistantService(
         },
       });
       const host = await createWorkspaceHost({
+        modelDiscovery: true,
         projectRoot: project.root,
         dataRoot: path.join(config.dataRoot, "workspace"),
         // By project ID, not by folder: chats survive a restore or a move.

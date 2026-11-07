@@ -19,6 +19,7 @@ import {
   type TurnExecutionLimits,
 } from "@agentlink/core";
 import { ResponsesConversationState } from "@agentlink/core/codex";
+import { createModelDiscoveryTool } from "@agentlink/core/model-discovery";
 import {
   buildModesOverviewSection,
   formatModeInstructionBlock,
@@ -193,6 +194,8 @@ export interface CreateWorkspaceHostOptions {
   readonly ownerId: string;
   readonly providers: readonly WorkspaceProviderConfig[];
   readonly defaultModel: AgentModelReference;
+  /** Offer read-only list_models from this host's live principal-scoped catalog. */
+  readonly modelDiscovery?: boolean;
   readonly defaultReasoningEffort?: CoreReasoningEffort;
   readonly requestLimits?: WorkspaceModelRequestLimits;
   /**
@@ -1447,7 +1450,8 @@ export async function createWorkspaceHost(
             options.onTurnError?.({ sessionId, turnId, error, publicError }),
         }
       : {}),
-    ...(fileTools ||
+    ...(options.modelDiscovery ||
+    fileTools ||
     commandTools ||
     artifactTools ||
     agentInstructions ||
@@ -1471,6 +1475,19 @@ export async function createWorkspaceHost(
                     )
                   : [];
                 const tools = [
+                  ...(options.modelDiscovery
+                    ? [
+                        createModelDiscoveryTool({
+                          listModels: async ({ principal: toolPrincipal }) =>
+                            (
+                              await engine.models.listCatalog({
+                                principal: toolPrincipal,
+                                authContext: undefined,
+                              })
+                            ).models,
+                        }),
+                      ]
+                    : []),
                   ...(fileTools ? await fileTools.resolveTools(request) : []),
                   ...(commandTools
                     ? await commandTools.resolveTools(request)

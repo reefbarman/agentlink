@@ -11308,6 +11308,79 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
   });
 
+  it("lists only the selected owner's live models without exposing private catalog data", async () => {
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      completionParams.push(params);
+      if (params.toolMessages?.length)
+        return { text: "Models found.", toolCalls: [] };
+      return {
+        text: "Finding models.",
+        toolCalls: [
+          {
+            id: "discover-models",
+            name: "list_models",
+            input: { query: "LUNA", provider: "openai-codex", limit: 1 },
+          },
+        ],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+    const discovery = JSON.parse(
+      await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
+    );
+    await provisionAskAgentModelForTest({
+      helperBase: harness.helperBase,
+      discovery,
+      ownerId: "other-owner",
+      instanceId: "other-instance",
+      grantCredential: false,
+      models: [
+        {
+          id: "other-private-luna",
+          displayName: "Private Luna",
+          providerId: "openai-codex",
+          contextWindow: 1234,
+          authenticated: false,
+        },
+      ],
+    });
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({
+        text: "Find models",
+        instanceId: "vscode-instance-1",
+      }),
+    });
+    expect(send.ok).toBe(true);
+    const result = completionParams[1]?.toolMessages
+      ?.flatMap((message) =>
+        Array.isArray(message.content) ? message.content : [],
+      )
+      .find(
+        (block) =>
+          block.type === "tool_result" &&
+          block.tool_use_id === "discover-models",
+      );
+    expect(result?.type).toBe("tool_result");
+    const content =
+      result?.type === "tool_result" && typeof result.content === "string"
+        ? result.content
+        : "{}";
+    expect(JSON.parse(content)).toMatchObject({
+      total: 1,
+      limit: 1,
+      models: [
+        { id: "gpt-5.6-luna", providerId: "openai-codex", authenticated: true },
+      ],
+    });
+    expect(content).not.toContain("other-private-luna");
+    expect(content).not.toContain("bearerToken");
+  });
+
   it("discovers only deferred tools from the frozen Browser Ask Agent catalog", async () => {
     const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
     const modelClient = makeAskAgentToolLoopClient(async (params) => {
@@ -11360,6 +11433,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
 
     expect(send.ok).toBe(true);
     expect(discovered.tools.map((tool) => tool.name)).toEqual([
+      "list_models",
       "manage_memory",
       "recall_memory",
       "generate_image",

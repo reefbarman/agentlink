@@ -386,6 +386,7 @@ export async function startSessionRunner(options: {
   const approvalHostTools = await remoteApprovalHostTools(control);
   const state = createRunnerSessionState();
   const host = await (options.createHost ?? createWorkspaceHost)({
+    modelDiscovery: true,
     projectRoot: spec.projectRoot,
     dataRoot: options.dataRoot,
     // By project ID, not by folder identity: a recreated runner container

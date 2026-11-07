@@ -1,4 +1,5 @@
 import { APPLY_DIFF_INPUT_GRAMMAR } from "./applyDiffFormat.js";
+import { LIST_MODELS_DESCRIPTION } from "@agentlink/core/model-discovery";
 
 /**
  * Single source of truth for built-in AgentLink tool metadata.
@@ -46,6 +47,13 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     label: "Stop watching an MCP resource",
     description:
       "Revoke this session's watch for an exact MCP server/resource URI. Cancels automatic reads and drops undelivered updates. Does not remove content already delivered to the model or change other sessions' watches.",
+  },
+
+  // --- Model discovery ---
+
+  list_models: {
+    label: "Discover configured models",
+    description: LIST_MODELS_DESCRIPTION,
   },
 
   // --- Native tool discovery ---

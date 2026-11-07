@@ -7,6 +7,8 @@
 
 import * as schemas from "../shared/toolSchemas.js";
 import * as vscode from "vscode";
+import { discoverModels } from "@agentlink/core/model-discovery";
+import { providerRegistry } from "./providers/index.js";
 
 import type { JsonSchema, ToolDefinition } from "./providers/types.js";
 import type {
@@ -370,6 +372,7 @@ function cachedJsonSchemaFor(
 // --- Tool name → zod schema mapping ---
 
 const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
+  list_models: schemas.listModelsSchema,
   find_native_tools: schemas.findNativeToolsSchema,
   call_native_tool: schemas.callNativeToolSchema,
   web_search: schemas.webSearchSchema,
@@ -648,7 +651,8 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         },
         model: {
           type: "string",
-          description: "Optional explicit model override",
+          description:
+            "Optional explicit local model ID override. Use list_models to resolve configured display names to exact IDs rather than guessing.",
         },
         provider: {
           type: "string",
@@ -3886,6 +3890,31 @@ async function dispatchToolCallWithTrackedApprovals(
   const params = input as any;
 
   switch (toolName) {
+    case "list_models": {
+      const parsed = z
+        .object(schemas.listModelsSchema)
+        .strict()
+        .safeParse(input);
+      if (!parsed.success) {
+        return errorResult("Invalid list_models input", {
+          status: "invalid_model_discovery_input",
+          issues: parsed.error.issues,
+        });
+      }
+      try {
+        const catalog = await providerRegistry.getModelCatalogSnapshot({
+          publishedByOwnerId: ctx.sessionId,
+        });
+        return jsonResult(discoverModels(catalog.models, parsed.data));
+      } catch {
+        return errorResult(
+          "The configured model catalog could not be read. Check provider configuration and try again.",
+          {
+            status: "model_catalog_unavailable",
+          },
+        );
+      }
+    }
     case "set_task_status": {
       const status = params.status;
       if (!isTaskStatus(status)) {

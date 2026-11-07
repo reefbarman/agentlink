@@ -250,6 +250,18 @@
         "default": "./dist/cjs/modelRequestScheduler.cjs"
       }
     },
+    "./model-discovery": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/modelDiscovery.d.ts",
+        "default": "./dist/modelDiscovery.js"
+      },
+      "require": {
+        "types": "./dist/cjs/modelDiscovery.d.cts",
+        "default": "./dist/cjs/modelDiscovery.cjs"
+      }
+    },
     "./model-runtime": {
       "browser": null,
       "edge": null,

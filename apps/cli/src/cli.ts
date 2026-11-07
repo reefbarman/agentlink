@@ -820,6 +820,7 @@ async function createHost(options: {
         ).confirmSharedMcpNetwork(proposal);
   };
   host = await createWorkspaceHost({
+    modelDiscovery: true,
     projectRoot: options.projectRoot,
     dataRoot: options.dataRoot,
     ownerId: `cli-${process.pid}-${randomUUID()}`,
