@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.50.0 — 2026-11-07
+
+- Adds a read-only list_models tool so agents can search the configured model catalog for exact model and provider IDs before choosing a background-agent model in VS Code, CLI, Assistant, and the SDK (new model-discovery entry point).
+
 ## 0.49.0 — 2026-11-06
 
 - Adds allowlisted Codex request identity diagnostics logged in the VS Code Output channel and helper stderr, and exports opt-in fetch and WebSocket connector wrappers from the SDK core package.
