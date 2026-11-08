@@ -2221,3 +2221,77 @@ describe("MessageBubble slash-command rendering", () => {
     ).toBeTruthy();
   });
 });
+
+describe("ask_user answer summary", () => {
+  const askInput = {
+    context: "Shared intro explaining the trade-off.",
+    questions: [
+      {
+        id: "q1",
+        type: "multiple_choice",
+        question: "Which storage backend?",
+        context: "SQLite is simpler; Postgres scales further.",
+        options: ["SQLite", "Postgres"],
+        recommended: "SQLite",
+      },
+    ],
+  };
+  const message: ChatMessage = {
+    id: "assistant-ask",
+    role: "assistant",
+    content: "",
+    timestamp: 1,
+    blocks: [
+      {
+        type: "tool_call",
+        id: "tool-ask",
+        name: "ask_user",
+        inputJson: JSON.stringify(askInput),
+        result: '{"responses":[]}',
+        complete: true,
+      },
+      {
+        type: "question_answer",
+        toolCallId: "tool-ask",
+        items: [{ question: "Which storage backend?", answer: "Postgres" }],
+      },
+    ],
+  };
+
+  it("expands to show the original ask_user context and options", () => {
+    render(<MessageBubble message={message} streaming={false} />);
+    expect(screen.getByText("Your Answers")).toBeTruthy();
+    expect(
+      screen.queryByText("Shared intro explaining the trade-off."),
+    ).toBeNull();
+
+    const toggle = screen.getByRole("button", { name: /Show original/ });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      screen.getByText("Shared intro explaining the trade-off."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("SQLite is simpler; Postgres scales further."),
+    ).toBeTruthy();
+    expect(screen.getByText("(recommended)")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Hide original/ }));
+    expect(
+      screen.queryByText("Shared intro explaining the trade-off."),
+    ).toBeNull();
+  });
+
+  it("omits the toggle when the original request is unavailable", () => {
+    render(
+      <MessageBubble
+        message={{ ...message, blocks: [message.blocks[1]!] }}
+        streaming={false}
+      />,
+    );
+    expect(screen.getByText("Which storage backend?")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Show original/ })).toBeNull();
+  });
+});

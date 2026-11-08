@@ -24,7 +24,8 @@
         "/Users/tristan/workspace/agentlink-agent-comms/dist/index.js",
         "--scope",
         "/Users/tristan/workspace/agentlink"
-      ]
+      ],
+      "toolDisclosure": "deferred"
     }
   }
 }

@@ -147,7 +147,7 @@ import {
 } from "../../shared/ui/McpResourceUpdates";
 import { SessionHandoffPanel } from "../../shared/ui/SessionHandoffPanel";
 import type { SessionHandoffDraft } from "../../agent/sessionHandoff";
-import { ContextHealthPanel } from "../../shared/ui/ContextHealthPanel";
+
 import { ReleaseUpdateIndicator } from "../../shared/ui/ReleaseUpdateIndicator";
 import type { ReleaseUpdateState } from "../../updates/releaseUpdateTypes";
 import type { ReleaseInstallState } from "../../updates/releaseInstall";
@@ -11249,63 +11249,8 @@ export function BrowserGatewayApp({
                     : 0,
                 )}
               >
-                {!isAskAgentSelected && !mobileReviewOpen && (
-                  <McpResourceWatchPanel
-                    key={foreground?.sessionId ?? "no-session"}
-                    watches={foreground?.mcpResourceWatches ?? []}
-                    revealVersion={mcpWatchRevealVersion}
-                    open={mcpWatchPanelOpen && !visibleApproval}
-                    onClose={() =>
-                      setMcpWatchPanels((panels) => ({
-                        ...panels,
-                        [foreground?.sessionId ?? "no-session"]: false,
-                      }))
-                    }
-                    onAction={async (request) => {
-                      if (!foreground) return;
-                      const origin = { ...snapshotOriginRef.current };
-                      const response = await fetch(
-                        buildApiPath("/api/mcp/resource-watch"),
-                        {
-                          method: "POST",
-                          credentials: "same-origin",
-                          headers: {
-                            "Content-Type": "application/json",
-                            Authorization: `Bearer ${authToken}`,
-                          },
-                          body: JSON.stringify({
-                            sessionId: foreground.sessionId,
-                            projectId: foreground.project?.projectId,
-                            ...request,
-                          }),
-                        },
-                      );
-                      const body = (await response.json()) as {
-                        ok?: boolean;
-                        error?: string;
-                        snapshot?: GatewaySnapshot;
-                      };
-                      if (!response.ok || !body.ok)
-                        throw new Error(
-                          body.error ?? "Could not update resource watch.",
-                        );
-                      if (body.snapshot)
-                        commitSnapshot(
-                          body.snapshot,
-                          origin.tabId,
-                          origin.generation,
-                        );
-                    }}
-                  />
-                )}
-                {!isAskAgentSelected && handoffDraft && !mobileReviewOpen && (
-                  <SessionHandoffPanel
-                    draft={handoffDraft}
-                    error={handoffError}
-                    onCancel={cancelSessionHandoff}
-                    onConfirm={confirmSessionHandoff}
-                  />
-                )}
+                {/* Keep this order in step with the VS Code shelf in
+                    src/agent/webview/App.tsx. */}
                 {foreground && messageQueue.length > 0 && !mobileReviewOpen && (
                   <>
                     {messageQueue.flatMap((item) =>
@@ -11425,6 +11370,14 @@ export function BrowserGatewayApp({
                     />
                   </>
                 )}
+                {!isAskAgentSelected && handoffDraft && !mobileReviewOpen && (
+                  <SessionHandoffPanel
+                    draft={handoffDraft}
+                    error={handoffError}
+                    onCancel={cancelSessionHandoff}
+                    onConfirm={confirmSessionHandoff}
+                  />
+                )}
                 {!isAskAgentSelected && !mobileReviewOpen && foreground && (
                   <ContextUsageRow
                     inputTokens={foreground.lastInputTokens}
@@ -11439,11 +11392,7 @@ export function BrowserGatewayApp({
                     className="browser-context-row"
                   />
                 )}
-                {!isAskAgentSelected &&
-                  !mobileReviewOpen &&
-                  foreground?.contextHealth && (
-                    <ContextHealthPanel health={foreground.contextHealth} />
-                  )}
+
                 {!mobileReviewOpen &&
                   !isAskAgentSelected &&
                   environmentPanelOpen &&
@@ -11650,6 +11599,55 @@ export function BrowserGatewayApp({
                       />
                     );
                   })()}
+                {!isAskAgentSelected && !mobileReviewOpen && (
+                  <McpResourceWatchPanel
+                    key={foreground?.sessionId ?? "no-session"}
+                    watches={foreground?.mcpResourceWatches ?? []}
+                    revealVersion={mcpWatchRevealVersion}
+                    open={mcpWatchPanelOpen && !visibleApproval}
+                    onClose={() =>
+                      setMcpWatchPanels((panels) => ({
+                        ...panels,
+                        [foreground?.sessionId ?? "no-session"]: false,
+                      }))
+                    }
+                    onAction={async (request) => {
+                      if (!foreground) return;
+                      const origin = { ...snapshotOriginRef.current };
+                      const response = await fetch(
+                        buildApiPath("/api/mcp/resource-watch"),
+                        {
+                          method: "POST",
+                          credentials: "same-origin",
+                          headers: {
+                            "Content-Type": "application/json",
+                            Authorization: `Bearer ${authToken}`,
+                          },
+                          body: JSON.stringify({
+                            sessionId: foreground.sessionId,
+                            projectId: foreground.project?.projectId,
+                            ...request,
+                          }),
+                        },
+                      );
+                      const body = (await response.json()) as {
+                        ok?: boolean;
+                        error?: string;
+                        snapshot?: GatewaySnapshot;
+                      };
+                      if (!response.ok || !body.ok)
+                        throw new Error(
+                          body.error ?? "Could not update resource watch.",
+                        );
+                      if (body.snapshot)
+                        commitSnapshot(
+                          body.snapshot,
+                          origin.tabId,
+                          origin.generation,
+                        );
+                    }}
+                  />
+                )}
                 {/* A pending MCP request takes over the Shelf; tasks return after. */}
                 {!mobileReviewOpen &&
                   !pendingFormElicitation &&

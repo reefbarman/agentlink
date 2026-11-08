@@ -5,14 +5,15 @@ import {
   ChatActivityShelf,
   clampChatActivityShelfHeight,
 } from "./ChatActivityShelf";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
 } from "@testing-library/preact";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 describe("ChatActivityShelf", () => {
   const storage = new Map<string, string>();
@@ -104,6 +105,71 @@ describe("ChatActivityShelf", () => {
 
     fireEvent.keyDown(separator, { key: "Home" });
     expect(shelf.style.height).toBe("12px");
+  });
+
+  it("resizes with touch drags and resets on a double tap", () => {
+    render(
+      <div class="chat-container">
+        <div class="chat-messages" />
+        <ChatActivityShelf>
+          <div>Activity</div>
+        </ChatActivityShelf>
+      </div>,
+    );
+    const separator = screen.getByRole("separator");
+    const shelf = separator.parentElement as HTMLDivElement;
+    const transcript = shelf.previousElementSibling as HTMLDivElement;
+    Object.defineProperty(transcript, "getBoundingClientRect", {
+      value: () => ({ top: 100 }),
+    });
+    Object.defineProperty(shelf, "getBoundingClientRect", {
+      value: () => ({ bottom: 700, height: 200 }),
+    });
+    // jsdom has no PointerEvent, so dress a MouseEvent up as a touch pointer.
+    const pointer = (
+      target: EventTarget,
+      type: string,
+      clientY: number,
+      timeStamp = 0,
+    ) => {
+      const event = new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        clientY,
+      });
+      Object.defineProperties(event, {
+        pointerId: { value: 7 },
+        pointerType: { value: "touch" },
+        isPrimary: { value: true },
+        timeStamp: { value: timeStamp },
+      });
+      act(() => {
+        target.dispatchEvent(event);
+      });
+    };
+
+    // Drag the handle down far enough to collapse the shelf completely.
+    pointer(separator, "pointerdown", 500);
+    pointer(window, "pointermove", 900);
+    expect(shelf.style.height).toBe("12px");
+    pointer(window, "pointerup", 900);
+    expect(window.localStorage.getItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY)).toBe(
+      "12",
+    );
+
+    // Moves after the finger lifts no longer resize the shelf.
+    pointer(window, "pointermove", 100);
+    expect(shelf.style.height).toBe("12px");
+
+    // Two quick taps restore the content-fitting default.
+    pointer(separator, "pointerdown", 500, 1000);
+    pointer(window, "pointerup", 500, 1000);
+    pointer(separator, "pointerdown", 500, 1200);
+    pointer(window, "pointerup", 500, 1200);
+    expect(shelf.style.height).toBe("");
+    expect(
+      window.localStorage.getItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY),
+    ).toBeNull();
   });
 
   it("reveals urgent content, then restores the user's height", async () => {

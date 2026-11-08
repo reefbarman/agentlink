@@ -10521,6 +10521,72 @@ body.approval-resizing {
   font-size: 13px;
 }
 
+.qa-summary-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 4px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.qa-summary-toggle:hover {
+  background: color-mix(in srgb, #4ec9b0 15%, transparent);
+}
+
+.qa-summary-toggle:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+.qa-summary-toggle .codicon {
+  font-size: 12px;
+}
+
+.qa-summary-original-context {
+  padding: 6px 10px 0;
+  color: var(--vscode-foreground);
+  border-bottom: 1px solid color-mix(in srgb, #4ec9b0 20%, transparent);
+  padding-bottom: 6px;
+}
+
+.qa-summary-original {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.qa-summary-original-question-context {
+  color: var(--vscode-descriptionForeground);
+}
+
+.qa-summary-original-question {
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+
+.qa-summary-original-context p,
+.qa-summary-original-question-context p,
+.qa-summary-original-question p {
+  margin: 0 0 4px;
+}
+
+.qa-summary-original-options {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.qa-summary-recommended {
+  font-style: italic;
+  opacity: 0.8;
+}
+
 .qa-summary-items {
   padding: 6px 10px;
   display: flex;

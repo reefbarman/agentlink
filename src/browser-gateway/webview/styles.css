@@ -1392,6 +1392,46 @@ textarea {
   color: var(--ag-muted);
 }
 
+/*
+ * The resource-watch card is shared with the VS Code shelf, which styles it in
+ * chat.css. The browser's generic pane rules above would otherwise flatten it
+ * into an uppercase full-bleed pane, so restore the shared card look.
+ */
+.pane-card.mcp-resource-watches {
+  display: block;
+  margin: 4px 0 8px;
+  border: 1px solid var(--vscode-widget-border, var(--ag-border));
+  border-radius: 6px;
+  background: var(--vscode-editorWidget-background, var(--ag-panel));
+}
+
+.mcp-resource-watches > .pane-header {
+  padding: 6px 10px;
+  border-bottom: 0;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+/*
+ * Fingers need a bigger target than the mouse-sized handle, especially on
+ * phones where collapsing the shelf frees most of the transcript.
+ */
+@media (pointer: coarse) {
+  .browser-shell .chat-activity-shelf .chat-activity-shelf-handle {
+    height: 22px;
+    flex-basis: 22px;
+  }
+
+  .browser-shell .chat-activity-shelf .chat-activity-shelf-handle::after {
+    top: 9px;
+    width: 44px;
+    height: 4px;
+  }
+}
+
 .pane-body {
   padding: 10px;
   min-height: 0;

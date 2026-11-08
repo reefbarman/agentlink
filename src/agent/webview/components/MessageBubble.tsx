@@ -657,8 +657,27 @@ export function MessageBubble({
           />
         );
       }
-      case "question_answer":
-        return <QuestionAnswerBlock key={`qa-${blockIndex}`} block={block} />;
+      case "question_answer": {
+        const askUserCall = block.toolCallId
+          ? blocks.find(
+              (candidate) =>
+                candidate.type === "tool_call" &&
+                candidate.id === block.toolCallId,
+            )
+          : undefined;
+        return (
+          <QuestionAnswerBlock
+            key={`qa-${blockIndex}`}
+            block={block}
+            askUserInputJson={
+              askUserCall?.type === "tool_call"
+                ? askUserCall.inputJson
+                : undefined
+            }
+            onOpenFile={onOpenFile}
+          />
+        );
+      }
       case "pairing_code":
         return (
           <PairingCodeBlock key={`pair-${block.pairingId}`} block={block} />

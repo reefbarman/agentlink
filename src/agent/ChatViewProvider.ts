@@ -3988,15 +3988,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.pendingFileWriteApprovalIds.add(id);
     }
 
+    // Capture this run's signal: cancellation can originate outside stopSessionFromUi,
+    // and a subsequent run replaces the session's signal.
+    const signal = this.sessionManager?.getSession(ownerSessionId)?.abortSignal;
     return new Promise((resolve) => {
+      const cancel = () => this.pendingApprovals.get(id)?.("reject");
       this.pendingApprovals.set(id, (result) => {
+        signal?.removeEventListener("abort", cancel);
+        this.pendingApprovals.delete(id);
         this.clearApprovalRequest(ownerSessionId, id);
-        this.approvalSessionIndex.get(ownerSessionId)?.delete(id);
+        const ids = this.approvalSessionIndex.get(ownerSessionId);
+        ids?.delete(id);
+        if (ids?.size === 0) this.approvalSessionIndex.delete(ownerSessionId);
         this.pendingFileWriteApprovalIds.delete(id);
         resolve(result);
       });
       this.showApprovalAttention(id, ownerSessionId, request.kind);
       this.showApprovalRequest(ownerSessionId, approvalRequest);
+      signal?.addEventListener("abort", cancel, { once: true });
+      if (signal?.aborted) cancel();
     });
   }
 

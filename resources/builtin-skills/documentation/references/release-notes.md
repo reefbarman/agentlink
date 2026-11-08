@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Inline approvals now clear their cards and VS Code status-bar alerts when the owning session run is cancelled outside the chat's Stop button, preventing stale “Tool approval required” indicators.
+
 ## 1.86.0
 
 - Request info in VS Code and its browser remote view now distinguishes selected Fast/Ultrafast, the tier sent on the final attempt, and the provider-reported tier. Summaries show confirmed premium usage, unconfirmed requests or Standard fallback without treating the composer selection as proof.

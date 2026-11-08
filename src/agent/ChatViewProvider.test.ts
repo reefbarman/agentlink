@@ -10013,6 +10013,98 @@ describe("ChatViewProvider session state sync", () => {
     expect(disposeAttention).toHaveBeenCalledOnce();
   });
 
+  it.each([false, true])(
+    "clears inline tool approval attention on session cancellation (already aborted: %s)",
+    async (alreadyAborted) => {
+      const { ChatViewProvider } = await import("./ChatViewProvider.js");
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      const controller = new AbortController();
+      if (alreadyAborted) controller.abort();
+      (provider as unknown as { sessionManager: unknown }).sessionManager = {
+        getSession: vi.fn(() => ({ abortSignal: controller.signal })),
+      };
+      const disposeAttention = vi.fn();
+      provider.setPendingInteractionAlertProvider(() => ({
+        dispose: disposeAttention,
+      }));
+      const internal = provider as unknown as {
+        pendingApprovals: Map<string, unknown>;
+        approvalSessionIndex: Map<string, Set<string>>;
+        activeApprovalRequests: Map<string, unknown>;
+        uiPublisher: { publishApprovalIdle: (...args: unknown[]) => void };
+      };
+      const cleared = vi.spyOn(internal.uiPublisher, "publishApprovalIdle");
+      const approvalPromise = provider.requestApproval(
+        {
+          id: "cancelled-tool",
+          kind: "mcp",
+          title: "Allow tool?",
+          choices: [{ label: "Allow once", value: "allow-once" }],
+        },
+        "session-1",
+      );
+
+      controller.abort();
+
+      await expect(approvalPromise).resolves.toBe("reject");
+      expect(disposeAttention).toHaveBeenCalledOnce();
+      expect(cleared).toHaveBeenCalledWith("session-1", "cancelled-tool");
+      expect(internal.pendingApprovals.size).toBe(0);
+      expect(internal.approvalSessionIndex.has("session-1")).toBe(false);
+      expect(internal.activeApprovalRequests.size).toBe(0);
+      expect(
+        provider.submitBrowserApprovalDecision({
+          id: "cancelled-tool",
+          approvalKind: "mcp",
+          decision: "allow-once",
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("removes the session cancellation listener when an inline approval is answered", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const controller = new AbortController();
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getSession: vi.fn(() => ({ abortSignal: controller.signal })),
+    };
+    const removeListener = vi.spyOn(controller.signal, "removeEventListener");
+    const disposeAttention = vi.fn();
+    provider.setPendingInteractionAlertProvider(() => ({
+      dispose: disposeAttention,
+    }));
+    const approvalPromise = provider.requestApproval(
+      {
+        id: "answered-tool",
+        kind: "mcp",
+        title: "Allow tool?",
+        choices: [{ label: "Allow once", value: "allow-once" }],
+      },
+      "session-1",
+    );
+
+    expect(
+      provider.submitBrowserApprovalDecision({
+        id: "answered-tool",
+        approvalKind: "mcp",
+        decision: "allow-once",
+      }),
+    ).toBe(true);
+    await expect(approvalPromise).resolves.toMatchObject({
+      decision: "allow-once",
+    });
+    expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
+    controller.abort();
+    expect(disposeAttention).toHaveBeenCalledOnce();
+  });
+
   it("clears question attention when its session is no longer active", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(

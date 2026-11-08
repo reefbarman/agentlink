@@ -7,6 +7,10 @@ const MIN_HEIGHT = 12;
 /** The user may cover the transcript entirely if they choose to. */
 const MIN_TRANSCRIPT_HEIGHT = 0;
 const KEYBOARD_STEP = 32;
+/** Touch has no reliable dblclick, so two quick taps on the handle reset it. */
+const DOUBLE_TAP_MS = 350;
+/** Movement below this is a tap rather than a drag. */
+const TAP_SLOP = 4;
 
 export const CHAT_ACTIVITY_SHELF_STORAGE_KEY =
   "agentlink.chatActivityShelf.maxHeight.v1";
@@ -161,6 +165,7 @@ export function ChatActivityShelf({
   const [resizing, setResizing] = useState(false);
   const maxHeightRef = useRef(maxHeight);
   maxHeightRef.current = maxHeight;
+  const lastTapRef = useRef(0);
 
   const resizeTo = useCallback((height: number) => {
     const shelf = shelfRef.current;
@@ -300,33 +305,67 @@ export function ChatActivityShelf({
     [resizeTo],
   );
 
+  const resetHeight = useCallback(() => {
+    stopResize();
+    const shelf = shelfRef.current;
+    const card = shelf ? findQuestionCard(shelf) : null;
+    if (card) setQuestionCardHeight(card, null);
+    setRevealedHeight(null);
+    setMaxHeight(null);
+    storeHeight(null);
+  }, [stopResize]);
+
+  /**
+   * Pointer events cover mouse, pen and touch, so the handle can be dragged on
+   * phones and tablets as well as with a mouse.
+   */
   const handleResizeStart = useCallback(
-    (event: MouseEvent) => {
-      if (event.button !== 0) return;
+    (event: PointerEvent) => {
+      if (event.button > 0 || event.isPrimary === false) return;
       const shelf = shelfRef.current;
       if (!shelf) return;
 
       event.preventDefault();
       stopResize();
 
+      const pointerId = event.pointerId;
+      const pointerType = event.pointerType;
       const startY = event.clientY;
       const start = measureResizeStart(shelf);
+      let moved = false;
       setResizing(true);
       document.body.classList.add("chat-activity-shelf-resizing");
 
-      const handleMouseMove = (moveEvent: MouseEvent) => {
+      const handlePointerMove = (moveEvent: PointerEvent) => {
+        if (moveEvent.pointerId !== pointerId) return;
+        if (Math.abs(startY - moveEvent.clientY) > TAP_SLOP) moved = true;
         resizeBy(start, startY - moveEvent.clientY);
       };
-      const handleMouseUp = () => stopResize();
+      const handlePointerEnd = (endEvent: PointerEvent) => {
+        if (endEvent.pointerId !== pointerId) return;
+        stopResize();
+        if (endEvent.type !== "pointerup" || pointerType === "mouse" || moved) {
+          return;
+        }
+        const now = endEvent.timeStamp;
+        if (lastTapRef.current && now - lastTapRef.current < DOUBLE_TAP_MS) {
+          lastTapRef.current = 0;
+          resetHeight();
+        } else {
+          lastTapRef.current = now;
+        }
+      };
 
-      window.addEventListener("mousemove", handleMouseMove);
-      window.addEventListener("mouseup", handleMouseUp);
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", handlePointerEnd);
+      window.addEventListener("pointercancel", handlePointerEnd);
       cleanupRef.current = () => {
-        window.removeEventListener("mousemove", handleMouseMove);
-        window.removeEventListener("mouseup", handleMouseUp);
+        window.removeEventListener("pointermove", handlePointerMove);
+        window.removeEventListener("pointerup", handlePointerEnd);
+        window.removeEventListener("pointercancel", handlePointerEnd);
       };
     },
-    [resizeBy, stopResize],
+    [resetHeight, resizeBy, stopResize],
   );
 
   const handleResizeKeyDown = useCallback(
@@ -353,16 +392,6 @@ export function ChatActivityShelf({
     },
     [resizeBy, resizeTo],
   );
-
-  const resetHeight = useCallback(() => {
-    stopResize();
-    const shelf = shelfRef.current;
-    const card = shelf ? findQuestionCard(shelf) : null;
-    if (card) setQuestionCardHeight(card, null);
-    setRevealedHeight(null);
-    setMaxHeight(null);
-    storeHeight(null);
-  }, [stopResize]);
 
   const effectiveMaxHeight = revealedHeight ?? maxHeight;
   const style: CSSProperties =
@@ -402,12 +431,12 @@ export function ChatActivityShelf({
           onKeyDown={(event) =>
             handleResizeKeyDown(event as unknown as KeyboardEvent)
           }
-          onMouseDown={(event) =>
-            handleResizeStart(event as unknown as MouseEvent)
+          onPointerDown={(event) =>
+            handleResizeStart(event as unknown as PointerEvent)
           }
           role="separator"
           tabIndex={0}
-          title="Drag to resize the Chat Activity Shelf; double-click to reset"
+          title="Drag to resize the Chat Activity Shelf; double-click or double-tap to reset"
         />
         <div class="chat-activity-shelf-content" ref={contentRef}>
           {children}

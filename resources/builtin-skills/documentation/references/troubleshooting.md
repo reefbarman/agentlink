@@ -140,6 +140,8 @@ For a pre-launch Git apply stop (`command_sent: false`, `process_launched: false
 
 That is expected when the requested action crosses a configured boundary. Review the operation, edit it or add a follow-up if necessary, then approve or reject it. Use command/path/write rules only when you understand the scope they grant.
 
+Click the approval status in the VS Code status bar to focus the chat that needs a decision. Inline approval cards and their status indicators are cleared when answered or when their session run is cancelled, including cancellation outside the chat's Stop button. If an older build leaves a status indicator behind with no pending card, reload the window to clear it.
+
 For approval behavior and rules, see [approvals](capabilities.md#approvals) and [the complete approval reference](complete-reference.md#approval-system).
 
 In development builds, use `diagnose_activity` in the owning VS Code-backed session to inspect host-recorded MCP and managed-network approval provenance. It distinguishes recorded grants, human decisions, and automatic reviewers without exposing arguments or destinations. Missing evidence, including older activity and sockets opened after a command tool returns, does not prove that approval was skipped. See [authorization provenance](tools.md#inspect-authorization-provenance) for coverage and limits.
