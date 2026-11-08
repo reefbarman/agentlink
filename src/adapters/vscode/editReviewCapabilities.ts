@@ -11,9 +11,11 @@ import {
 import {
   captureDocumentState,
   commitAndVerifyEdit,
+  commitExactEditToDisk,
   documentChangedSince,
   documentMatchesTarget,
 } from "../../integrations/editDurability.js";
+import { getEditDurabilityPolicy } from "../../core/editDurability.js";
 import {
   normalizeEditorText,
   type EditReviewDecision,
@@ -424,6 +426,108 @@ function dirtyDocumentConflictResult(params: {
   };
 }
 
+type AutoApprovedCommit =
+  | { kind: "aborted"; result: EditReviewResult }
+  | { kind: "committed"; commit: CommitAndVerifyEditResult };
+
+/**
+ * Apply and commit an auto-approved edit without opening an editor tab.
+ * Ordinary saves use `document.save()`, which still runs format-on-save and
+ * code-actions-on-save on the hidden document. Exact saves of a clean,
+ * up-to-date document write straight to disk, so they need no active editor.
+ * Callers must hold the file lock.
+ */
+async function commitAutoApprovedEdit(args: {
+  doc: vscode.TextDocument;
+  params: EditReviewParams;
+  snap: ReturnType<typeof snapshotDiagnostics>;
+  baselineExists: boolean;
+  baselineContent: string;
+  content: string;
+}): Promise<AutoApprovedCommit> {
+  const { doc, params, snap, baselineExists, baselineContent, content } = args;
+  const documentState = captureDocumentState(doc);
+  await snap.settleBaseline(params.diagnosticDelay);
+  if (documentChangedSince(doc, params.absolutePath, documentState)) {
+    return {
+      kind: "aborted",
+      result: {
+        error: "Edit document changed while preparing diagnostics",
+        path: params.relativePath,
+        reason: "apply_edit_failed",
+        next_steps: [
+          "The editor buffer is preserved. Re-read the target file before composing the edit again.",
+          ...(!baselineExists
+            ? [
+                "The new file placeholder and any created directories are retained.",
+              ]
+            : []),
+        ],
+      },
+    };
+  }
+
+  const commitRequest = {
+    document: doc,
+    absolutePath: params.absolutePath,
+    relativePath: params.relativePath,
+    baselineExists,
+    baselineContent,
+    approvedContent: content,
+    reviewState: "dirty_document_preserved" as const,
+    saveWithoutFormatting: params.saveWithoutFormatting,
+    autoApproved: true,
+  };
+  const exact =
+    params.saveWithoutFormatting ||
+    getEditDurabilityPolicy(params.relativePath) === "preserve_exact";
+  // Direct writes emit UTF-8, so only use them when VS Code positively
+  // decoded the file as UTF-8; other encodings keep the editor save path.
+  const utf8Document = doc.encoding === "utf8" || doc.encoding === "utf8bom";
+  if (
+    exact &&
+    utf8Document &&
+    !doc.isDirty &&
+    normalizeEditorText(doc.getText()) === normalizeEditorText(baselineContent)
+  ) {
+    snap.beginPostChangeObservation();
+    const commit = await commitExactEditToDisk(commitRequest);
+    snap.recordPostChangeDocumentVersion();
+    return { kind: "committed", commit };
+  }
+
+  if (doc.getText() !== content) {
+    snap.beginPostChangeObservation();
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(
+      doc.uri,
+      new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)),
+      content,
+    );
+    if (!(await vscode.workspace.applyEdit(edit))) {
+      return {
+        kind: "aborted",
+        result: {
+          error: "File edit failed",
+          path: params.relativePath,
+          reason: "apply_edit_failed",
+          ...(await diagnoseEditApplyFailure({
+            absolutePath: params.absolutePath,
+            baselineContent,
+            document: doc,
+          })),
+        },
+      };
+    }
+    recordAgentProposalBuffer(params.absolutePath, content, baselineContent);
+  }
+  snap.recordPostChangeDocumentVersion();
+  return {
+    kind: "committed",
+    commit: await commitAndVerifyEdit(commitRequest),
+  };
+}
+
 export function createVscodeEditReviewProvider(): EditReviewProvider {
   return {
     async reviewAndApply(params: EditReviewParams) {
@@ -489,72 +593,16 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                 ],
               };
             }
-            await vscode.window.showTextDocument(
+            const committed = await commitAutoApprovedEdit({
               doc,
-              withPrimaryEditorColumn({
-                preview: false,
-                preserveFocus: true,
-              }),
-            );
-
-            const documentState = captureDocumentState(doc);
-            await snap.settleBaseline(params.diagnosticDelay);
-            if (documentChangedSince(doc, params.absolutePath, documentState)) {
-              return {
-                error: "Edit document changed while preparing diagnostics",
-                path: params.relativePath,
-                reason: "apply_edit_failed",
-                next_steps: [
-                  "The editor buffer is preserved. Re-read the target file before composing the edit again.",
-                  ...(!baselineExists
-                    ? [
-                        "The new file placeholder and any created directories are retained.",
-                      ]
-                    : []),
-                ],
-              };
-            }
-            if (doc.getText() !== content) {
-              snap.beginPostChangeObservation();
-              const edit = new vscode.WorkspaceEdit();
-              edit.replace(
-                doc.uri,
-                new vscode.Range(
-                  doc.positionAt(0),
-                  doc.positionAt(doc.getText().length),
-                ),
-                content,
-              );
-              const applied = await vscode.workspace.applyEdit(edit);
-              if (!applied) {
-                return {
-                  error: "File edit failed",
-                  path: params.relativePath,
-                  reason: "apply_edit_failed",
-                  ...(await diagnoseEditApplyFailure({
-                    absolutePath: params.absolutePath,
-                    baselineContent,
-                    document: doc,
-                  })),
-                };
-              }
-              recordAgentProposalBuffer(
-                params.absolutePath,
-                content,
-                baselineContent,
-              );
-            }
-            snap.recordPostChangeDocumentVersion();
-            const commit = await commitAndVerifyEdit({
-              document: doc,
-              absolutePath: params.absolutePath,
-              relativePath: params.relativePath,
+              params,
+              snap,
               baselineExists,
               baselineContent,
-              approvedContent: content,
-              reviewState: "dirty_document_preserved",
-              saveWithoutFormatting: params.saveWithoutFormatting,
+              content,
             });
+            if (committed.kind === "aborted") return committed.result;
+            const commit = committed.commit;
             const newDiagnostics = await snap.collectNewErrors(
               params.diagnosticDelay,
               baselineContent,
@@ -673,72 +721,16 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                   (await vscode.workspace.openTextDocument(
                     params.absolutePath,
                   ));
-                await vscode.window.showTextDocument(
+                const committed = await commitAutoApprovedEdit({
                   doc,
-                  withPrimaryEditorColumn({
-                    preview: false,
-                    preserveFocus: true,
-                  }),
-                );
-                const documentState = captureDocumentState(doc);
-                await snap.settleBaseline(params.diagnosticDelay);
-                if (
-                  documentChangedSince(doc, params.absolutePath, documentState)
-                ) {
-                  return {
-                    error: "Edit document changed while preparing diagnostics",
-                    path: params.relativePath,
-                    reason: "apply_edit_failed",
-                    next_steps: [
-                      "The editor buffer is preserved. Re-read the target file before composing the edit again.",
-                      ...(!baseline.exists
-                        ? [
-                            "The new file placeholder and any created directories are retained.",
-                          ]
-                        : []),
-                    ],
-                  };
-                }
-                if (doc.getText() !== content) {
-                  snap.beginPostChangeObservation();
-                  const edit = new vscode.WorkspaceEdit();
-                  edit.replace(
-                    doc.uri,
-                    new vscode.Range(
-                      doc.positionAt(0),
-                      doc.positionAt(doc.getText().length),
-                    ),
-                    content,
-                  );
-                  if (!(await vscode.workspace.applyEdit(edit))) {
-                    return {
-                      error: "File edit failed",
-                      path: params.relativePath,
-                      reason: "apply_edit_failed",
-                      ...(await diagnoseEditApplyFailure({
-                        absolutePath: params.absolutePath,
-                        baselineContent: baseline.content,
-                        document: doc,
-                      })),
-                    };
-                  }
-                  recordAgentProposalBuffer(
-                    params.absolutePath,
-                    content,
-                    baseline.content,
-                  );
-                }
-                snap.recordPostChangeDocumentVersion();
-                const commit = await commitAndVerifyEdit({
-                  document: doc,
-                  absolutePath: params.absolutePath,
-                  relativePath: params.relativePath,
+                  params,
+                  snap,
                   baselineExists: baseline.exists,
                   baselineContent: baseline.content,
-                  approvedContent: content,
-                  reviewState: "dirty_document_preserved",
-                  saveWithoutFormatting: params.saveWithoutFormatting,
+                  content,
                 });
+                if (committed.kind === "aborted") return committed.result;
+                const commit = committed.commit;
                 const newDiagnostics = await snap.collectNewErrors(
                   params.diagnosticDelay,
                   baseline.content,

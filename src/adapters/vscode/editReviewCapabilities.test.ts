@@ -16,13 +16,20 @@ import {
   clearAgentProposalBuffers,
   recordAgentProposalBuffer,
 } from "../../integrations/agentProposalBuffers.js";
-import type { CommitAndVerifyEditResult } from "../../integrations/editDurability.js";
+import {
+  autoSaveRecoveryTiming,
+  type CommitAndVerifyEditResult,
+} from "../../integrations/editDurability.js";
 import type { MultiFileEditFile } from "../../core/capabilities/editReview.js";
 import { withFileLock } from "../../util/fileLock.js";
 import { applyWorkspaceEditAndSaveWithoutFormatting } from "./workspaceEditOrchestration.js";
 
 const openTextDocument = vi.hoisted(() => vi.fn());
 const showTextDocument = vi.hoisted(() => vi.fn());
+const windowState = vi.hoisted(() => ({
+  activeTextEditor: undefined as unknown,
+  tabGroups: undefined as unknown,
+}));
 const getConfiguration = vi.hoisted(() => vi.fn());
 const applyEdit = vi.hoisted(() => vi.fn(async () => true));
 const settleBaseline = vi.hoisted(() => vi.fn(async (_delay: number) => {}));
@@ -97,6 +104,10 @@ vi.mock("vscode", () => {
 
   class Selection extends Range {}
 
+  class TabInputText {
+    constructor(public uri: { fsPath: string; scheme?: string }) {}
+  }
+
   class WorkspaceEdit {
     private readonly edits = new Map<
       string,
@@ -124,11 +135,20 @@ vi.mock("vscode", () => {
     Range,
     Selection,
     WorkspaceEdit,
+    TabInputText,
     TextEditorRevealType: { InCenterIfOutsideViewport: "center" },
     ViewColumn: { One: 1 },
     Uri: { file: (fsPath: string) => ({ fsPath }) },
     workspace: { openTextDocument, getConfiguration, applyEdit, textDocuments },
-    window: { showTextDocument },
+    window: {
+      showTextDocument,
+      get activeTextEditor() {
+        return windowState.activeTextEditor;
+      },
+      get tabGroups() {
+        return windowState.tabGroups;
+      },
+    },
     commands: { executeCommand },
   };
 });
@@ -303,8 +323,12 @@ describe("createVscodeEditReviewProvider", () => {
     });
     applyEdit.mockResolvedValue(true);
     showTextDocument.mockResolvedValue(undefined);
+    windowState.activeTextEditor = undefined;
+    windowState.tabGroups = undefined;
     textDocuments.length = 0;
     workspaceEditInstances.length = 0;
+    autoSaveRecoveryTiming.lateSaveGraceMs = 0;
+    autoSaveRecoveryTiming.documentReloadTimeoutMs = 0;
   });
 
   it.each(["auto", "interactive"] as const)(
@@ -415,7 +439,9 @@ describe("createVscodeEditReviewProvider", () => {
       expect(settleBaseline.mock.invocationCallOrder[0]).toBeLessThan(
         applyEdit.mock.invocationCallOrder[0]!,
       );
-      expect(doc.save).toHaveBeenCalledOnce();
+      // One automatic retry; the revert could not activate an editor here.
+      expect(doc.save).toHaveBeenCalledTimes(2);
+      expect(result).not.toHaveProperty("auto_recovery");
       expect(fs.readFileSync(filePath, "utf-8")).toBe("old");
       expect(doc.isDirty).toBe(true);
       expect(doc.getText()).toBe("new");
@@ -993,11 +1019,8 @@ describe("createVscodeEditReviewProvider", () => {
         finalContent: "prepared",
       });
       expect(prepareContent).toHaveBeenCalledWith("old");
-      expect(showTextDocument).toHaveBeenCalledWith(doc, {
-        preview: false,
-        preserveFocus: true,
-        viewColumn: 1,
-      });
+      // Auto-approved edits save the hidden document; no tab is opened.
+      expect(showTextDocument).not.toHaveBeenCalled();
       expect(workspaceEditInstances).toHaveLength(1);
       const editInstance = workspaceEditInstances[0];
       expect(editInstance?.replace).toHaveBeenCalledWith(
@@ -1007,6 +1030,384 @@ describe("createVscodeEditReviewProvider", () => {
       );
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  function makeAutoTempFile(content: string) {
+    const tempDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
+    );
+    const filePath = path.join(tempDir, "file.ts");
+    fs.writeFileSync(filePath, content, "utf-8");
+    return {
+      filePath,
+      cleanup: () => fs.rmSync(tempDir, { recursive: true, force: true }),
+    };
+  }
+
+  function autoParams(filePath: string, extra: Record<string, unknown> = {}) {
+    return {
+      mode: "auto" as const,
+      absolutePath: filePath,
+      relativePath: "file.ts",
+      content: "new",
+      outsideWorkspace: false,
+      diagnosticDelay: 0,
+      sessionId: "session-1",
+      ...extra,
+    };
+  }
+
+  it("retries a failed auto-approved save once without human recovery", async () => {
+    const { filePath, cleanup } = makeAutoTempFile("old");
+    let content = "old";
+    let dirty = false;
+    const doc = {
+      getText: vi.fn(() => content),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { scheme: "file", fsPath: filePath },
+      get isDirty() {
+        return dirty;
+      },
+      save: vi
+        .fn()
+        .mockResolvedValueOnce(false)
+        .mockImplementationOnce(async () => {
+          fs.writeFileSync(filePath, content, "utf-8");
+          dirty = false;
+          return true;
+        }),
+    };
+    applyEdit.mockImplementationOnce(async () => {
+      content = "new";
+      dirty = true;
+      return true;
+    });
+    openTextDocument.mockResolvedValue(doc);
+
+    try {
+      const result = await createVscodeEditReviewProvider().reviewAndApply(
+        autoParams(filePath),
+      );
+      expect(result).toMatchObject({
+        status: "accepted",
+        auto_recovery: "save_retried",
+        finalContent: "new",
+      });
+      expect(result).not.toHaveProperty("save_failure");
+      expect(doc.save).toHaveBeenCalledTimes(2);
+      expect(showTextDocument).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("reverts an agent-only buffer to disk when the retried save also fails", async () => {
+    const { filePath, cleanup } = makeAutoTempFile("old");
+    let content = "old";
+    let dirty = false;
+    const doc = {
+      getText: vi.fn(() => content),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { scheme: "file", fsPath: filePath },
+      get isDirty() {
+        return dirty;
+      },
+      save: vi.fn(async () => false),
+    };
+    applyEdit.mockImplementationOnce(async () => {
+      content = "new";
+      dirty = true;
+      return true;
+    });
+    openTextDocument.mockResolvedValue(doc);
+    showTextDocument.mockImplementation(async (shown) => {
+      const editor = { document: shown };
+      windowState.activeTextEditor = editor;
+      return editor;
+    });
+    executeCommand.mockImplementation(async (command: string) => {
+      expect(command).toBe("workbench.action.files.revert");
+      content = fs.readFileSync(filePath, "utf-8");
+      dirty = false;
+    });
+
+    try {
+      const result = await createVscodeEditReviewProvider().reviewAndApply(
+        autoParams(filePath),
+      );
+      expect(result).toMatchObject({
+        status: "error",
+        reason: "save_failed",
+        auto_recovery: "buffer_reverted_to_disk",
+        next_steps: [
+          expect.stringContaining("no unsaved changes remain"),
+          expect.stringContaining("Retry the same edit once"),
+        ],
+      });
+      expect(result).not.toHaveProperty("save_failure");
+      expect(doc.save).toHaveBeenCalledTimes(2);
+      expect(executeCommand).toHaveBeenCalledOnce();
+      expect(doc.isDirty).toBe(false);
+      expect(fs.readFileSync(filePath, "utf-8")).toBe("old");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("does not revert a failed auto-approved save while a tab shows the file", async () => {
+    const { filePath, cleanup } = makeAutoTempFile("old");
+    let content = "old";
+    let dirty = false;
+    const doc = {
+      getText: vi.fn(() => content),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { scheme: "file", fsPath: filePath },
+      get isDirty() {
+        return dirty;
+      },
+      save: vi.fn(async () => false),
+    };
+    applyEdit.mockImplementationOnce(async () => {
+      content = "new";
+      dirty = true;
+      return true;
+    });
+    openTextDocument.mockResolvedValue(doc);
+    const { TabInputText } = await import("vscode");
+    windowState.tabGroups = {
+      all: [
+        {
+          viewColumn: 1,
+          tabs: [
+            {
+              input: new TabInputText(
+                doc.uri as unknown as import("vscode").Uri,
+              ),
+            },
+          ],
+        },
+      ],
+    };
+
+    try {
+      const result = await createVscodeEditReviewProvider().reviewAndApply(
+        autoParams(filePath),
+      );
+      expect(result).toMatchObject({ reason: "save_failed" });
+      expect(result).toHaveProperty("save_failure");
+      expect(result).not.toHaveProperty("auto_recovery");
+      expect(doc.save).toHaveBeenCalledTimes(2);
+      expect(executeCommand).not.toHaveBeenCalled();
+      expect(content).toBe("new");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("leaves a buffer the user changed during a failed save for manual recovery", async () => {
+    const { filePath, cleanup } = makeAutoTempFile("old");
+    let content = "old";
+    let dirty = false;
+    const doc = {
+      getText: vi.fn(() => content),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { scheme: "file", fsPath: filePath },
+      get isDirty() {
+        return dirty;
+      },
+      save: vi.fn(async () => {
+        content = "new + user typing";
+        return false;
+      }),
+    };
+    applyEdit.mockImplementationOnce(async () => {
+      content = "new";
+      dirty = true;
+      return true;
+    });
+    openTextDocument.mockResolvedValue(doc);
+
+    try {
+      const result = await createVscodeEditReviewProvider().reviewAndApply(
+        autoParams(filePath),
+      );
+      expect(result).toMatchObject({ reason: "save_failed" });
+      expect(result).toHaveProperty("save_failure");
+      expect(result).not.toHaveProperty("auto_recovery");
+      expect(doc.save).toHaveBeenCalledOnce();
+      expect(executeCommand).not.toHaveBeenCalled();
+      expect(content).toBe("new + user typing");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("writes exact auto-approved saves straight to disk without an editor", async () => {
+    const { filePath, cleanup } = makeAutoTempFile("old\r\n");
+    // A clean VS Code document mirrors disk once its file watcher reloads it.
+    const doc = {
+      getText: vi.fn(() => fs.readFileSync(filePath, "utf-8")),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { scheme: "file", fsPath: filePath },
+      encoding: "utf8",
+      isDirty: false,
+      save: vi.fn(async () => true),
+    };
+    openTextDocument.mockResolvedValue(doc);
+
+    try {
+      const result = await createVscodeEditReviewProvider().reviewAndApply(
+        autoParams(filePath, {
+          content: "exact\n  bytes\n",
+          saveWithoutFormatting: true,
+        }),
+      );
+      expect(result).toMatchObject({
+        status: "accepted",
+        finalContent: "exact\n  bytes\n",
+        durability: { status: "durable", outcome: "exact" },
+      });
+      expect(result).not.toHaveProperty("warnings");
+      expect(fs.readFileSync(filePath, "utf-8")).toBe("exact\n  bytes\n");
+      expect(applyEdit).not.toHaveBeenCalled();
+      expect(doc.save).not.toHaveBeenCalled();
+      expect(showTextDocument).not.toHaveBeenCalled();
+      expect(executeCommand).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("verifies an exact disk write even before VS Code reloads the buffer", async () => {
+    const { filePath, cleanup } = makeAutoTempFile("old");
+    const doc = {
+      getText: vi.fn(() => "old"),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { scheme: "file", fsPath: filePath },
+      encoding: "utf8",
+      isDirty: false,
+      save: vi.fn(async () => true),
+    };
+    openTextDocument.mockResolvedValue(doc);
+
+    try {
+      const result = await createVscodeEditReviewProvider().reviewAndApply(
+        autoParams(filePath, { saveWithoutFormatting: true }),
+      );
+      expect(result).toMatchObject({
+        status: "accepted",
+        finalContent: "new",
+        durability: { status: "durable", outcome: "exact" },
+        warnings: [expect.stringContaining("had not reloaded")],
+      });
+      expect(fs.readFileSync(filePath, "utf-8")).toBe("new");
+      expect(showTextDocument).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("does not overwrite a file another process changed before the exact write", async () => {
+    const { filePath, cleanup } = makeAutoTempFile("old");
+    const doc = {
+      getText: vi.fn(() => "old"),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { scheme: "file", fsPath: filePath },
+      encoding: "utf8",
+      isDirty: false,
+      save: vi.fn(async () => true),
+    };
+    openTextDocument.mockResolvedValue(doc);
+    settleBaseline.mockImplementationOnce(async () => {
+      fs.writeFileSync(filePath, "external change", "utf-8");
+    });
+
+    try {
+      const result = await createVscodeEditReviewProvider().reviewAndApply(
+        autoParams(filePath, { saveWithoutFormatting: true }),
+      );
+      expect(result).toMatchObject({
+        reason: "apply_edit_failed",
+        next_steps: [expect.stringContaining("was not overwritten")],
+      });
+      expect(fs.readFileSync(filePath, "utf-8")).toBe("external change");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("reports divergence when the buffer turns dirty during the reload wait", async () => {
+    const { filePath, cleanup } = makeAutoTempFile("old");
+    const written = () => fs.readFileSync(filePath, "utf-8") !== "old";
+    const doc = {
+      getText: vi.fn(() => (written() ? "user typing" : "old")),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { scheme: "file", fsPath: filePath },
+      encoding: "utf8",
+      get isDirty() {
+        return written();
+      },
+      save: vi.fn(async () => true),
+    };
+    openTextDocument.mockResolvedValue(doc);
+
+    try {
+      const result = await createVscodeEditReviewProvider().reviewAndApply(
+        autoParams(filePath, { saveWithoutFormatting: true }),
+      );
+      expect(result).toMatchObject({
+        status: "error",
+        reason: "editor_disk_diverged",
+      });
+      expect(result).not.toHaveProperty("warnings");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("keeps the editor save path for exact edits to non-UTF-8 files", async () => {
+    const { filePath, cleanup } = makeAutoTempFile("old");
+    let content = "old";
+    let dirty = false;
+    const doc = {
+      getText: vi.fn(() => content),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { scheme: "file", fsPath: filePath },
+      encoding: "windows1252",
+      get isDirty() {
+        return dirty;
+      },
+      save: vi.fn(async () => true),
+    };
+    applyEdit.mockImplementationOnce(async () => {
+      content = "new";
+      dirty = true;
+      return true;
+    });
+    openTextDocument.mockResolvedValue(doc);
+    showTextDocument.mockImplementation(async (shown) => {
+      const editor = { document: shown };
+      windowState.activeTextEditor = editor;
+      return editor;
+    });
+    executeCommand.mockImplementation(async (command: string) => {
+      expect(command).toBe("workbench.action.files.saveWithoutFormatting");
+      fs.writeFileSync(filePath, content, "utf-8");
+      dirty = false;
+    });
+
+    try {
+      const result = await createVscodeEditReviewProvider().reviewAndApply(
+        autoParams(filePath, { saveWithoutFormatting: true }),
+      );
+      expect(result).toMatchObject({ status: "accepted", finalContent: "new" });
+      expect(applyEdit).toHaveBeenCalledOnce();
+      expect(executeCommand).toHaveBeenCalledWith(
+        "workbench.action.files.saveWithoutFormatting",
+      );
+    } finally {
+      cleanup();
     }
   });
 });

@@ -72,6 +72,19 @@ export interface EditSaveFailureRecovery {
   disk_error_code?: string;
 }
 
+/**
+ * How an auto-approved commit recovered from a failed save of its own,
+ * unchanged editor buffer without human-reviewed save_editor recovery.
+ * - `late_save_detected`: the save landed shortly after VS Code reported failure.
+ * - `save_retried`: one automatic retry of the same save succeeded.
+ * - `buffer_reverted_to_disk`: the retry failed too, so the buffer holding
+ *   only the agent's proposal was reverted to disk; the edit was not applied.
+ */
+export type AutoSaveRecovery =
+  | "late_save_detected"
+  | "save_retried"
+  | "buffer_reverted_to_disk";
+
 export interface EditReviewParams {
   mode: EditReviewMode;
   absolutePath: string;
@@ -150,6 +163,7 @@ export interface EditReviewResult {
     | "buffer_replaced_failed_proposal";
   apply_failure?: EditApplyFailureRecovery;
   save_failure?: EditSaveFailureRecovery;
+  auto_recovery?: AutoSaveRecovery;
   next_steps?: string[];
   warnings?: string[];
   decision?: EditReviewDecision;

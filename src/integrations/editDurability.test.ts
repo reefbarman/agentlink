@@ -869,6 +869,72 @@ describe("commitAndVerifyEdit", () => {
     },
   );
 
+  it.each([
+    [false, true],
+    [true, false],
+  ])(
+    "closes a tab an auto-approved exact save opened (already open: %s)",
+    async (alreadyOpen, expectClose) => {
+      const target = await makeFile("example.ts", "old");
+      const document = makeDocument(target.absolutePath, "new");
+      const targetTab = {
+        input: new vscode.TabInputText(document.uri),
+        isDirty: false,
+      };
+      const primaryGroup = {
+        viewColumn: vscode.ViewColumn.One,
+        tabs: alreadyOpen ? [targetTab] : ([] as (typeof targetTab)[]),
+      };
+      const close = vi.fn(async () => true);
+      const originalTabGroups = vscode.window.tabGroups;
+      Object.assign(vscode.window, {
+        tabGroups: {
+          get activeTabGroup() {
+            return primaryGroup;
+          },
+          all: [primaryGroup],
+          close,
+        },
+      });
+      vi.spyOn(vscode.window, "showTextDocument").mockImplementation(
+        async () => {
+          if (!primaryGroup.tabs.includes(targetTab)) {
+            primaryGroup.tabs.push(targetTab);
+          }
+          const editor = {
+            document,
+            viewColumn: vscode.ViewColumn.One,
+          } as unknown as vscode.TextEditor;
+          Object.assign(vscode.window, { activeTextEditor: editor });
+          return editor;
+        },
+      );
+      vi.spyOn(vscode.commands, "executeCommand").mockImplementation(
+        async () => {
+          await fs.writeFile(target.absolutePath, document.content, "utf-8");
+          document.isDirty = false;
+        },
+      );
+
+      try {
+        const result = await commitAndVerifyEdit({
+          ...request(document, target.absolutePath, target.relativePath, "old"),
+          saveWithoutFormatting: true,
+          autoApproved: true,
+        });
+
+        expect(result.status).toBe("accepted");
+        if (expectClose) {
+          expect(close).toHaveBeenCalledWith(targetTab, true);
+        } else {
+          expect(close).not.toHaveBeenCalled();
+        }
+      } finally {
+        Object.assign(vscode.window, { tabGroups: originalTabGroups });
+      }
+    },
+  );
+
   it("does not save another editor when a focus-preserving open leaves it active", async () => {
     const target = await makeFile("example.ts", "old");
     const document = makeDocument(target.absolutePath, "new");

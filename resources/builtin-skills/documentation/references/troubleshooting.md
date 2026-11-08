@@ -158,6 +158,7 @@ An npm denial under `~/.npm/_cacache/tmp` is a host-HOME write denial, not a sys
 
 ## An approved edit failed to save or conflicts with unsaved work
 
+- Auto-approved edits recover their own failed saves first. They check for a late save, retry once, and finally revert a buffer that holds only that edit to disk (`auto_recovery: "buffer_reverted_to_disk"`). After a revert, re-read the file and retry the edit. The steps below apply when that recovery could not run, for example because the buffer changed during the save.
 - Do not overwrite or discard the dirty editor to clear the error. Both `read_file` views (content and context) show disk content, which can differ from the unsaved buffer.
 - Ask the VS Code workspace agent to inspect `get_editor_state`, then use `save_editor` with the returned hashes/version if the existing buffer is correct. You must approve the exact save once; it skips formatting and preserves the buffer on rejection. These tools only work for an open file-backed target editor. If a review retained a stale, closed, or non-file buffer, inspect it directly in VS Code before closing it, then re-open the target and compose the edit again after reconciling the buffer.
 - If the buffer contains unrelated or incorrect edits, reconcile it in VS Code first. State changes invalidate the old save request.

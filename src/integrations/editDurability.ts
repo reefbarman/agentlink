@@ -5,6 +5,7 @@ import * as vscode from "vscode";
 import { parse as parseYaml } from "yaml";
 
 import type {
+  AutoSaveRecovery,
   EditReviewResult,
   EditSaveFailureRecovery,
 } from "../core/capabilities/editReview.js";
@@ -12,7 +13,9 @@ import {
   classifyEditDurability,
   deriveExpectedDiskContent,
   getEditDurabilityPolicy,
+  normalizeEditorText,
   type EditDiskObservation,
+  type EditDurabilityPolicy,
 } from "../core/editDurability.js";
 import { canonicalizePath } from "../util/canonicalPath.js";
 import { MAX_EDITOR_RECOVERY_BYTES } from "./editorRecoveryPolicy.js";
@@ -28,12 +31,30 @@ export interface CommitAndVerifyEditRequest {
   approvedContent: string;
   reviewState: EditSaveFailureRecovery["review_state"];
   saveWithoutFormatting?: boolean;
+  /**
+   * The edit was auto-approved and is not on screen. Do not leave temporary
+   * tabs open, and when a save of the agent's own unchanged buffer fails,
+   * recover it (late-save check, one retry, then revert to disk) instead of
+   * leaving a dirty buffer that needs human-reviewed save_editor recovery.
+   */
+  autoApproved?: boolean;
 }
 
 export interface CommitAndVerifyEditResult extends EditReviewResult {
   status: "accepted" | "error";
   path: string;
 }
+
+/**
+ * Bounded waits used by editor-free auto-approved commits. Mutable so tests
+ * can shorten them; production code must not change these values.
+ */
+export const autoSaveRecoveryTiming = {
+  /** How long a failed save may take to land before it is retried. */
+  lateSaveGraceMs: 500,
+  /** How long an exact disk write waits for VS Code to reload the document. */
+  documentReloadTimeoutMs: 2_000,
+};
 
 let preservingSaveTail: Promise<void> = Promise.resolve();
 
@@ -47,7 +68,31 @@ let preservingSaveTail: Promise<void> = Promise.resolve();
 export async function commitAndVerifyEdit(
   request: CommitAndVerifyEditRequest,
 ): Promise<CommitAndVerifyEditResult> {
-  const result = await commitAndVerifyEditUnrecorded(request);
+  return recordCommittedEdit(
+    request,
+    await commitAndVerifyEditUnrecorded(request),
+  );
+}
+
+/**
+ * Persist an exact (no save participant) edit straight to disk without
+ * routing it through the editor buffer or an active editor, then verify it.
+ * The document must be clean and match the disk baseline; VS Code reloads the
+ * clean document from disk. Callers must hold the per-file edit lock.
+ */
+export async function commitExactEditToDisk(
+  request: CommitAndVerifyEditRequest,
+): Promise<CommitAndVerifyEditResult> {
+  return recordCommittedEdit(
+    request,
+    await commitExactEditToDiskUnrecorded(request),
+  );
+}
+
+function recordCommittedEdit(
+  request: CommitAndVerifyEditRequest,
+  result: CommitAndVerifyEditResult,
+): CommitAndVerifyEditResult {
   if (result.status === "accepted" && result.finalContent !== undefined) {
     workHistoryRegistry.recordCommittedEdit({
       absolutePath: request.absolutePath,
@@ -102,6 +147,7 @@ async function commitAndVerifyEditUnrecorded(
     };
   }
 
+  let autoRecovery: AutoSaveRecovery | undefined;
   if (request.document.isDirty) {
     const saveAttemptContent = request.document.getText();
     let saved = false;
@@ -113,7 +159,12 @@ async function commitAndVerifyEditUnrecorded(
       if (policy === "preserve_exact") {
         saveReason = "preserving_save_failed";
         saved = await withPreservingSaveCoordinator(() =>
-          saveWithoutFormatting(request.document, request.absolutePath),
+          saveWithoutFormatting(
+            request.document,
+            request.absolutePath,
+            undefined,
+            { closeOpenedTab: request.autoApproved },
+          ),
         );
       } else {
         saved = await request.document.save();
@@ -122,6 +173,52 @@ async function commitAndVerifyEditUnrecorded(
       saved = false;
       saveException = error;
       saveOutcome = "exception";
+    }
+
+    if (!saved && request.autoApproved) {
+      autoRecovery = await recoverFailedAutoSave({
+        document: request.document,
+        absolutePath: request.absolutePath,
+        policy,
+        saveAttemptContent,
+        approvedContent: request.approvedContent,
+      });
+      saved =
+        autoRecovery === "late_save_detected" ||
+        autoRecovery === "save_retried";
+    }
+
+    if (!saved && autoRecovery === "buffer_reverted_to_disk") {
+      const disk = await observeDisk(request.absolutePath);
+      const classification = classifyEditDurability({
+        relativePath: request.relativePath,
+        baselineExists: request.baselineExists,
+        baselineContent: request.baselineContent,
+        approvedContent: request.approvedContent,
+        editorContent: request.document.getText(),
+        disk,
+        policy,
+        saveOutcome,
+      });
+      const diskChanged =
+        disk.status !== "readable" || disk.content !== request.baselineContent;
+      return {
+        status: "error",
+        path: request.relativePath,
+        error:
+          saveReason === "preserving_save_failed"
+            ? "File could not be saved without formatting"
+            : "File save failed",
+        reason: saveReason,
+        auto_recovery: autoRecovery,
+        durability: classification.durability,
+        next_steps: [
+          "VS Code did not save the auto-approved edit, and one automatic retry also failed. The editor buffer only held this edit, so AgentLink reverted it to the file on disk: no unsaved changes remain and the edit was not applied.",
+          diskChanged
+            ? "The file changed on disk after the edit baseline was captured; re-read it before composing the edit again."
+            : "The file still matches the pre-edit baseline. Retry the same edit once; if it fails again, check whether the file is read-only or a save participant is rejecting the save.",
+        ],
+      };
     }
 
     if (!saved) {
@@ -169,7 +266,26 @@ async function commitAndVerifyEditUnrecorded(
     await fs.writeFile(request.absolutePath, expectedDiskContent, "utf-8");
   }
 
-  const editorContent = request.document.getText();
+  const verified = await verifyCommittedEdit(
+    request,
+    policy,
+    expectedDiskContent,
+    request.document.getText(),
+  );
+  return autoRecovery ? { ...verified, auto_recovery: autoRecovery } : verified;
+}
+
+/**
+ * Observe and classify the committed disk state. Pass `editorContent` as
+ * undefined only when the editor buffer is known not to reflect the commit
+ * yet (an exact disk write VS Code has not reloaded).
+ */
+async function verifyCommittedEdit(
+  request: CommitAndVerifyEditRequest,
+  policy: EditDurabilityPolicy,
+  expectedDiskContent: string,
+  editorContent: string | undefined,
+): Promise<CommitAndVerifyEditResult> {
   const disk = await observeDisk(request.absolutePath);
   let classification = classifyEditDurability({
     relativePath: request.relativePath,
@@ -204,7 +320,12 @@ async function commitAndVerifyEditUnrecorded(
       const preserved =
         restored &&
         (await withPreservingSaveCoordinator(() =>
-          saveWithoutFormatting(request.document, request.absolutePath),
+          saveWithoutFormatting(
+            request.document,
+            request.absolutePath,
+            undefined,
+            { closeOpenedTab: request.autoApproved },
+          ),
         ));
       if (preserved) {
         const recoveredDisk = await observeDisk(request.absolutePath);
@@ -297,16 +418,65 @@ export async function saveVerifiedEditorDocument(
   );
 }
 
+interface ActiveDocumentOptions {
+  /**
+   * Close the target tab afterwards when no tab showed it beforehand, so an
+   * auto-approved edit leaves no editor behind.
+   */
+  closeOpenedTab?: boolean;
+}
+
 async function saveWithoutFormatting(
   document: vscode.TextDocument,
   absolutePath: string,
   validate?: () => Promise<boolean>,
+  options: ActiveDocumentOptions = {},
+): Promise<boolean> {
+  const ran = await withTemporarilyActiveDocument(
+    document,
+    absolutePath,
+    options,
+    async () => {
+      if (validate && !(await validate())) return false;
+      if (
+        validate &&
+        (vscode.window.activeTextEditor?.document !== document ||
+          !documentMatchesTarget(document, absolutePath))
+      )
+        return false;
+      await vscode.commands.executeCommand(
+        "workbench.action.files.saveWithoutFormatting",
+      );
+      return true;
+    },
+  );
+  // Saving can finish while editor restoration awaits. Read the completion
+  // state after cleanup, not before it; callers still verify disk durability.
+  return ran && !document.isDirty;
+}
+
+/**
+ * Run an active-editor workbench command against `document` without taking
+ * keyboard focus, then restore the previous editor and close temporary tabs.
+ * Returns false without running `operation` when the document cannot be made
+ * the active editor.
+ */
+async function withTemporarilyActiveDocument(
+  document: vscode.TextDocument,
+  absolutePath: string,
+  options: ActiveDocumentOptions,
+  operation: () => Promise<boolean>,
 ): Promise<boolean> {
   if (!documentMatchesTarget(document, absolutePath)) return false;
   const previousEditor = vscode.window.activeTextEditor;
   const targetPath = canonicalizePath(absolutePath);
+  const tabWasOpen =
+    !options.closeOpenedTab ||
+    (vscode.window.tabGroups?.all ?? []).some((group) =>
+      findTextTab(group, targetPath),
+    );
   // VS Code cannot activate another editor group without taking keyboard
-  // focus, so this save briefly opens the document in the active group. When
+  // focus, so this briefly opens the document in the active group. When
   // that group is not the primary one, close the temporary tab afterwards so
   // agent-edited files only stay open in the primary (left) column.
   const activeGroup = vscode.window.tabGroups?.activeTabGroup;
@@ -316,32 +486,22 @@ async function saveWithoutFormatting(
     !findTextTab(activeGroup, targetPath)
       ? activeGroup
       : undefined;
-  // The save command needs an active editor, not keyboard focus. Keeping focus
-  // in the sidebar lets the user continue typing while this document is saved.
+  // Workbench file commands need an active editor, not keyboard focus. Keeping
+  // focus in the sidebar lets the user continue typing meanwhile.
   const targetEditor = await vscode.window.showTextDocument(document, {
     preview: false,
     preserveFocus: true,
   });
 
-  if (
-    targetEditor.document !== document ||
-    vscode.window.activeTextEditor?.document !== document ||
-    !documentMatchesTarget(document, absolutePath)
-  ) {
-    return false;
-  }
-
   try {
-    if (validate && !(await validate())) return false;
     if (
-      validate &&
-      (vscode.window.activeTextEditor?.document !== document ||
-        !documentMatchesTarget(document, absolutePath))
-    )
+      targetEditor?.document !== document ||
+      vscode.window.activeTextEditor?.document !== document ||
+      !documentMatchesTarget(document, absolutePath)
+    ) {
       return false;
-    await vscode.commands.executeCommand(
-      "workbench.action.files.saveWithoutFormatting",
-    );
+    }
+    return await operation();
   } finally {
     const activePath = vscode.window.activeTextEditor?.document.uri.fsPath;
     if (
@@ -368,10 +528,230 @@ async function saveWithoutFormatting(
         await vscode.window.tabGroups.close(tab, true);
       }
     }
+    if (!tabWasOpen) {
+      for (const group of vscode.window.tabGroups?.all ?? []) {
+        const tab = findTextTab(group, targetPath);
+        if (tab && !tab.isDirty) {
+          await vscode.window.tabGroups.close(tab, true);
+        }
+      }
+    }
   }
-  // Saving can finish while editor restoration awaits. Read the completion
-  // state after cleanup, not before it; callers still verify disk durability.
-  return !document.isDirty;
+}
+
+/**
+ * Recover a failed save of an auto-approved edit whose buffer still holds
+ * exactly the approved content: wait briefly for a late save, retry once, and
+ * finally revert the agent-only buffer to disk so no dirty buffer needs
+ * human-reviewed save_editor recovery. Returns undefined, touching nothing,
+ * when the buffer changed (for example the user typed into it).
+ */
+async function recoverFailedAutoSave(params: {
+  document: vscode.TextDocument;
+  absolutePath: string;
+  policy: EditDurabilityPolicy;
+  saveAttemptContent: string;
+  approvedContent: string;
+}): Promise<AutoSaveRecovery | undefined> {
+  const { document, absolutePath } = params;
+  const ownsBuffer = () =>
+    documentMatchesTarget(document, absolutePath) &&
+    document.getText() === params.saveAttemptContent &&
+    normalizeEditorText(params.saveAttemptContent) ===
+      normalizeEditorText(params.approvedContent);
+  if (!ownsBuffer()) return undefined;
+
+  if (
+    await waitForDocumentState(
+      document,
+      () => !document.isDirty,
+      autoSaveRecoveryTiming.lateSaveGraceMs,
+    )
+  ) {
+    return "late_save_detected";
+  }
+  if (!ownsBuffer()) return undefined;
+
+  try {
+    const saved =
+      params.policy === "preserve_exact"
+        ? await withPreservingSaveCoordinator(() =>
+            saveWithoutFormatting(document, absolutePath, undefined, {
+              closeOpenedTab: true,
+            }),
+          )
+        : await document.save();
+    if (saved || !document.isDirty) return "save_retried";
+  } catch {
+    if (!document.isDirty) return "save_retried";
+  }
+  if (!document.isDirty) return "save_retried";
+  if (!ownsBuffer()) return undefined;
+  // Revert is destructive and acts on the active editor. Only use it while no
+  // tab shows the file, so nobody can be typing into the buffer meanwhile.
+  const targetPath = canonicalizePath(absolutePath);
+  if (
+    (vscode.window.tabGroups?.all ?? []).some((group) =>
+      findTextTab(group, targetPath),
+    )
+  ) {
+    return undefined;
+  }
+
+  try {
+    await withPreservingSaveCoordinator(() =>
+      withTemporarilyActiveDocument(
+        document,
+        absolutePath,
+        { closeOpenedTab: true },
+        async () => {
+          if (
+            !ownsBuffer() ||
+            vscode.window.activeTextEditor?.document !== document
+          )
+            return false;
+          await vscode.commands.executeCommand("workbench.action.files.revert");
+          return true;
+        },
+      ),
+    );
+  } catch {
+    // Fall through: the dirty buffer stays for the ordinary recovery path.
+  }
+  return document.isDirty ? undefined : "buffer_reverted_to_disk";
+}
+
+/**
+ * Resolve true as soon as `predicate` holds after a change or save of
+ * `document`, or false once `timeoutMs` passes without it holding.
+ */
+async function waitForDocumentState(
+  document: vscode.TextDocument,
+  predicate: () => boolean,
+  timeoutMs: number,
+  start?: () => Promise<void>,
+): Promise<boolean> {
+  let settle!: (value: boolean) => void;
+  const settled = new Promise<boolean>((resolve) => {
+    settle = resolve;
+  });
+  const onEvent = (changed: vscode.TextDocument) => {
+    if (changed === document && predicate()) settle(true);
+  };
+  // Some hosts (and test doubles) omit these events; the timeout still bounds
+  // the wait and the final predicate check reports the outcome.
+  const subscriptions = [
+    vscode.workspace.onDidChangeTextDocument?.((event) =>
+      onEvent(event.document),
+    ),
+    vscode.workspace.onDidSaveTextDocument?.(onEvent),
+  ];
+  const timer = setTimeout(() => settle(predicate()), timeoutMs);
+  try {
+    await start?.();
+    if (predicate()) return true;
+    return await settled;
+  } finally {
+    clearTimeout(timer);
+    for (const subscription of subscriptions) subscription?.dispose();
+  }
+}
+
+async function commitExactEditToDiskUnrecorded(
+  request: CommitAndVerifyEditRequest,
+): Promise<CommitAndVerifyEditResult> {
+  const expectedDiskContent = deriveExpectedDiskContent(
+    request.baselineContent,
+    request.approvedContent,
+  );
+  const document = request.document;
+  // The per-file lock only excludes AgentLink. Never overwrite a file that
+  // another process changed since the baseline was captured.
+  const current = await observeDisk(request.absolutePath);
+  if (
+    current.status !== "readable" ||
+    current.content !== request.baselineContent
+  ) {
+    return {
+      status: "error",
+      path: request.relativePath,
+      error: "File changed on disk before the exact save",
+      reason: "apply_edit_failed",
+      next_steps: [
+        "The file changed on disk after the edit baseline was captured and was not overwritten. Re-read it before composing the edit again.",
+      ],
+    };
+  }
+  const normalizedApproved = normalizeEditorText(request.approvedContent);
+  const editorReloaded = () =>
+    documentMatchesTarget(document, request.absolutePath) &&
+    !document.isDirty &&
+    normalizeEditorText(document.getText()) === normalizedApproved;
+  let writeError: unknown;
+  // Subscribe before writing so a fast reload cannot be missed.
+  const reloaded = await waitForDocumentState(
+    document,
+    editorReloaded,
+    autoSaveRecoveryTiming.documentReloadTimeoutMs,
+    async () => {
+      try {
+        await fs.writeFile(request.absolutePath, expectedDiskContent, "utf-8");
+      } catch (error) {
+        writeError = error;
+        throw error;
+      }
+    },
+  ).catch(() => false);
+
+  if (writeError !== undefined) {
+    const disk = await observeDisk(request.absolutePath);
+    const classification = classifyEditDurability({
+      relativePath: request.relativePath,
+      baselineExists: request.baselineExists,
+      baselineContent: request.baselineContent,
+      approvedContent: request.approvedContent,
+      editorContent: document.getText(),
+      disk,
+      policy: "preserve_exact",
+      saveOutcome: "exception",
+    });
+    const message = boundedSaveErrorMessage(writeError);
+    return {
+      status: "error",
+      path: request.relativePath,
+      error: "File could not be saved without formatting",
+      reason: "preserving_save_failed",
+      durability: classification.durability,
+      next_steps: [
+        `Writing the file failed${message ? ` (${message})` : ""}. The editor buffer was not changed. Re-read the file and check its permissions before retrying.`,
+      ],
+    };
+  }
+
+  // A clean document that VS Code has not reloaded yet still shows the
+  // baseline; verify disk alone rather than report a false divergence. A
+  // buffer that became dirty or changed meanwhile will not reload, so it is
+  // verified against disk and reported if it diverges.
+  const editorStale =
+    !reloaded &&
+    documentMatchesTarget(document, request.absolutePath) &&
+    !document.isDirty &&
+    normalizeEditorText(document.getText()) ===
+      normalizeEditorText(request.baselineContent);
+  const verified = await verifyCommittedEdit(
+    request,
+    "preserve_exact",
+    expectedDiskContent,
+    editorStale ? undefined : document.getText(),
+  );
+  if (!editorStale || verified.status !== "accepted") return verified;
+  return {
+    ...verified,
+    warnings: [
+      ...(verified.warnings ?? []),
+      "The file was verified on disk, but VS Code had not reloaded its open copy yet. It reloads unchanged buffers automatically.",
+    ],
+  };
 }
 
 function findTextTab(
