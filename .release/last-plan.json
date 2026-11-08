@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "93d0c9f2277944162917e4b0a04f8bee318f1a3d",
-  "createdAt": "2026-11-07T02:05:38.850Z",
+  "sourceSha": "7708a5ca80d3293d0b9b908366ab332b7e34b938",
+  "createdAt": "2026-11-08T22:51:52.056Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,131 +10,195 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.84.0",
-      "baselineRef": "v1.84.0",
-      "reserved": "1.84.0",
-      "commits": ["93d0c9f2277944162917e4b0a04f8bee318f1a3d"],
+      "published": "1.85.0",
+      "baselineRef": "v1.85.0",
+      "reserved": "1.85.0",
+      "commits": [
+        "9c7f68e181d3d9bc9dd0329bb29f7ad26187abda",
+        "06a783b1a9ec8c3b3072464035a55e0c52f4e0cf",
+        "7708a5ca80d3293d0b9b908366ab332b7e34b938"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.85.0",
+      "version": "1.86.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.85.0",
+      "tag": "v1.86.0",
       "notes": [
         {
-          "sha": "93d0c9f2277944162917e4b0a04f8bee318f1a3d",
-          "subject": "feat(tools): discover configured models for background selection",
-          "summary": "Adds a read-only list_models tool so agents can search the configured model catalog for exact model and provider IDs before choosing a background-agent model in VS Code, CLI, Assistant, and the SDK (new model-discovery entry point).",
+          "sha": "9c7f68e181d3d9bc9dd0329bb29f7ad26187abda",
+          "subject": "fix(chat): clear stale error card when the agent resumes activity",
+          "summary": "A stale error card on a chat message is now cleared when the agent resumes producing output, such as after an automatic resume.",
+          "breaking": false
+        },
+        {
+          "sha": "06a783b1a9ec8c3b3072464035a55e0c52f4e0cf",
+          "subject": "fix(edits): keep auto-approved saves out of the editor and self-recover failures",
+          "summary": "Auto-approved file edits no longer open editor tabs, and failed saves of the agent's own buffer now recover automatically (late-save check, one retry, revert to disk) instead of stalling on a save_editor approval.",
+          "breaking": false
+        },
+        {
+          "sha": "7708a5ca80d3293d0b9b908366ab332b7e34b938",
+          "subject": "feat(chat): show requested and confirmed speed tiers in request info",
+          "summary": "Request info now shows the selected, sent and provider-confirmed speed tier (Fast/Ultrafast) for Codex requests, including in the browser remote view, and the SDK exposes the new service tier fields.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.84.0",
-      "baselineRef": "desktop-v0.84.0",
-      "reserved": "0.84.0",
-      "commits": ["93d0c9f2277944162917e4b0a04f8bee318f1a3d"],
+      "published": "0.85.0",
+      "baselineRef": "desktop-v0.85.0",
+      "reserved": "0.85.0",
+      "commits": [
+        "9c7f68e181d3d9bc9dd0329bb29f7ad26187abda",
+        "06a783b1a9ec8c3b3072464035a55e0c52f4e0cf",
+        "7708a5ca80d3293d0b9b908366ab332b7e34b938"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.85.0",
+      "version": "0.86.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.85.0",
+      "tag": "desktop-v0.86.0",
       "notes": [
         {
-          "sha": "93d0c9f2277944162917e4b0a04f8bee318f1a3d",
-          "subject": "feat(tools): discover configured models for background selection",
-          "summary": "Adds a read-only list_models tool so agents can search the configured model catalog for exact model and provider IDs before choosing a background-agent model in VS Code, CLI, Assistant, and the SDK (new model-discovery entry point).",
+          "sha": "9c7f68e181d3d9bc9dd0329bb29f7ad26187abda",
+          "subject": "fix(chat): clear stale error card when the agent resumes activity",
+          "summary": "A stale error card on a chat message is now cleared when the agent resumes producing output, such as after an automatic resume.",
+          "breaking": false
+        },
+        {
+          "sha": "06a783b1a9ec8c3b3072464035a55e0c52f4e0cf",
+          "subject": "fix(edits): keep auto-approved saves out of the editor and self-recover failures",
+          "summary": "Auto-approved file edits no longer open editor tabs, and failed saves of the agent's own buffer now recover automatically (late-save check, one retry, revert to disk) instead of stalling on a save_editor approval.",
+          "breaking": false
+        },
+        {
+          "sha": "7708a5ca80d3293d0b9b908366ab332b7e34b938",
+          "subject": "feat(chat): show requested and confirmed speed tiers in request info",
+          "summary": "Request info now shows the selected, sent and provider-confirmed speed tier (Fast/Ultrafast) for Codex requests, including in the browser remote view, and the SDK exposes the new service tier fields.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.59.0",
-      "baselineRef": "cli-v0.59.0",
-      "reserved": "0.59.0",
-      "commits": ["93d0c9f2277944162917e4b0a04f8bee318f1a3d"],
+      "published": "0.60.0",
+      "baselineRef": "cli-v0.60.0",
+      "reserved": "0.60.0",
+      "commits": ["7708a5ca80d3293d0b9b908366ab332b7e34b938"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.60.0",
+      "version": "0.61.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.60.0",
+      "tag": "cli-v0.61.0",
       "notes": [
         {
-          "sha": "93d0c9f2277944162917e4b0a04f8bee318f1a3d",
-          "subject": "feat(tools): discover configured models for background selection",
-          "summary": "Adds a read-only list_models tool so agents can search the configured model catalog for exact model and provider IDs before choosing a background-agent model in VS Code, CLI, Assistant, and the SDK (new model-discovery entry point).",
+          "sha": "7708a5ca80d3293d0b9b908366ab332b7e34b938",
+          "subject": "feat(chat): show requested and confirmed speed tiers in request info",
+          "summary": "Request info now shows the selected, sent and provider-confirmed speed tier (Fast/Ultrafast) for Codex requests, including in the browser remote view, and the SDK exposes the new service tier fields.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.49.0",
-      "baselineRef": "sdk-v0.49.0",
-      "reserved": "0.49.0",
-      "commits": ["93d0c9f2277944162917e4b0a04f8bee318f1a3d"],
+      "published": "0.50.0",
+      "baselineRef": "sdk-v0.50.0",
+      "reserved": "0.50.0",
+      "commits": ["7708a5ca80d3293d0b9b908366ab332b7e34b938"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.50.0",
+      "version": "0.51.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.50.0",
+      "tag": "sdk-v0.51.0",
       "notes": [
         {
-          "sha": "93d0c9f2277944162917e4b0a04f8bee318f1a3d",
-          "subject": "feat(tools): discover configured models for background selection",
-          "summary": "Adds a read-only list_models tool so agents can search the configured model catalog for exact model and provider IDs before choosing a background-agent model in VS Code, CLI, Assistant, and the SDK (new model-discovery entry point).",
+          "sha": "7708a5ca80d3293d0b9b908366ab332b7e34b938",
+          "subject": "feat(chat): show requested and confirmed speed tiers in request info",
+          "summary": "Request info now shows the selected, sent and provider-confirmed speed tier (Fast/Ultrafast) for Codex requests, including in the browser remote view, and the SDK exposes the new service tier fields.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.56.0",
-      "baselineRef": "assistant-v0.56.0",
-      "reserved": "0.56.0",
-      "commits": ["93d0c9f2277944162917e4b0a04f8bee318f1a3d"],
+      "published": "0.57.0",
+      "baselineRef": "assistant-v0.57.0",
+      "reserved": "0.57.0",
+      "commits": [
+        "9c7f68e181d3d9bc9dd0329bb29f7ad26187abda",
+        "06a783b1a9ec8c3b3072464035a55e0c52f4e0cf",
+        "7708a5ca80d3293d0b9b908366ab332b7e34b938"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.57.0",
+      "version": "0.58.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.57.0",
+      "tag": "assistant-v0.58.0",
       "notes": [
         {
-          "sha": "93d0c9f2277944162917e4b0a04f8bee318f1a3d",
-          "subject": "feat(tools): discover configured models for background selection",
-          "summary": "Adds a read-only list_models tool so agents can search the configured model catalog for exact model and provider IDs before choosing a background-agent model in VS Code, CLI, Assistant, and the SDK (new model-discovery entry point).",
+          "sha": "9c7f68e181d3d9bc9dd0329bb29f7ad26187abda",
+          "subject": "fix(chat): clear stale error card when the agent resumes activity",
+          "summary": "A stale error card on a chat message is now cleared when the agent resumes producing output, such as after an automatic resume.",
+          "breaking": false
+        },
+        {
+          "sha": "06a783b1a9ec8c3b3072464035a55e0c52f4e0cf",
+          "subject": "fix(edits): keep auto-approved saves out of the editor and self-recover failures",
+          "summary": "Auto-approved file edits no longer open editor tabs, and failed saves of the agent's own buffer now recover automatically (late-save check, one retry, revert to disk) instead of stalling on a save_editor approval.",
+          "breaking": false
+        },
+        {
+          "sha": "7708a5ca80d3293d0b9b908366ab332b7e34b938",
+          "subject": "feat(chat): show requested and confirmed speed tiers in request info",
+          "summary": "Request info now shows the selected, sent and provider-confirmed speed tier (Fast/Ultrafast) for Codex requests, including in the browser remote view, and the SDK exposes the new service tier fields.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "93d0c9f2277944162917e4b0a04f8bee318f1a3d": {
+    "9c7f68e181d3d9bc9dd0329bb29f7ad26187abda": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "A stale error card on a chat message is now cleared when the agent resumes producing output, such as after an automatic resume.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "06a783b1a9ec8c3b3072464035a55e0c52f4e0cf": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Auto-approved file edits no longer open editor tabs, and failed saves of the agent's own buffer now recover automatically (late-save check, one retry, revert to disk) instead of stalling on a save_editor approval.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "7708a5ca80d3293d0b9b908366ab332b7e34b938": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "Adds a read-only list_models tool so agents can search the configured model catalog for exact model and provider IDs before choosing a background-agent model in VS Code, CLI, Assistant, and the SDK (new model-discovery entry point).",
+      "summary": "Request info now shows the selected, sent and provider-confirmed speed tier (Fast/Ultrafast) for Codex requests, including in the browser remote view, and the SDK exposes the new service tier fields.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.86.0
+
 - Request info in VS Code and its browser remote view now distinguishes selected Fast/Ultrafast, the tier sent on the final attempt, and the provider-reported tier. Summaries show confirmed premium usage, unconfirmed requests or Standard fallback without treating the composer selection as proof.
 - Auto-approved `write_file` and `apply_diff` edits no longer open editor tabs. Ordinary saves still run format-on-save. Exact saves of an unmodified open copy write straight to disk, which avoids a race where parallel exact saves could save the wrong active editor. When VS Code reports a failed save of a buffer that holds only the auto-approved edit, AgentLink checks for a late save, retries once, then reverts that buffer to disk, reported as `auto_recovery`. This removes the human-approved `save_editor` step that could stall Approve for Me sessions.
 

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.51.0 — 2026-11-08
+
+- Request info now shows the selected, sent and provider-confirmed speed tier (Fast/Ultrafast) for Codex requests, including in the browser remote view, and the SDK exposes the new service tier fields.
+
 ## 0.50.0 — 2026-11-07
 
 - Adds a read-only list_models tool so agents can search the configured model catalog for exact model and provider IDs before choosing a background-agent model in VS Code, CLI, Assistant, and the SDK (new model-discovery entry point).
