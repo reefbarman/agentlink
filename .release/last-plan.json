@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "7708a5ca80d3293d0b9b908366ab332b7e34b938",
-  "createdAt": "2026-11-08T22:51:52.056Z",
+  "sourceSha": "0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9",
+  "createdAt": "2026-11-08T23:40:17.480Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,195 +10,107 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.85.0",
-      "baselineRef": "v1.85.0",
-      "reserved": "1.85.0",
-      "commits": [
-        "9c7f68e181d3d9bc9dd0329bb29f7ad26187abda",
-        "06a783b1a9ec8c3b3072464035a55e0c52f4e0cf",
-        "7708a5ca80d3293d0b9b908366ab332b7e34b938"
-      ],
+      "published": "1.86.0",
+      "baselineRef": "v1.86.0",
+      "reserved": "1.86.0",
+      "commits": ["0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.86.0",
-      "effectiveBump": "minor",
+      "version": "1.86.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.86.0",
+      "tag": "v1.86.1",
       "notes": [
         {
-          "sha": "9c7f68e181d3d9bc9dd0329bb29f7ad26187abda",
-          "subject": "fix(chat): clear stale error card when the agent resumes activity",
-          "summary": "A stale error card on a chat message is now cleared when the agent resumes producing output, such as after an automatic resume.",
-          "breaking": false
-        },
-        {
-          "sha": "06a783b1a9ec8c3b3072464035a55e0c52f4e0cf",
-          "subject": "fix(edits): keep auto-approved saves out of the editor and self-recover failures",
-          "summary": "Auto-approved file edits no longer open editor tabs, and failed saves of the agent's own buffer now recover automatically (late-save check, one retry, revert to disk) instead of stalling on a save_editor approval.",
-          "breaking": false
-        },
-        {
-          "sha": "7708a5ca80d3293d0b9b908366ab332b7e34b938",
-          "subject": "feat(chat): show requested and confirmed speed tiers in request info",
-          "summary": "Request info now shows the selected, sent and provider-confirmed speed tier (Fast/Ultrafast) for Codex requests, including in the browser remote view, and the SDK exposes the new service tier fields.",
+          "sha": "0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9",
+          "subject": "fix(chat): improve shelf interaction and clear cancelled approvals",
+          "summary": "Chat shows original question details beside saved answers, the activity shelf can be resized by touch, browser shelf layout matches VS Code, and cancelled sessions now clear pending inline approvals.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.85.0",
-      "baselineRef": "desktop-v0.85.0",
-      "reserved": "0.85.0",
-      "commits": [
-        "9c7f68e181d3d9bc9dd0329bb29f7ad26187abda",
-        "06a783b1a9ec8c3b3072464035a55e0c52f4e0cf",
-        "7708a5ca80d3293d0b9b908366ab332b7e34b938"
-      ],
+      "published": "0.86.0",
+      "baselineRef": "desktop-v0.86.0",
+      "reserved": "0.86.0",
+      "commits": ["0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.86.0",
-      "effectiveBump": "minor",
+      "version": "0.86.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.86.0",
+      "tag": "desktop-v0.86.1",
       "notes": [
         {
-          "sha": "9c7f68e181d3d9bc9dd0329bb29f7ad26187abda",
-          "subject": "fix(chat): clear stale error card when the agent resumes activity",
-          "summary": "A stale error card on a chat message is now cleared when the agent resumes producing output, such as after an automatic resume.",
-          "breaking": false
-        },
-        {
-          "sha": "06a783b1a9ec8c3b3072464035a55e0c52f4e0cf",
-          "subject": "fix(edits): keep auto-approved saves out of the editor and self-recover failures",
-          "summary": "Auto-approved file edits no longer open editor tabs, and failed saves of the agent's own buffer now recover automatically (late-save check, one retry, revert to disk) instead of stalling on a save_editor approval.",
-          "breaking": false
-        },
-        {
-          "sha": "7708a5ca80d3293d0b9b908366ab332b7e34b938",
-          "subject": "feat(chat): show requested and confirmed speed tiers in request info",
-          "summary": "Request info now shows the selected, sent and provider-confirmed speed tier (Fast/Ultrafast) for Codex requests, including in the browser remote view, and the SDK exposes the new service tier fields.",
+          "sha": "0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9",
+          "subject": "fix(chat): improve shelf interaction and clear cancelled approvals",
+          "summary": "Chat shows original question details beside saved answers, the activity shelf can be resized by touch, browser shelf layout matches VS Code, and cancelled sessions now clear pending inline approvals.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.60.0",
-      "baselineRef": "cli-v0.60.0",
-      "reserved": "0.60.0",
-      "commits": ["7708a5ca80d3293d0b9b908366ab332b7e34b938"],
+      "published": "0.61.0",
+      "baselineRef": "cli-v0.61.0",
+      "reserved": "0.61.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.61.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.61.0",
-      "notes": [
-        {
-          "sha": "7708a5ca80d3293d0b9b908366ab332b7e34b938",
-          "subject": "feat(chat): show requested and confirmed speed tiers in request info",
-          "summary": "Request info now shows the selected, sent and provider-confirmed speed tier (Fast/Ultrafast) for Codex requests, including in the browser remote view, and the SDK exposes the new service tier fields.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.50.0",
-      "baselineRef": "sdk-v0.50.0",
-      "reserved": "0.50.0",
-      "commits": ["7708a5ca80d3293d0b9b908366ab332b7e34b938"],
+      "published": "0.51.0",
+      "baselineRef": "sdk-v0.51.0",
+      "reserved": "0.51.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.51.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.51.0",
-      "notes": [
-        {
-          "sha": "7708a5ca80d3293d0b9b908366ab332b7e34b938",
-          "subject": "feat(chat): show requested and confirmed speed tiers in request info",
-          "summary": "Request info now shows the selected, sent and provider-confirmed speed tier (Fast/Ultrafast) for Codex requests, including in the browser remote view, and the SDK exposes the new service tier fields.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.57.0",
-      "baselineRef": "assistant-v0.57.0",
-      "reserved": "0.57.0",
-      "commits": [
-        "9c7f68e181d3d9bc9dd0329bb29f7ad26187abda",
-        "06a783b1a9ec8c3b3072464035a55e0c52f4e0cf",
-        "7708a5ca80d3293d0b9b908366ab332b7e34b938"
-      ],
+      "published": "0.58.0",
+      "baselineRef": "assistant-v0.58.0",
+      "reserved": "0.58.0",
+      "commits": ["0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.58.0",
-      "effectiveBump": "minor",
+      "version": "0.58.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.58.0",
+      "tag": "assistant-v0.58.1",
       "notes": [
         {
-          "sha": "9c7f68e181d3d9bc9dd0329bb29f7ad26187abda",
-          "subject": "fix(chat): clear stale error card when the agent resumes activity",
-          "summary": "A stale error card on a chat message is now cleared when the agent resumes producing output, such as after an automatic resume.",
-          "breaking": false
-        },
-        {
-          "sha": "06a783b1a9ec8c3b3072464035a55e0c52f4e0cf",
-          "subject": "fix(edits): keep auto-approved saves out of the editor and self-recover failures",
-          "summary": "Auto-approved file edits no longer open editor tabs, and failed saves of the agent's own buffer now recover automatically (late-save check, one retry, revert to disk) instead of stalling on a save_editor approval.",
-          "breaking": false
-        },
-        {
-          "sha": "7708a5ca80d3293d0b9b908366ab332b7e34b938",
-          "subject": "feat(chat): show requested and confirmed speed tiers in request info",
-          "summary": "Request info now shows the selected, sent and provider-confirmed speed tier (Fast/Ultrafast) for Codex requests, including in the browser remote view, and the SDK exposes the new service tier fields.",
+          "sha": "0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9",
+          "subject": "fix(chat): improve shelf interaction and clear cancelled approvals",
+          "summary": "Chat shows original question details beside saved answers, the activity shelf can be resized by touch, browser shelf layout matches VS Code, and cancelled sessions now clear pending inline approvals.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "9c7f68e181d3d9bc9dd0329bb29f7ad26187abda": {
+    "0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "A stale error card on a chat message is now cleared when the agent resumes producing output, such as after an automatic resume.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "06a783b1a9ec8c3b3072464035a55e0c52f4e0cf": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Auto-approved file edits no longer open editor tabs, and failed saves of the agent's own buffer now recover automatically (late-save check, one retry, revert to disk) instead of stalling on a save_editor approval.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "7708a5ca80d3293d0b9b908366ab332b7e34b938": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Request info now shows the selected, sent and provider-confirmed speed tier (Fast/Ultrafast) for Codex requests, including in the browser remote view, and the SDK exposes the new service tier fields.",
+      "summary": "Chat shows original question details beside saved answers, the activity shelf can be resized by touch, browser shelf layout matches VS Code, and cancelled sessions now clear pending inline approvals.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.86.1
+
 - Inline approvals now clear their cards and VS Code status-bar alerts when the owning session run is cancelled outside the chat's Stop button, preventing stale “Tool approval required” indicators.
 
 ## 1.86.0
