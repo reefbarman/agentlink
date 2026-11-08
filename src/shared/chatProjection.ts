@@ -1947,6 +1947,20 @@ function cloneLast(messages: ChatMessage[]): {
 }
 
 /**
+ * Clone the last message for new live agent activity. An error card on that
+ * message is stale once the agent produces more output (for example after an
+ * automatic resume rather than the Retry button), so drop it.
+ */
+function cloneLastForActivity(messages: ChatMessage[]): {
+  msgs: ChatMessage[];
+  last: ChatMessage;
+} {
+  const result = cloneLast(messages);
+  delete result.last.error;
+  return result;
+}
+
+/**
  * Blocks at the tail of an assistant message that are still "live": running
  * tools, open thinking, or (while streaming) text that may still receive
  * deltas. A bg_agent_result arriving mid-turn is inserted before these so the
@@ -2399,7 +2413,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         return { ...state, statusOverride: null };
       }
       const all = ensureAssistant(state.messages);
-      const { msgs, last } = cloneLast(all);
+      const { msgs, last } = cloneLastForActivity(all);
       last.blocks.push({
         type: "thinking",
         id: action.thinkingId,
@@ -2420,7 +2434,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         )
       ) {
         const all = ensureAssistant(state.messages);
-        const { msgs, last } = cloneLast(all);
+        const { msgs, last } = cloneLastForActivity(all);
         last.blocks.push({
           type: "thinking",
           id: action.thinkingId,
@@ -2515,7 +2529,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       }
 
       const all = ensureAssistant(state.messages);
-      const { msgs, last } = cloneLast(all);
+      const { msgs, last } = cloneLastForActivity(all);
       const inputJson =
         action.input === undefined ? "" : JSON.stringify(action.input);
       last.blocks.push(
@@ -2947,7 +2961,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
 
     case "TEXT_DELTA": {
       const all = ensureAssistant(state.messages);
-      const { msgs, last } = cloneLast(all);
+      const { msgs, last } = cloneLastForActivity(all);
       // Append to existing text block or start a new one.
       // Each Claude API turn naturally produces interleaved text+tool blocks:
       //   [text: "Let me do X:"] → [tool_call] → [text: "Follow-up:"] → ...

@@ -277,6 +277,31 @@ describe("webview App reducer background agent launch blocks", () => {
     expect(assistant?.error?.message).toBe("API request failed");
   });
 
+  it.each([
+    { type: "THINKING_START" as const, thinkingId: "thinking-resumed" },
+    { type: "TEXT_DELTA" as const, text: "resumed" },
+    {
+      type: "TOOL_START" as const,
+      toolCallId: "tool-resumed",
+      toolName: "read_file",
+    },
+  ])("clears a stale error when the agent resumes with $type", (action) => {
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "do the thing",
+    });
+    state = reducer(state, {
+      type: "ERROR",
+      error: "Codex API error: Request timed out",
+      retryable: false,
+    });
+    expect(state.messages[state.messages.length - 1]?.error).toBeDefined();
+
+    state = reducer(state, action);
+
+    expect(state.messages[state.messages.length - 1]?.error).toBeUndefined();
+  });
+
   it("promotes live generated image tool results to assistant display media", () => {
     const toolCallId = "tool-generate-image";
     let state = reducer(initialState, {
