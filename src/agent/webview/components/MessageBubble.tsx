@@ -851,6 +851,7 @@ export function MessageBubble({
           durationMs={message.apiRequest.durationMs}
           timeToFirstToken={message.apiRequest.timeToFirstToken}
           transport={message.apiRequest.transport}
+          speedTier={message.apiRequest.speedTier}
           contextBreakdown={message.apiRequest.contextBreakdown}
         />
       )}

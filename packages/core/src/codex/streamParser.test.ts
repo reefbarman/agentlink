@@ -30,6 +30,25 @@ async function collect(
 }
 
 describe("parseCodexResponseStreamEvents", () => {
+  it.each(["priority", "default", "ultrafast", undefined])(
+    "records only provider-reported service tier %s",
+    async (serviceTier) => {
+      const events = await collect([
+        {
+          type: "response.completed",
+          response: {
+            status: "completed",
+            service_tier: serviceTier,
+            output: [],
+            usage: {},
+          },
+        },
+      ]);
+      const usage = events.find((event) => event.type === "usage");
+      if (serviceTier) expect(usage).toHaveProperty("serviceTier", serviceTier);
+      else expect(usage).not.toHaveProperty("serviceTier");
+    },
+  );
   it.each([
     undefined,
     [],

@@ -7717,6 +7717,7 @@ describe("ChatViewProvider session state sync", () => {
       cacheCreationTokens: 0,
       durationMs: 500,
       timeToFirstToken: 100,
+      speedTier: { requested: "fast", sent: "priority", actual: "priority" },
     });
 
     const posted = mockPostMessage.mock.calls
@@ -7725,6 +7726,7 @@ describe("ChatViewProvider session state sync", () => {
     expect(posted).toMatchObject({
       mode: "architect",
       commandApprovalPolicy: "approve-for-me",
+      speedTier: { requested: "fast", sent: "priority", actual: "priority" },
     });
     expect(manager.getCommandApprovalPolicy).toHaveBeenCalledWith(
       "session-1",

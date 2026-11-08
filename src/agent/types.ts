@@ -284,6 +284,7 @@ export type AgentEvent =
       durationMs: number;
       timeToFirstToken: number;
       transport?: "http" | "websocket";
+      speedTier?: { requested: string; sent?: string; actual?: string };
       /** A WebSocket connect failure fell back to HTTP during this request. */
       transportFallback?: boolean;
       providerQueueWaitMs?: number;

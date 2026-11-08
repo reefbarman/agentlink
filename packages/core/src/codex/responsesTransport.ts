@@ -194,6 +194,10 @@ export async function dispatchResponsesHttp(
   }
   const attempt = {
     model: request.body.model,
+    serviceTier:
+      typeof request.body.service_tier === "string"
+        ? request.body.service_tier
+        : "default",
     dispatchEvidence: request.evidence,
   };
   request.evidence.transport = "http";

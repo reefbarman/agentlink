@@ -1574,6 +1574,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
       durationMs: 500,
       timeToFirstToken: 100,
       transport: "websocket",
+      speedTier: { requested: "fast", sent: "priority", actual: "priority" },
     };
     expect(adapter.getCheckpoint().transcript.messages[0]).toMatchObject({
       role: "assistant",
@@ -1582,6 +1583,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
         mode: "architect",
         commandApprovalPolicy: "approve-for-me",
         transport: "websocket",
+        speedTier: { requested: "fast", sent: "priority", actual: "priority" },
       },
     });
   });

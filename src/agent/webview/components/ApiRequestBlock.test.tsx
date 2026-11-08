@@ -9,6 +9,64 @@ afterEach(() => cleanup());
 
 describe("ApiRequestBlock", () => {
   it.each([
+    [
+      { requested: "fast", sent: "priority", actual: "priority" },
+      "Fast (confirmed)",
+    ],
+    [{ requested: "fast", sent: "priority" }, "Fast requested (unconfirmed)"],
+    [{ requested: "fast", sent: "default" }, "Standard (Fast not used)"],
+    [
+      { requested: "fast", sent: "priority", actual: "default" },
+      "Standard (confirmed)",
+    ],
+    [
+      { requested: "ultrafast", sent: "ultrafast", actual: "ultrafast" },
+      "Ultrafast (confirmed)",
+    ],
+    [{ requested: "fast" }, "Fast selected (not recorded)"],
+  ])(
+    "reports speed evidence without claiming the selection was used (%#)",
+    (speedTier, status) => {
+      render(
+        <ApiRequestBlock
+          requestId="speed"
+          model="test"
+          inputTokens={1}
+          outputTokens={1}
+          durationMs={1}
+          timeToFirstToken={1}
+          speedTier={speedTier}
+        />,
+      );
+      expect(screen.getByRole("button").textContent).toContain(
+        `Speed: ${status}`,
+      );
+      fireEvent.click(screen.getByRole("button"));
+      expect(screen.getByText(status)).toBeTruthy();
+      expect(
+        screen.getByText("Provider service tier").nextElementSibling
+          ?.textContent,
+      ).toBe(
+        ("actual" in speedTier ? speedTier.actual : undefined) ??
+          "Not reported",
+      );
+    },
+  );
+
+  it("does not infer speed for historical requests", () => {
+    render(
+      <ApiRequestBlock
+        requestId="old"
+        model="test"
+        inputTokens={1}
+        outputTokens={1}
+        durationMs={1}
+        timeToFirstToken={1}
+      />,
+    );
+    expect(screen.getByRole("button").textContent).not.toContain("Speed:");
+  });
+  it.each([
     ["websocket", "WebSocket"],
     ["http", "HTTP/SSE"],
     [undefined, "Not recorded"],

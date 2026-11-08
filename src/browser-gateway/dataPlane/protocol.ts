@@ -2611,6 +2611,7 @@ function parseApiRequest(
     "durationMs",
     "timeToFirstToken",
     "transport",
+    "speedTier",
   ]);
   const transport = optionalEnum(
     object,
@@ -2653,6 +2654,14 @@ function parseApiRequest(
   return {
     requestId: nonEmptyString(object.requestId, `${path}.requestId`, 256),
     model: nonEmptyString(object.model, `${path}.model`, 256),
+    ...(object.speedTier !== undefined
+      ? {
+          speedTier: parseRequestSpeedTier(
+            object.speedTier,
+            `${path}.speedTier`,
+          ),
+        }
+      : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(mode ? { mode } : {}),
     ...(commandApprovalPolicy ? { commandApprovalPolicy } : {}),
@@ -2676,6 +2685,17 @@ function parseApiRequest(
       object.timeToFirstToken,
       `${path}.timeToFirstToken`,
     ),
+  };
+}
+
+function parseRequestSpeedTier(value: unknown, path: string) {
+  const object = strictRecord(value, path, ["requested", "sent", "actual"]);
+  const sent = optionalString(object, "sent", path, 64);
+  const actual = optionalString(object, "actual", path, 64);
+  return {
+    requested: nonEmptyString(object.requested, `${path}.requested`, 64),
+    ...(sent !== undefined ? { sent } : {}),
+    ...(actual !== undefined ? { actual } : {}),
   };
 }
 

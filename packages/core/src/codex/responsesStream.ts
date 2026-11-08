@@ -214,6 +214,10 @@ export async function* executeCodexResponsesStream(args: {
               : { body: wireBody, incremental: false };
             const attempt = {
               model: args.body.model,
+              serviceTier:
+                typeof prepared.body.service_tier === "string"
+                  ? prepared.body.service_tier
+                  : "default",
               dispatchEvidence: evidence,
             };
             beforeDispatch(attempt);

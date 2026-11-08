@@ -15,6 +15,7 @@ interface ApiRequestBlockProps {
   durationMs: number;
   timeToFirstToken: number;
   transport?: "http" | "websocket";
+  speedTier?: { requested: string; sent?: string; actual?: string };
   contextBreakdown?: RequestContextBreakdown;
 }
 
@@ -30,6 +31,7 @@ export function ApiRequestBlock({
   durationMs,
   timeToFirstToken,
   transport,
+  speedTier,
   contextBreakdown,
 }: ApiRequestBlockProps) {
   const [expanded, setExpanded] = useState(false);
@@ -38,7 +40,24 @@ export function ApiRequestBlock({
   const thinkingSummary = reasoningEffort
     ? ` · Thinking: ${reasoningEffort}`
     : "";
-  const summary = `${model}${thinkingSummary} · ${totalTokens.toLocaleString()} tokens · ${(durationMs / 1000).toFixed(1)}s`;
+  const tierLabel = (tier: string) =>
+    tier === "priority" || tier === "fast"
+      ? "Fast"
+      : tier === "ultrafast"
+        ? "Ultrafast"
+        : tier === "default" || tier === "standard"
+          ? "Standard"
+          : tier;
+  const speedStatus = !speedTier
+    ? undefined
+    : speedTier.actual
+      ? `${tierLabel(speedTier.actual)} (confirmed)`
+      : speedTier.sent === "default"
+        ? `Standard (${tierLabel(speedTier.requested)} not used)`
+        : speedTier.sent
+          ? `${tierLabel(speedTier.sent)} requested (unconfirmed)`
+          : `${tierLabel(speedTier.requested)} selected (not recorded)`;
+  const summary = `${model}${thinkingSummary}${speedStatus ? ` · Speed: ${speedStatus}` : ""} · ${totalTokens.toLocaleString()} tokens · ${(durationMs / 1000).toFixed(1)}s`;
 
   return (
     <div class="api-request-block">
@@ -64,6 +83,28 @@ export function ApiRequestBlock({
                     : "Not recorded"}
               </td>
             </tr>
+            {speedTier && (
+              <>
+                <tr>
+                  <td class="api-key">Speed</td>
+                  <td class="api-value">{speedStatus}</td>
+                </tr>
+                <tr>
+                  <td class="api-key">Selected speed</td>
+                  <td class="api-value">{tierLabel(speedTier.requested)}</td>
+                </tr>
+                <tr>
+                  <td class="api-key">Sent service tier</td>
+                  <td class="api-value">{speedTier.sent ?? "Not recorded"}</td>
+                </tr>
+                <tr>
+                  <td class="api-key">Provider service tier</td>
+                  <td class="api-value">
+                    {speedTier.actual ?? "Not reported"}
+                  </td>
+                </tr>
+              </>
+            )}
             {reasoningEffort && (
               <tr>
                 <td class="api-key">Thinking level</td>

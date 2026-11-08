@@ -100,6 +100,7 @@ it("pins the complete browser gateway transcript-message contract", () => {
       durationMs: number;
       timeToFirstToken: number;
       transport?: "http" | "websocket";
+      speedTier?: { requested: string; sent?: string; actual?: string };
     };
     condenseInfo?: {
       prevInputTokens: number;

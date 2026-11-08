@@ -5698,6 +5698,42 @@ describe("AgentEngine", () => {
     });
   });
 
+  it.each([
+    ["priority", "priority"],
+    ["priority", undefined],
+    ["default", undefined],
+    ["priority", "default"],
+  ])(
+    "records Fast selection, final sent tier %s and reported tier %s",
+    async (sent, actual) => {
+      const provider = { ...makeMockProvider(), id: "codex" };
+      provider.stream = async function* (request: StreamRequest) {
+        request.onProviderRequestAttempt?.({
+          model: request.model,
+          serviceTier: "priority",
+        });
+        request.onProviderRequestAttempt?.({
+          model: request.model,
+          serviceTier: sent,
+        });
+        for await (const event of makeProviderStream()) {
+          yield event.type === "usage"
+            ? { ...event, serviceTier: actual }
+            : event;
+        }
+      };
+      const session = await makeSession();
+      session.serviceTier = "fast";
+      session.addUserMessage("hello");
+      const events = await collectEvents(
+        new AgentEngine(makeRegistry(provider)).run(session),
+      );
+      expect(
+        events.find((event) => event.type === "api_request"),
+      ).toMatchObject({ speedTier: { requested: "fast", sent, actual } });
+    },
+  );
+
   it.each(["http", "websocket"] as const)(
     "records the final %s transport in model request details",
     async (transport) => {

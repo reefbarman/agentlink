@@ -2214,6 +2214,7 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
 
   it("sends Ultrafast for Astra and retries at the standard tier when rejected", async () => {
     const bodies: Record<string, unknown>[] = [];
+    const onProviderRequestAttempt = vi.fn();
     createMock
       .mockImplementationOnce(async (body: Record<string, unknown>) => {
         bodies.push(body);
@@ -2244,6 +2245,7 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
       messages: [{ role: "user", content: "ping" }],
       maxTokens: 64,
       serviceTier: "ultrafast",
+      onProviderRequestAttempt,
     })) {
       events.push(event);
     }
@@ -2254,6 +2256,11 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
       service_tier: "ultrafast",
     });
     expect(bodies[1]).not.toHaveProperty("service_tier");
+    expect(
+      onProviderRequestAttempt.mock.calls.map(
+        ([attempt]) => attempt.serviceTier,
+      ),
+    ).toEqual(["ultrafast", "default"]);
     expect(events).toContainEqual(
       expect.objectContaining({ type: "text_delta", text: "hello" }),
     );

@@ -1007,6 +1007,7 @@ export type AppAction =
       durationMs: number;
       timeToFirstToken: number;
       transport?: "http" | "websocket";
+      speedTier?: { requested: string; sent?: string; actual?: string };
       usedPreviousResponseId?: boolean;
       previousResponseIdFallback?: boolean;
       promptCacheKey?: string;
@@ -3027,6 +3028,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         durationMs: action.durationMs,
         timeToFirstToken: action.timeToFirstToken,
         transport: action.transport,
+        speedTier: action.speedTier,
         usedPreviousResponseId: action.usedPreviousResponseId,
         previousResponseIdFallback: action.previousResponseIdFallback,
         promptCacheKey: action.promptCacheKey,

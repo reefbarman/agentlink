@@ -88,6 +88,7 @@ export async function* parseCodexResponseStreamEvents(
   let cacheCreationTokens = 0;
   let inputTokenBreakdownReported: boolean | undefined;
   let providerResponseId: string | undefined;
+  let serviceTier: string | undefined;
   let stopReason: CoreModelStopReason | undefined;
   let sawAuthoritativeTerminal = false;
   let responseCompleted = false;
@@ -399,6 +400,8 @@ export async function* parseCodexResponseStreamEvents(
       eventType === "response.incomplete"
     ) {
       const resp = event.response as Record<string, unknown> | undefined;
+      if (typeof resp?.service_tier === "string")
+        serviceTier = resp.service_tier;
       const status =
         resp?.status ??
         (eventType === "response.incomplete" ? "incomplete" : undefined);
@@ -624,6 +627,7 @@ export async function* parseCodexResponseStreamEvents(
 
   yield {
     type: "usage",
+    ...(serviceTier ? { serviceTier } : {}),
     inputTokens,
     outputTokens,
     cacheReadTokens:

@@ -607,6 +607,7 @@ export type ExtensionToWebview =
       durationMs: number;
       timeToFirstToken: number;
       transport?: "http" | "websocket";
+      speedTier?: { requested: string; sent?: string; actual?: string };
       usedPreviousResponseId?: boolean;
       previousResponseIdFallback?: boolean;
       promptCacheKey?: string;
@@ -978,6 +979,7 @@ export type ExtensionToWebview =
       durationMs: number;
       timeToFirstToken: number;
       transport?: "http" | "websocket";
+      speedTier?: { requested: string; sent?: string; actual?: string };
       usedPreviousResponseId?: boolean;
       previousResponseIdFallback?: boolean;
       promptCacheKey?: string;
@@ -11876,6 +11878,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           durationMs: extMsg.durationMs,
           timeToFirstToken: extMsg.timeToFirstToken,
           transport: extMsg.transport,
+          speedTier: extMsg.speedTier,
           usedPreviousResponseId: extMsg.usedPreviousResponseId,
           previousResponseIdFallback: extMsg.previousResponseIdFallback,
           promptCacheKey: extMsg.promptCacheKey,
@@ -12536,6 +12539,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           durationMs: event.durationMs,
           timeToFirstToken: event.timeToFirstToken,
           transport: event.transport,
+          speedTier: event.speedTier,
           usedPreviousResponseId: event.usedPreviousResponseId,
           previousResponseIdFallback: event.previousResponseIdFallback,
           promptCacheKey: event.promptCacheKey,

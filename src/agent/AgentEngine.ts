@@ -1700,6 +1700,9 @@ export class AgentEngine {
         let storeResponseState = false;
         let transportMonitor: ProviderStreamActivityMonitor | undefined;
         let requestTransport: "http" | "websocket" | undefined;
+        const requestedSpeedTier = session.serviceTier;
+        let sentSpeedTier: string | undefined;
+        let actualSpeedTier: string | undefined;
         // Sticky across retries: records that any attempt for this request
         // abandoned WebSocket for HTTP.
         let transportFallback = false;
@@ -2052,6 +2055,8 @@ export class AgentEngine {
             onProviderRequestAttempt: (attempt) => {
               lastProviderAttempt = attempt;
               requestTransport = attempt.dispatchEvidence?.transport;
+              sentSpeedTier = attempt.serviceTier;
+              actualSpeedTier = undefined;
               const { model } = attempt;
               if (telemetryRequest) {
                 telemetryRequest = {
@@ -2265,6 +2270,7 @@ export class AgentEngine {
                   inputTokenBreakdownReported =
                     event.inputTokenBreakdownReported;
                   usageEstimated = event.estimated;
+                  actualSpeedTier = event.serviceTier;
                   providerResponseId = event.providerResponseId;
                   break;
                 case "provider_progress":
@@ -2636,6 +2642,15 @@ export class AgentEngine {
           durationMs,
           timeToFirstToken,
           ...(requestTransport ? { transport: requestTransport } : {}),
+          ...(isCodex && requestedSpeedTier !== "standard"
+            ? {
+                speedTier: {
+                  requested: requestedSpeedTier,
+                  sent: sentSpeedTier,
+                  actual: actualSpeedTier,
+                },
+              }
+            : {}),
           ...(transportFallback ? { transportFallback: true } : {}),
           providerQueueWaitMs,
           usedPreviousResponseId,

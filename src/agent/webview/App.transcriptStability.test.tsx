@@ -134,6 +134,46 @@ function transcriptOccurrences(container: Element, needle: string): number {
 }
 
 describe("transcript stability across hydrations", () => {
+  it("renders provider-confirmed Fast from a live request event", async () => {
+    const { container } = render(<App vscodeApi={createVsCodeApi()} />);
+    deliverAuthenticatedModels();
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot() });
+    deliver(sessionLoaded("session-1", { streaming: true }));
+    deliver({
+      type: "stateUpdate",
+      state: { sessionId: "session-1", streaming: true },
+    });
+    deliver({
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "Fast response",
+    });
+    deliver({
+      type: "agentToolStart",
+      sessionId: "session-1",
+      toolCallId: "speed-tool",
+      toolName: "read_file",
+      input: {},
+    });
+    deliver({
+      type: "agentApiRequest",
+      sessionId: "session-1",
+      requestId: "speed-request",
+      model: "gpt-6.1-sol",
+      inputTokens: 10,
+      outputTokens: 2,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      durationMs: 200,
+      timeToFirstToken: 50,
+      speedTier: { requested: "fast", sent: "priority", actual: "priority" },
+    });
+    await waitFor(() =>
+      expect(
+        container.querySelector(".api-request-summary")?.textContent,
+      ).toContain("Speed: Fast (confirmed)"),
+    );
+  });
   it("keeps the optimistic first message when its tab is bound to a new session", async () => {
     const vscodeApi = createVsCodeApi();
     const snapshot = createSnapshot("tab-1");

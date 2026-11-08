@@ -1551,6 +1551,27 @@ function projectMessage(
                   ),
                 }
               : {}),
+            ...(message.apiRequest.speedTier
+              ? {
+                  speedTier: {
+                    requested: message.apiRequest.speedTier.requested.slice(
+                      0,
+                      64,
+                    ),
+                    ...(message.apiRequest.speedTier.sent
+                      ? { sent: message.apiRequest.speedTier.sent.slice(0, 64) }
+                      : {}),
+                    ...(message.apiRequest.speedTier.actual
+                      ? {
+                          actual: message.apiRequest.speedTier.actual.slice(
+                            0,
+                            64,
+                          ),
+                        }
+                      : {}),
+                  },
+                }
+              : {}),
             ...(message.apiRequest.transport
               ? { transport: message.apiRequest.transport }
               : {}),

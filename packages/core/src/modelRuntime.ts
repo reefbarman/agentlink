@@ -252,6 +252,8 @@ export interface CoreModelTransportActivity {
 export interface CoreModelProviderRequestAttempt {
   /** Effective wire model for this attempt, after provider-local fallback. */
   model: string;
+  /** Service tier sent on the wire, or `default` when omitted. */
+  serviceTier?: string;
   /** Mutable runtime evidence for watchdogs, never persisted or projected. */
   dispatchEvidence?: import("./codex/responsesTransport.js").ResponsesDispatchEvidence;
 }
@@ -345,6 +347,8 @@ export interface CoreModelUsage {
   /** True only when the provider reported enough detail to partition fresh and cached input. */
   inputTokenBreakdownReported?: boolean;
   serverToolUsage?: CoreModelServerToolUsage;
+  /** Actual service tier reported by the provider, not inferred from the request. */
+  serviceTier?: string;
   /** True when usage was estimated locally because the provider omitted it. */
   estimated?: boolean;
 }
