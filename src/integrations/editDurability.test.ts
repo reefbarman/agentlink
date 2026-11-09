@@ -8,9 +8,29 @@ import {
   captureDocumentState,
   commitAndVerifyEdit,
   documentChangedSince,
+  documentTextMatchesDisk,
 } from "./editDurability.js";
 
 import { workHistoryRegistry } from "../agent/WorkHistoryRegistry.js";
+
+describe("documentTextMatchesDisk", () => {
+  it("matches identical text and ignores a UTF-8 BOM on disk", () => {
+    expect(documentTextMatchesDisk("a\nb", "a\nb")).toBe(true);
+    expect(documentTextMatchesDisk("a\nb", "\uFEFFa\nb")).toBe(true);
+  });
+
+  it("treats a line-ending-only change on disk as out of date", () => {
+    // A copy VS Code has not reloaded after a CRLF to LF conversion would
+    // still raise the save conflict dialog.
+    expect(documentTextMatchesDisk("a\r\nb\r\n", "a\nb\n")).toBe(false);
+    expect(documentTextMatchesDisk("a\nb\n", "a\r\nb\r\n")).toBe(false);
+  });
+
+  it("accepts VS Code's normalized copy of a mixed line-ending file", () => {
+    expect(documentTextMatchesDisk("a\nb\nc", "a\r\nb\nc")).toBe(true);
+    expect(documentTextMatchesDisk("a\nb\nX", "a\r\nb\nc")).toBe(false);
+  });
+});
 
 describe("documentChangedSince", () => {
   const target = path.join(os.tmpdir(), "agentlink-doc-state.ts");

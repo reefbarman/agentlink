@@ -38,6 +38,11 @@ export interface CommitAndVerifyEditRequest {
    * leaving a dirty buffer that needs human-reviewed save_editor recovery.
    */
   autoApproved?: boolean;
+  /**
+   * The clean document is known not to reflect disk yet, so an exact disk
+   * write should not wait for it to reload before verifying.
+   */
+  editorKnownStale?: boolean;
 }
 
 export interface CommitAndVerifyEditResult extends EditReviewResult {
@@ -54,9 +59,127 @@ export const autoSaveRecoveryTiming = {
   lateSaveGraceMs: 500,
   /** How long an exact disk write waits for VS Code to reload the document. */
   documentReloadTimeoutMs: 2_000,
+  /**
+   * How long an auto-approved edit waits for a clean document that is out of
+   * date with disk to reload before writing to disk directly instead.
+   */
+  editorSyncTimeoutMs: 1_500,
 };
 
 let preservingSaveTail: Promise<void> = Promise.resolve();
+
+let editCommitLogger: ((message: string) => void) | undefined;
+
+/**
+ * Route edit-commit diagnostics (commit path, stale editor copies, save
+ * failures and their recovery) to a host log. Pass undefined to disable.
+ */
+export function setEditCommitLogger(
+  logger: ((message: string) => void) | undefined,
+): void {
+  editCommitLogger = logger;
+}
+
+export function logEditCommit(message: string): void {
+  try {
+    editCommitLogger?.(`[edit-commit] ${message}`);
+  } catch {
+    // Diagnostics must never affect the edit itself.
+  }
+}
+
+/**
+ * Clean documents that already failed to catch up with disk, keyed by the
+ * document object and the version that was stale. A later edit of the same
+ * unchanged document skips the wait instead of paying it again.
+ */
+const staleDocumentVersions = new WeakMap<vscode.TextDocument, number>();
+
+/**
+ * Wait until a clean document reflects `diskContent`.
+ *
+ * VS Code reloads a clean document only when its file watcher reports the
+ * change, which can lag behind writes by other processes or by AgentLink's
+ * own direct writes. Editing and saving a document before it reloads makes
+ * VS Code show a "file is newer" Compare/Overwrite dialog, so auto-approved
+ * edits must not save through a document that is out of date with disk.
+ *
+ * Returns true when the document is clean and matches disk, false when it is
+ * dirty or stays out of date for `editorSyncTimeoutMs`.
+ */
+export async function waitForDocumentToMatchDisk(
+  document: vscode.TextDocument,
+  absolutePath: string,
+  diskContent: string,
+): Promise<boolean> {
+  const inSync = () =>
+    documentMatchesTarget(document, absolutePath) &&
+    !document.isDirty &&
+    documentTextMatchesDisk(document.getText(), diskContent);
+  if (inSync()) {
+    staleDocumentVersions.delete(document);
+    return true;
+  }
+  if (document.isDirty || !documentMatchesTarget(document, absolutePath)) {
+    return false;
+  }
+  if (staleDocumentVersions.get(document) === document.version) return false;
+
+  const startedAt = Date.now();
+  const synced = await waitForDocumentState(
+    document,
+    inSync,
+    autoSaveRecoveryTiming.editorSyncTimeoutMs,
+  );
+  if (synced) {
+    staleDocumentVersions.delete(document);
+    logEditCommit(
+      `editor copy caught up with disk after ${Date.now() - startedAt}ms: ${absolutePath}`,
+    );
+  } else {
+    staleDocumentVersions.set(document, document.version);
+    logEditCommit(
+      `editor copy still out of date with disk after ${Date.now() - startedAt}ms: ${absolutePath}`,
+    );
+  }
+  return synced;
+}
+
+/**
+ * True when VS Code's text for a clean document represents `diskContent`.
+ * The comparison is exact apart from a UTF-8 BOM, so a line-ending-only
+ * change on disk still counts as out of date. The one exception is a file
+ * with mixed line endings, which VS Code normalizes to a single EOL when it
+ * loads it, so its text can never match byte for byte.
+ */
+export function documentTextMatchesDisk(
+  documentText: string,
+  diskContent: string,
+): boolean {
+  const disk = diskContent.replace(/^\uFEFF/, "");
+  if (documentText === disk) return true;
+  const mixedLineEndings = disk.includes("\r\n") && /(^|[^\r])\n/.test(disk);
+  return (
+    mixedLineEndings &&
+    normalizeEditorText(documentText) === normalizeEditorText(disk)
+  );
+}
+
+/**
+ * True when an edit can be written to disk as UTF-8 without changing how
+ * VS Code decoded the file. Hosts without the `encoding` API fall back to
+ * checking that the disk text decoded without replacement characters.
+ */
+export function canWriteDocumentDirectly(
+  document: vscode.TextDocument,
+  diskContent: string,
+): boolean {
+  const encoding = (document as { encoding?: string }).encoding;
+  if (encoding !== undefined) {
+    return encoding === "utf8" || encoding === "utf8bom";
+  }
+  return !diskContent.includes("\uFFFD");
+}
 
 /**
  * Save one approved editor state and verify its durable disk representation.
@@ -175,6 +298,15 @@ async function commitAndVerifyEditUnrecorded(
       saveOutcome = "exception";
     }
 
+    if (!saved) {
+      logEditCommit(
+        `${policy === "preserve_exact" ? "exact" : "ordinary"} editor save failed (${saveOutcome}${
+          saveException
+            ? `: ${boundedSaveErrorMessage(saveException) ?? "no detail"}`
+            : ""
+        }): ${request.absolutePath}`,
+      );
+    }
     if (!saved && request.autoApproved) {
       autoRecovery = await recoverFailedAutoSave({
         document: request.document,
@@ -182,7 +314,12 @@ async function commitAndVerifyEditUnrecorded(
         policy,
         saveAttemptContent,
         approvedContent: request.approvedContent,
+        baselineContent: request.baselineContent,
+        expectedDiskContent,
       });
+      logEditCommit(
+        `auto-save recovery: ${autoRecovery ?? "not possible"}: ${request.absolutePath}`,
+      );
       saved =
         autoRecovery === "late_save_detected" ||
         autoRecovery === "save_retried";
@@ -552,6 +689,8 @@ async function recoverFailedAutoSave(params: {
   policy: EditDurabilityPolicy;
   saveAttemptContent: string;
   approvedContent: string;
+  baselineContent: string;
+  expectedDiskContent: string;
 }): Promise<AutoSaveRecovery | undefined> {
   const { document, absolutePath } = params;
   const ownsBuffer = () =>
@@ -572,20 +711,35 @@ async function recoverFailedAutoSave(params: {
   }
   if (!ownsBuffer()) return undefined;
 
-  try {
-    const saved =
-      params.policy === "preserve_exact"
-        ? await withPreservingSaveCoordinator(() =>
-            saveWithoutFormatting(document, absolutePath, undefined, {
-              closeOpenedTab: true,
-            }),
-          )
-        : await document.save();
-    if (saved || !document.isDirty) return "save_retried";
-  } catch {
+  // When disk moved away from the baseline (another writer, or a document
+  // VS Code had not reloaded), VS Code failed with a "file is newer"
+  // conflict. Retrying would show that Compare/Overwrite dialog again, and
+  // overwriting would discard the other change, so go straight to revert.
+  const disk = await observeDisk(absolutePath);
+  const diskConflict =
+    disk.status === "readable" &&
+    disk.content !== params.baselineContent &&
+    disk.content !== params.expectedDiskContent;
+  if (diskConflict) {
+    logEditCommit(
+      `failed save conflicts with a newer file on disk; skipping retry: ${absolutePath}`,
+    );
+  } else {
+    try {
+      const saved =
+        params.policy === "preserve_exact"
+          ? await withPreservingSaveCoordinator(() =>
+              saveWithoutFormatting(document, absolutePath, undefined, {
+                closeOpenedTab: true,
+              }),
+            )
+          : await document.save();
+      if (saved || !document.isDirty) return "save_retried";
+    } catch {
+      if (!document.isDirty) return "save_retried";
+    }
     if (!document.isDirty) return "save_retried";
   }
-  if (!document.isDirty) return "save_retried";
   if (!ownsBuffer()) return undefined;
   // Revert is destructive and acts on the active editor. Only use it while no
   // tab shows the file, so nobody can be typing into the buffer meanwhile.
@@ -682,6 +836,23 @@ async function commitExactEditToDiskUnrecorded(
       ],
     };
   }
+  // Writing beneath unsaved editor changes would leave them to conflict with
+  // disk when the user saves, so re-check right before the write.
+  if (
+    document.isDirty ||
+    !documentMatchesTarget(document, request.absolutePath)
+  ) {
+    return {
+      status: "error",
+      path: request.relativePath,
+      error: "File has unsaved editor changes",
+      reason: "dirty_document_conflict",
+      document_dirty: document.isDirty,
+      next_steps: [
+        "The file gained unsaved editor changes before the write, so disk was not changed. Reconcile the editor buffer in VS Code, re-read the file, and compose the edit again.",
+      ],
+    };
+  }
   const normalizedApproved = normalizeEditorText(request.approvedContent);
   const editorReloaded = () =>
     documentMatchesTarget(document, request.absolutePath) &&
@@ -692,7 +863,9 @@ async function commitExactEditToDiskUnrecorded(
   const reloaded = await waitForDocumentState(
     document,
     editorReloaded,
-    autoSaveRecoveryTiming.documentReloadTimeoutMs,
+    request.editorKnownStale
+      ? 0
+      : autoSaveRecoveryTiming.documentReloadTimeoutMs,
     async () => {
       try {
         await fs.writeFile(request.absolutePath, expectedDiskContent, "utf-8");
@@ -728,16 +901,17 @@ async function commitExactEditToDiskUnrecorded(
     };
   }
 
-  // A clean document that VS Code has not reloaded yet still shows the
-  // baseline; verify disk alone rather than report a false divergence. A
-  // buffer that became dirty or changed meanwhile will not reload, so it is
-  // verified against disk and reported if it diverges.
+  // A clean document that VS Code has not reloaded yet still shows an older
+  // disk version (the baseline, or something earlier when it was already out
+  // of date); verify disk alone rather than report a false divergence. A
+  // clean document holds no unsaved work. A buffer that became dirty
+  // meanwhile will not reload, so it is verified against disk and reported
+  // if it diverges.
   const editorStale =
     !reloaded &&
     documentMatchesTarget(document, request.absolutePath) &&
     !document.isDirty &&
-    normalizeEditorText(document.getText()) ===
-      normalizeEditorText(request.baselineContent);
+    normalizeEditorText(document.getText()) !== normalizedApproved;
   const verified = await verifyCommittedEdit(
     request,
     "preserve_exact",

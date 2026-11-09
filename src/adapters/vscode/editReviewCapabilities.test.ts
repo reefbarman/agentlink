@@ -329,6 +329,7 @@ describe("createVscodeEditReviewProvider", () => {
     workspaceEditInstances.length = 0;
     autoSaveRecoveryTiming.lateSaveGraceMs = 0;
     autoSaveRecoveryTiming.documentReloadTimeoutMs = 0;
+    autoSaveRecoveryTiming.editorSyncTimeoutMs = 0;
   });
 
   it.each(["auto", "interactive"] as const)(
@@ -499,32 +500,21 @@ describe("createVscodeEditReviewProvider", () => {
     }
   });
 
-  it("applies an auto-approved edit when a clean editor document is stale", async () => {
+  it("writes an auto-approved edit to disk directly when a clean editor document stays out of date", async () => {
     const tempDir = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
     );
     const filePath = path.join(tempDir, "file.ts");
     fs.writeFileSync(filePath, "disk baseline", "utf-8");
-    let documentContent = "stale clean editor content";
-    let dirty = false;
     const doc = {
-      getText: vi.fn(() => documentContent),
+      version: 3,
+      encoding: "utf8",
+      getText: vi.fn(() => "stale clean editor content"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
       uri: { scheme: "file", fsPath: filePath },
-      get isDirty() {
-        return dirty;
-      },
-      save: vi.fn(async () => {
-        fs.writeFileSync(filePath, documentContent, "utf-8");
-        dirty = false;
-        return true;
-      }),
+      isDirty: false,
+      save: vi.fn(async () => true),
     };
-    applyEdit.mockImplementationOnce(async () => {
-      documentContent = "proposed content";
-      dirty = true;
-      return true;
-    });
     openTextDocument.mockResolvedValue(doc);
 
     try {
@@ -540,15 +530,98 @@ describe("createVscodeEditReviewProvider", () => {
         operation: "modified",
       });
 
+      // Saving the out-of-date copy would make VS Code show a "file is
+      // newer" Compare/Overwrite dialog, so it is never edited or saved.
       expect(result).toMatchObject({
         status: "accepted",
         path: "file.ts",
         finalContent: "proposed content",
+        commit_path: "direct_write_stale_editor",
+        warnings: [
+          expect.stringContaining("VS Code had not reloaded"),
+          expect.stringContaining("without format-on-save"),
+        ],
       });
+      expect(applyEdit).not.toHaveBeenCalled();
+      expect(doc.save).not.toHaveBeenCalled();
+      expect(showTextDocument).not.toHaveBeenCalled();
+      expect(executeCommand).not.toHaveBeenCalled();
+      expect(fs.readFileSync(filePath, "utf-8")).toBe("proposed content");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("saves through VS Code once an out-of-date clean editor document catches up with disk", async () => {
+    const tempDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
+    );
+    const filePath = path.join(tempDir, "file.ts");
+    fs.writeFileSync(filePath, "disk baseline", "utf-8");
+    let documentContent = "stale clean editor content";
+    let dirty = false;
+    const doc = {
+      version: 1,
+      encoding: "utf8",
+      getText: vi.fn(() => documentContent),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { scheme: "file", fsPath: filePath },
+      get isDirty() {
+        return dirty;
+      },
+      save: vi.fn(async () => {
+        fs.writeFileSync(filePath, documentContent, "utf-8");
+        dirty = false;
+        return true;
+      }),
+    };
+    const changeListeners: Array<(event: { document: unknown }) => void> = [];
+    const vscodeWorkspace = (await import("vscode")).workspace as unknown as {
+      onDidChangeTextDocument?: unknown;
+    };
+    vscodeWorkspace.onDidChangeTextDocument = (
+      listener: (event: { document: unknown }) => void,
+    ) => {
+      changeListeners.push(listener);
+      // VS Code's file watcher reports the newer disk version shortly after.
+      setTimeout(() => {
+        documentContent = "disk baseline";
+        doc.version++;
+        for (const notify of changeListeners) notify({ document: doc });
+      }, 0);
+      return { dispose: vi.fn() };
+    };
+    autoSaveRecoveryTiming.editorSyncTimeoutMs = 1_000;
+    applyEdit.mockImplementationOnce(async () => {
+      documentContent = "proposed content";
+      dirty = true;
+      return true;
+    });
+    openTextDocument.mockResolvedValue(doc);
+
+    try {
+      const result = await createVscodeEditReviewProvider().reviewAndApply({
+        mode: "auto",
+        absolutePath: filePath,
+        relativePath: "file.ts",
+        content: "proposed content",
+        outsideWorkspace: false,
+        diagnosticDelay: 0,
+        sessionId: "session-1",
+        operation: "modified",
+      });
+
+      expect(result).toMatchObject({
+        status: "accepted",
+        finalContent: "proposed content",
+        commit_path: "editor_save",
+      });
+      expect(result).not.toHaveProperty("warnings");
       expect(applyEdit).toHaveBeenCalledOnce();
       expect(doc.save).toHaveBeenCalledOnce();
       expect(fs.readFileSync(filePath, "utf-8")).toBe("proposed content");
     } finally {
+      delete vscodeWorkspace.onDidChangeTextDocument;
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -1155,6 +1228,64 @@ describe("createVscodeEditReviewProvider", () => {
     }
   });
 
+  it("skips the retry and reverts when the failed save conflicts with a newer file on disk", async () => {
+    const { filePath, cleanup } = makeAutoTempFile("old");
+    let content = "old";
+    let dirty = false;
+    const doc = {
+      getText: vi.fn(() => content),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { scheme: "file", fsPath: filePath },
+      get isDirty() {
+        return dirty;
+      },
+      // Another writer changed the file, so VS Code reports "file is newer".
+      save: vi.fn(async () => {
+        fs.writeFileSync(filePath, "changed by another writer", "utf-8");
+        return false;
+      }),
+    };
+    applyEdit.mockImplementationOnce(async () => {
+      content = "new";
+      dirty = true;
+      return true;
+    });
+    openTextDocument.mockResolvedValue(doc);
+    showTextDocument.mockImplementation(async (shown) => {
+      const editor = { document: shown };
+      windowState.activeTextEditor = editor;
+      return editor;
+    });
+    executeCommand.mockImplementation(async (command: string) => {
+      expect(command).toBe("workbench.action.files.revert");
+      content = fs.readFileSync(filePath, "utf-8");
+      dirty = false;
+    });
+
+    try {
+      const result = await createVscodeEditReviewProvider().reviewAndApply(
+        autoParams(filePath),
+      );
+      expect(result).toMatchObject({
+        status: "error",
+        auto_recovery: "buffer_reverted_to_disk",
+        next_steps: [
+          expect.stringContaining("no unsaved changes remain"),
+          expect.stringContaining("re-read it"),
+        ],
+      });
+      // A retry would raise VS Code's Compare/Overwrite dialog again.
+      expect(doc.save).toHaveBeenCalledOnce();
+      expect(executeCommand).toHaveBeenCalledOnce();
+      expect(doc.isDirty).toBe(false);
+      expect(fs.readFileSync(filePath, "utf-8")).toBe(
+        "changed by another writer",
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
   it("does not revert a failed auto-approved save while a tab shows the file", async () => {
     const { filePath, cleanup } = makeAutoTempFile("old");
     let content = "old";
@@ -1421,6 +1552,9 @@ describe("createVscodeMultiFileEditReviewProvider", () => {
     applyEdit.mockResolvedValue(true);
     workspaceEditInstances.length = 0;
     textDocuments.length = 0;
+    // Fake paths are not on disk unless a test says otherwise.
+    fakeDiskFiles.clear();
+    autoSaveRecoveryTiming.editorSyncTimeoutMs = 0;
     acceptedMatchIds.clear();
     acceptedMatchIds.add("0:0");
   });
@@ -1771,6 +1905,60 @@ describe("createVscodeMultiFileEditReviewProvider", () => {
 
   describe("save_without_formatting", () => {
     const exactSave = vi.mocked(applyWorkspaceEditAndSaveWithoutFormatting);
+
+    beforeEach(() => {
+      // Fake paths are not on disk, so these cases exercise the editor save
+      // path; the direct disk path is covered with a real file below.
+      fakeDiskFiles.clear();
+      autoSaveRecoveryTiming.documentReloadTimeoutMs = 0;
+    });
+
+    it("writes clean, up-to-date replacement targets straight to disk without the editor", async () => {
+      const tempDir = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-find-replace-")),
+      );
+      const filePath = path.join(tempDir, "example.ts");
+      fs.writeFileSync(filePath, "xoldy", "utf-8");
+      const doc = { ...textDocument(filePath, "xoldy"), encoding: "utf8" };
+      openTextDocument.mockResolvedValue(doc);
+      enableMasterBypass();
+      const provider = createVscodeMultiFileEditReviewProvider(
+        { isAgentWriteApproved: vi.fn(() => false) } as never,
+        {} as never,
+      );
+
+      try {
+        const result = await provider.reviewAndApply({
+          find: "old",
+          replace: "new",
+          isRegex: false,
+          sessionId: "session-1",
+          totalMatches: 1,
+          saveWithoutFormatting: true,
+          files: [replacementFile(filePath, "example.ts", [["0:0", 1]])],
+        });
+
+        expect(result.isError).toBeUndefined();
+        expect(payload(result)).toMatchObject({
+          status: "applied",
+          files_changed: 1,
+          files: [
+            {
+              path: "example.ts",
+              durability: { status: "durable", outcome: "exact" },
+            },
+          ],
+        });
+        expect(fs.readFileSync(filePath, "utf-8")).toBe("xnewy");
+        expect(exactSave).not.toHaveBeenCalled();
+        expect(applyEdit).not.toHaveBeenCalled();
+        expect(doc.save).not.toHaveBeenCalled();
+        expect(showTextDocument).not.toHaveBeenCalled();
+        expect(executeCommand).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
 
     function textDocument(filePath: string, text: string) {
       return {

@@ -334,6 +334,8 @@ const METRIC_KEYS = new Set([
   "editDurabilityOutcome",
   "editDurabilityPolicy",
   "editDurabilityReason",
+  "editCommitPath",
+  "editAutoRecovery",
   "approval_by",
   "route",
   "error_code",

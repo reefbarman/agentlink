@@ -1296,6 +1296,19 @@ const WRITE_DURABILITY_REASONS = new Set([
   "exact_preservation_failed",
   "missing_durability_evidence",
   "edit_review_state_missing",
+  "editor_out_of_date_with_disk",
+]);
+
+const EDIT_COMMIT_PATHS = new Set([
+  "editor_save",
+  "direct_write",
+  "direct_write_stale_editor",
+]);
+
+const EDIT_AUTO_RECOVERIES = new Set([
+  "late_save_detected",
+  "save_retried",
+  "buffer_reverted_to_disk",
 ]);
 
 export function getWriteToolUsageMetrics(result: ToolResult): ToolUsageMetrics {
@@ -1304,6 +1317,8 @@ export function getWriteToolUsageMetrics(result: ToolResult): ToolUsageMetrics {
   try {
     const parsed = JSON.parse(text) as {
       reason?: unknown;
+      commit_path?: unknown;
+      auto_recovery?: unknown;
       durability?: {
         status?: unknown;
         outcome?: unknown;
@@ -1337,6 +1352,18 @@ export function getWriteToolUsageMetrics(result: ToolResult): ToolUsageMetrics {
       WRITE_DURABILITY_REASONS.has(parsed.reason)
     ) {
       metrics.editDurabilityReason = parsed.reason;
+    }
+    if (
+      typeof parsed.commit_path === "string" &&
+      EDIT_COMMIT_PATHS.has(parsed.commit_path)
+    ) {
+      metrics.editCommitPath = parsed.commit_path;
+    }
+    if (
+      typeof parsed.auto_recovery === "string" &&
+      EDIT_AUTO_RECOVERIES.has(parsed.auto_recovery)
+    ) {
+      metrics.editAutoRecovery = parsed.auto_recovery;
     }
     return metrics;
   } catch {

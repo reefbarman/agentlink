@@ -10,14 +10,19 @@ import {
 } from "../../integrations/DiffViewProvider.js";
 import {
   captureDocumentState,
+  canWriteDocumentDirectly,
+  documentTextMatchesDisk,
   commitAndVerifyEdit,
   commitExactEditToDisk,
+  logEditCommit,
+  waitForDocumentToMatchDisk,
   documentChangedSince,
   documentMatchesTarget,
 } from "../../integrations/editDurability.js";
 import { getEditDurabilityPolicy } from "../../core/editDurability.js";
 import {
   normalizeEditorText,
+  type EditCommitPath,
   type EditReviewDecision,
   EditReviewParams,
   EditReviewProvider,
@@ -428,13 +433,27 @@ function dirtyDocumentConflictResult(params: {
 
 type AutoApprovedCommit =
   | { kind: "aborted"; result: EditReviewResult }
-  | { kind: "committed"; commit: CommitAndVerifyEditResult };
+  | {
+      kind: "committed";
+      commit: CommitAndVerifyEditResult & { commit_path: EditCommitPath };
+    };
+
+const STALE_EDITOR_WRITE_WARNING =
+  "VS Code's copy of this file was out of date with disk, so the edit was written to disk directly without format-on-save or other save actions. This avoids a save conflict dialog. Run the project formatter if formatting matters.";
 
 /**
- * Apply and commit an auto-approved edit without opening an editor tab.
- * Ordinary saves use `document.save()`, which still runs format-on-save and
- * code-actions-on-save on the hidden document. Exact saves of a clean,
- * up-to-date document write straight to disk, so they need no active editor.
+ * Apply and commit an auto-approved edit without opening an editor tab or
+ * risking a VS Code save conflict.
+ *
+ * - Exact saves of a clean document write straight to disk.
+ * - Ordinary saves first wait for VS Code's copy to match disk, then edit and
+ *   `document.save()` it so format-on-save and code actions still run. When
+ *   the copy stays out of date with disk, saving it would make VS Code show a
+ *   "file is newer" Compare/Overwrite dialog, so the edit is written to disk
+ *   directly instead and reported as `direct_write_stale_editor`.
+ * - A dirty buffer that only holds an earlier agent proposal is edited and
+ *   saved through VS Code as before.
+ *
  * Callers must hold the file lock.
  */
 async function commitAutoApprovedEdit(args: {
@@ -481,19 +500,48 @@ async function commitAutoApprovedEdit(args: {
   const exact =
     params.saveWithoutFormatting ||
     getEditDurabilityPolicy(params.relativePath) === "preserve_exact";
-  // Direct writes emit UTF-8, so only use them when VS Code positively
-  // decoded the file as UTF-8; other encodings keep the editor save path.
-  const utf8Document = doc.encoding === "utf8" || doc.encoding === "utf8bom";
-  if (
-    exact &&
-    utf8Document &&
-    !doc.isDirty &&
-    normalizeEditorText(doc.getText()) === normalizeEditorText(baselineContent)
-  ) {
-    snap.beginPostChangeObservation();
-    const commit = await commitExactEditToDisk(commitRequest);
-    snap.recordPostChangeDocumentVersion();
-    return { kind: "committed", commit };
+  // Direct writes emit UTF-8, so only use them when VS Code decoded the file
+  // as UTF-8; other encodings keep the editor save path.
+  if (!doc.isDirty && canWriteDocumentDirectly(doc, baselineContent)) {
+    const editorInSync =
+      exact ||
+      (await waitForDocumentToMatchDisk(
+        doc,
+        params.absolutePath,
+        baselineContent,
+      ));
+    if (exact || !editorInSync) {
+      snap.beginPostChangeObservation();
+      const commit = await commitExactEditToDisk({
+        ...commitRequest,
+        editorKnownStale: !editorInSync,
+      });
+      snap.recordPostChangeDocumentVersion();
+      const commitPath: EditCommitPath = editorInSync
+        ? "direct_write"
+        : "direct_write_stale_editor";
+      logEditCommit(
+        `${commitPath} ${commit.status}: ${params.absolutePath}${
+          commit.reason ? ` (${commit.reason})` : ""
+        }`,
+      );
+      return {
+        kind: "committed",
+        commit: {
+          ...commit,
+          commit_path: commitPath,
+          ...(commitPath === "direct_write_stale_editor" &&
+          commit.status === "accepted"
+            ? {
+                warnings: [
+                  ...(commit.warnings ?? []),
+                  STALE_EDITOR_WRITE_WARNING,
+                ],
+              }
+            : {}),
+        },
+      };
+    }
   }
 
   if (doc.getText() !== content) {
@@ -522,9 +570,17 @@ async function commitAutoApprovedEdit(args: {
     recordAgentProposalBuffer(params.absolutePath, content, baselineContent);
   }
   snap.recordPostChangeDocumentVersion();
+  const commit = await commitAndVerifyEdit(commitRequest);
+  if (commit.status !== "accepted" || commit.auto_recovery) {
+    logEditCommit(
+      `editor_save ${commit.status}: ${params.absolutePath}${
+        commit.reason ? ` (${commit.reason})` : ""
+      }${commit.auto_recovery ? ` recovery=${commit.auto_recovery}` : ""}`,
+    );
+  }
   return {
     kind: "committed",
-    commit: await commitAndVerifyEdit(commitRequest),
+    commit: { ...commit, commit_path: "editor_save" },
   };
 }
 
@@ -804,6 +860,66 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
   };
 }
 
+interface ExactReplacementWrite {
+  absolutePath: string;
+  relativePath: string;
+  document: vscode.TextDocument;
+  proposedContent: string;
+}
+
+/**
+ * Commit exact find_and_replace changes straight to disk, without editing
+ * VS Code's copies or opening editor tabs, when every target is a clean UTF-8
+ * document that matches disk. Returns undefined, writing nothing, when any
+ * target needs the editor save path. Callers must hold every file lock.
+ */
+async function commitExactReplacementsToDisk(
+  writes: readonly ExactReplacementWrite[],
+): Promise<CommitAndVerifyEditResult[] | undefined> {
+  const baselines: string[] = [];
+  for (const write of writes) {
+    let disk: string;
+    try {
+      disk = await fs.readFile(write.absolutePath, "utf-8");
+    } catch {
+      return undefined;
+    }
+    if (
+      write.document.isDirty ||
+      !documentMatchesTarget(write.document, write.absolutePath) ||
+      !canWriteDocumentDirectly(write.document, disk) ||
+      !documentTextMatchesDisk(write.document.getText(), disk)
+    ) {
+      return undefined;
+    }
+    baselines.push(disk);
+  }
+  const commits: CommitAndVerifyEditResult[] = [];
+  for (let index = 0; index < writes.length; index++) {
+    const write = writes[index]!;
+    const commit = await commitExactEditToDisk({
+      document: write.document,
+      absolutePath: write.absolutePath,
+      relativePath: write.relativePath,
+      baselineExists: true,
+      baselineContent: baselines[index]!,
+      approvedContent: write.proposedContent,
+      reviewState: "dirty_document_preserved",
+      saveWithoutFormatting: true,
+      autoApproved: true,
+    });
+    if (commit.status !== "accepted") {
+      logEditCommit(
+        `find_and_replace direct_write ${commit.status}: ${write.absolutePath}${
+          commit.reason ? ` (${commit.reason})` : ""
+        }`,
+      );
+    }
+    commits.push(commit);
+  }
+  return commits;
+}
+
 /**
  * Build the public find_and_replace result for a save_without_formatting
  * commit. Full success requires durable evidence with a final-content hash for
@@ -984,6 +1100,7 @@ export function createVscodeMultiFileEditReviewProvider(
                 }
                 if (params.saveWithoutFormatting) {
                   return applyWorkspaceEditAndSaveWithoutFormatting({
+                    autoApproved: true,
                     edit: candidateEdit,
                     targets: params.files.map((file) => ({
                       absolutePath: file.absolutePath,
@@ -1190,15 +1307,60 @@ export function createVscodeMultiFileEditReviewProvider(
             absolutePath: string;
             relativePath: string;
           }> = [];
+          const exactWrites: ExactReplacementWrite[] = [];
 
           for (const file of params.files) {
             const uri = vscode.Uri.file(file.absolutePath);
             const doc = await vscode.workspace.openTextDocument(uri);
+            // Saving a clean copy that has not reloaded a newer disk version
+            // raises VS Code's "file is newer" Compare/Overwrite dialog.
+            if (doc.uri.scheme === "file" && !doc.isDirty) {
+              const diskContent = await fs
+                .readFile(file.absolutePath, "utf-8")
+                .catch(() => undefined);
+              if (
+                diskContent !== undefined &&
+                !(await waitForDocumentToMatchDisk(
+                  doc,
+                  file.absolutePath,
+                  diskContent,
+                ))
+              ) {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: JSON.stringify({
+                        status: "stale_proposal",
+                        reason: "editor_out_of_date_with_disk",
+                        no_changes_applied: true,
+                        path: file.relativePath,
+                        message:
+                          "VS Code has not reloaded this file since it changed on disk. Retry the replacement shortly, or edit the file with apply_diff or write_file.",
+                      }),
+                    },
+                  ],
+                };
+              }
+            }
             const baselineContent = doc.getText();
             const matchesById = new Map(
               file.matches.map((match) => [match.id, match.matchText]),
             );
             let fileChanges = 0;
+            let proposedContent = baselineContent;
+            const acceptedReplacements = file.replacements
+              .filter(
+                (replacement) =>
+                  !acceptedIds || acceptedIds.has(replacement.matchId),
+              )
+              .sort((left, right) => right.startOffset - left.startOffset);
+            for (const replacement of acceptedReplacements) {
+              proposedContent =
+                proposedContent.slice(0, replacement.startOffset) +
+                replacement.newText +
+                proposedContent.slice(replacement.endOffset);
+            }
             for (const replacement of file.replacements) {
               if (!acceptedIds || acceptedIds.has(replacement.matchId)) {
                 const expectedMatch = matchesById.get(replacement.matchId);
@@ -1246,6 +1408,12 @@ export function createVscodeMultiFileEditReviewProvider(
                 absolutePath: file.absolutePath,
                 relativePath: file.relativePath,
               });
+              exactWrites.push({
+                absolutePath: file.absolutePath,
+                relativePath: file.relativePath,
+                document: doc,
+                proposedContent,
+              });
             }
           }
 
@@ -1266,28 +1434,35 @@ export function createVscodeMultiFileEditReviewProvider(
           }
 
           if (params.saveWithoutFormatting) {
+            const buildResult = (
+              commits: readonly CommitAndVerifyEditResult[],
+            ) =>
+              buildExactSaveReplacementResult({
+                commits,
+                changes: appliedFiles.map((file) => file.changes),
+                success: {
+                  status: "applied",
+                  find: params.find,
+                  replace: params.replace,
+                  files_changed: appliedFiles.length,
+                  total_replacements: appliedCount,
+                  ...(acceptedIds && appliedCount < params.totalMatches
+                    ? { excluded: params.totalMatches - appliedCount }
+                    : {}),
+                  ...(followUp ? { follow_up: followUp } : {}),
+                },
+              });
+            const directCommits =
+              await commitExactReplacementsToDisk(exactWrites);
+            if (directCommits) return buildResult(directCommits);
             return await applyWorkspaceEditAndSaveWithoutFormatting({
+              autoApproved: canAutoApprove,
               edit,
               targets: appliedTargets,
               applyFailure: errorResult("Failed to apply replacements", {
                 no_changes_applied: true,
               }),
-              buildResult: (commits) =>
-                buildExactSaveReplacementResult({
-                  commits,
-                  changes: appliedFiles.map((file) => file.changes),
-                  success: {
-                    status: "applied",
-                    find: params.find,
-                    replace: params.replace,
-                    files_changed: appliedFiles.length,
-                    total_replacements: appliedCount,
-                    ...(acceptedIds && appliedCount < params.totalMatches
-                      ? { excluded: params.totalMatches - appliedCount }
-                      : {}),
-                    ...(followUp ? { follow_up: followUp } : {}),
-                  },
-                }),
+              buildResult,
             });
           }
 

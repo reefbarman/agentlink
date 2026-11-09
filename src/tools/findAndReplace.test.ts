@@ -119,6 +119,48 @@ describe("handleFindAndReplace", () => {
     });
   });
 
+  it("refuses to compute replacements from a clean editor copy that is out of date with disk", async () => {
+    const { autoSaveRecoveryTiming } =
+      await import("../integrations/editDurability.js");
+    const previousTimeout = autoSaveRecoveryTiming.editorSyncTimeoutMs;
+    autoSaveRecoveryTiming.editorSyncTimeoutMs = 0;
+    const filePath = path.join(workspaceDir, "src", "example.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old value changed on disk", "utf-8");
+    mockWorkspace.findFiles.mockResolvedValue([
+      { scheme: "file", fsPath: filePath },
+    ]);
+    mockWorkspace.openTextDocument.mockResolvedValue({
+      ...createDocument(filePath, "old value"),
+      uri: { scheme: "file", fsPath: filePath },
+      version: 1,
+      isDirty: false,
+    });
+    const reviewAndApply = vi.fn();
+    const { handleFindAndReplace } = await import("./findAndReplace.js");
+
+    try {
+      const result = await handleFindAndReplace(
+        { glob: "src/*.ts", find: "old", replace: "new" },
+        { isPathTrusted: vi.fn(() => true) } as never,
+        {} as never,
+        "session-1",
+        {} as never,
+        undefined,
+        { multiFileEditReviewProvider: { reviewAndApply } },
+      );
+
+      expect(toolJson(result)).toMatchObject({
+        reason: "editor_out_of_date_with_disk",
+        no_changes_applied: true,
+        paths: [expect.stringContaining("example.ts")],
+      });
+      expect(reviewAndApply).not.toHaveBeenCalled();
+    } finally {
+      autoSaveRecoveryTiming.editorSyncTimeoutMs = previousTimeout;
+    }
+  });
+
   it("skips only the read approval for outside agent instruction artifacts", async () => {
     const instructionPath = path.join(tempDir, "outside", "CLAUDE.md");
     fs.mkdirSync(path.dirname(instructionPath), { recursive: true });

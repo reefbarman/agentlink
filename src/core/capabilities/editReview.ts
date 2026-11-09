@@ -80,6 +80,11 @@ export interface EditSaveFailureRecovery {
  * - `buffer_reverted_to_disk`: the retry failed too, so the buffer holding
  *   only the agent's proposal was reverted to disk; the edit was not applied.
  */
+export type EditCommitPath =
+  | "editor_save"
+  | "direct_write"
+  | "direct_write_stale_editor";
+
 export type AutoSaveRecovery =
   | "late_save_detected"
   | "save_retried"
@@ -164,6 +169,13 @@ export interface EditReviewResult {
   apply_failure?: EditApplyFailureRecovery;
   save_failure?: EditSaveFailureRecovery;
   auto_recovery?: AutoSaveRecovery;
+  /**
+   * How an auto-approved edit reached disk: `editor_save` saved VS Code's
+   * copy (running save participants), `direct_write` wrote the exact bytes,
+   * and `direct_write_stale_editor` wrote directly because VS Code's copy was
+   * out of date with disk, skipping save participants to avoid a conflict.
+   */
+  commit_path?: EditCommitPath;
   next_steps?: string[];
   warnings?: string[];
   decision?: EditReviewDecision;

@@ -13,6 +13,7 @@ import {
   initializeTerminalManager,
 } from "./integrations/TerminalManager.js";
 import { registerDiffViewCommands } from "./integrations/diffViewCommands.js";
+import { setEditCommitLogger } from "./integrations/editDurability.js";
 import { registerDiffViewContentProvider } from "./integrations/diffViewContentProvider.js";
 import { registerStandaloneInstallCommands } from "./integrations/standaloneInstallCommands.js";
 import { SidebarProvider } from "./sidebar/SidebarProvider.js";
@@ -547,6 +548,8 @@ export async function activate(
 
   outputChannel = vscode.window.createOutputChannel("AgentLink");
   context.subscriptions.push(outputChannel);
+  setEditCommitLogger(log);
+  context.subscriptions.push({ dispose: () => setEditCommitLogger(undefined) });
 
   if (getConfig<boolean>("diagnostics.heapProfiling")) {
     const heapProfiler = new HeapPressureProfiler({

@@ -1,3 +1,4 @@
+import { readFile } from "fs/promises";
 import * as vscode from "vscode";
 
 import {
@@ -9,6 +10,7 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { isAgentInstructionReadPath } from "../approvals/protectedPaths.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
+import { waitForDocumentToMatchDisk } from "../integrations/editDurability.js";
 
 import {
   buildFindAndReplacePattern,
@@ -167,6 +169,7 @@ export async function handleFindAndReplace(
 
     // Find all occurrences with context
     const fileReplacements: FileReplacement[] = [];
+    const outOfDatePaths: string[] = [];
     let totalChanges = 0;
 
     for (let fileIdx = 0; fileIdx < fileUris.length; fileIdx++) {
@@ -176,6 +179,22 @@ export async function handleFindAndReplace(
         doc = await vscode.workspace.openTextDocument(uri);
       } catch {
         continue; // Skip files that can't be opened (binary, etc.)
+      }
+
+      // Matches are located in VS Code's copy of the file. A clean copy that
+      // has not reloaded a newer disk version would produce edits against
+      // old content and a "file is newer" conflict when saved.
+      if (doc.uri.scheme === "file" && !doc.isDirty) {
+        const diskContent = await readFile(doc.uri.fsPath, "utf-8").catch(
+          () => undefined,
+        );
+        if (
+          diskContent !== undefined &&
+          !(await waitForDocumentToMatchDisk(doc, doc.uri.fsPath, diskContent))
+        ) {
+          outOfDatePaths.push(getRelativePath(doc.uri.fsPath));
+          continue;
+        }
       }
 
       const { replacements, matches } = collectFindAndReplaceMatches(
@@ -193,6 +212,23 @@ export async function handleFindAndReplace(
           matches,
         });
       }
+    }
+
+    if (outOfDatePaths.length > 0) {
+      return errorResult(
+        "VS Code has not yet reloaded some files that changed on disk. No files were edited.",
+        {
+          reason: "editor_out_of_date_with_disk",
+          no_changes_applied: true,
+          paths: outOfDatePaths.slice(0, 20),
+          ...(outOfDatePaths.length > 20
+            ? { paths_omitted: outOfDatePaths.length - 20 }
+            : {}),
+          next_steps: [
+            "Retry the same find_and_replace shortly, or edit these files with apply_diff or write_file, which write to disk directly when VS Code's copy is out of date.",
+          ],
+        },
+      );
     }
 
     if (totalChanges === 0) {

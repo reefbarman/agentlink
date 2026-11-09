@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Auto-approved edits no longer trigger VS Code's "file is newer" Compare/Overwrite save dialog, open editor tabs, or leave unsaved buffers that need a human-approved `save_editor`. These happened when VS Code's hidden copy of a file had not yet reloaded a newer disk version (written by a formatter, Git, another agent, or an earlier exact edit) and AgentLink saved through it. Ordinary saves now wait briefly for that copy to match disk and otherwise write straight to disk without format-on-save, reported as `commit_path: "direct_write_stale_editor"`. Exact saves always write straight to disk when the copy has no unsaved changes, including exact `find_and_replace`. A failed save that conflicts with a newer file is reverted instead of retried. `find_and_replace` refuses to match against an out-of-date copy. The AgentLink output channel now logs these decisions, and tool telemetry records the commit path and auto-recovery outcome.
+
 ## 1.87.0
 
 - Browser remote views of VS Code are more reliable. The browser no longer stays behind VS Code after an update it cannot apply: it discards its cached copy and rebuilds from a fresh snapshot. Chat tabs VS Code is not focused on refresh while they are working or waiting for input. Each tab shows only its own approval and question cards, so another session's card no longer appears in the tab you are viewing. Questions asked in an unfocused tab, background questions across tab switches, and approvals hidden behind a newer one are no longer lost. A window listed with no tabs now loads them from a one-off snapshot. A new **Resync with VS Code** header button forces recovery for the selected window.

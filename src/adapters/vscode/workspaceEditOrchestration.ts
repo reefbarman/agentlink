@@ -161,6 +161,11 @@ export interface WorkspaceEditExactSaveOrchestration<TFailure, TResult> {
   applyFailure: TFailure;
   /** Receives one commit result per target, in target order. */
   buildResult(commits: readonly CommitAndVerifyEditResult[]): TResult;
+  /**
+   * Nobody is reviewing the edit on screen: close temporary editor tabs and
+   * self-recover failed saves of the agent's own buffer.
+   */
+  autoApproved?: boolean;
 }
 
 /**
@@ -205,6 +210,7 @@ export async function applyWorkspaceEditAndSaveWithoutFormatting<
           approvedContent: document.getText(),
           reviewState: "dirty_document_preserved",
           saveWithoutFormatting: true,
+          autoApproved: params.autoApproved,
         }),
       );
     } catch {

@@ -7050,6 +7050,26 @@ describe("dispatchToolCall", () => {
       });
     });
 
+    it("records the auto-approved commit path and save recovery", () => {
+      const metrics = (fields: Record<string, unknown>) =>
+        getWriteToolUsageMetrics({
+          content: [{ type: "text", text: JSON.stringify(fields) }],
+        });
+      expect(
+        metrics({
+          status: "accepted",
+          commit_path: "direct_write_stale_editor",
+          auto_recovery: "save_retried",
+        }),
+      ).toEqual({
+        editCommitPath: "direct_write_stale_editor",
+        editAutoRecovery: "save_retried",
+      });
+      expect(
+        metrics({ commit_path: "/secret/path", auto_recovery: "anything" }),
+      ).toEqual({});
+    });
+
     it("ignores invalid durability categories", () => {
       expect(
         getWriteToolUsageMetrics({
