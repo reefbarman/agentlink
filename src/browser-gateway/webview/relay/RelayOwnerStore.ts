@@ -134,6 +134,10 @@ export class RelayOwnerStore {
     return state.checkpoint;
   }
 
+  hasState(ownerId: string, ownerGenerationId: string): boolean {
+    return this.states.has(ownerKey(ownerId, ownerGenerationId));
+  }
+
   getCursor(ownerId: string, ownerGenerationId: string): string | null {
     const state = this.states.get(ownerKey(ownerId, ownerGenerationId));
     if (!state || !this.helperGenerationId) return null;
@@ -317,33 +321,20 @@ function applyOwnerEvent(
       next.catalog =
         payload.catalog as BrowserGatewayOwnerCheckpoint["catalog"];
       break;
-    case "transcript.message.appended": {
-      const message = payload.message as BrowserGatewayTranscriptMessage;
-      if (
-        current.transcript.messages.some(
-          (candidate) => candidate.messageId === message.messageId,
-        )
-      ) {
-        return null;
-      }
-      next.transcript = {
-        ...current.transcript,
-        messages: [...current.transcript.messages, message],
-      };
-      break;
-    }
+    case "transcript.message.appended":
     case "transcript.message.upserted": {
       const message = payload.message as BrowserGatewayTranscriptMessage;
       const index = current.transcript.messages.findIndex(
         (candidate) => candidate.messageId === message.messageId,
       );
       // Revisions are content hashes, not monotonic counters. Event sequences
-      // establish order; revision equality only rejects unchanged content.
+      // establish order; an equal revision means this state already holds the
+      // content, so advance the sequence without forcing a full resync.
       if (
         index >= 0 &&
         message.revision === current.transcript.messages[index]!.revision
       ) {
-        return null;
+        break;
       }
       const messages = [...current.transcript.messages];
       if (index < 0) messages.push(message);
@@ -458,8 +449,8 @@ function applyTranscriptDelta(
   );
   if (messageIndex < 0) return null;
   const message = transcript.messages[messageIndex]!;
-  // Revisions are content hashes; only equality indicates a duplicate.
-  if (revision === message.revision) return null;
+  // Revisions are content hashes; equality means the delta is already applied.
+  if (revision === message.revision) return transcript;
   const blockIndex = message.blocks.findIndex(
     (block) => block.blockId === blockId,
   );

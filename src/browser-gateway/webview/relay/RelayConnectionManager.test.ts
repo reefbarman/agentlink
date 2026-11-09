@@ -361,6 +361,229 @@ describe("RelayConnectionManager", () => {
     manager.close();
   });
 
+  it("applies a reset that arrives before the subscription response", async () => {
+    const sources: EventSourceFixture[] = [];
+    const subscriptionResponse = deferredResponse();
+    const store = new RelayOwnerStore();
+    // Divergent cache at a higher owner sequence than the helper's baseline.
+    store.applyCheckpoint(helperGenerationId, {
+      kind: "checkpoint",
+      relaySequence: 5,
+      ownerSequence: 5,
+      checkpoint: checkpoint({ checkpointId: "stale", checkpointSequence: 5 }),
+    });
+    const committed: BrowserGatewayOwnerCheckpoint[] = [];
+    const manager = new RelayConnectionManager({
+      store,
+      eventSourceFactory: (url) => {
+        const source = new EventSourceFixture(url);
+        sources.push(source);
+        return source;
+      },
+      fetch: vi.fn(
+        () => subscriptionResponse.promise,
+      ) as unknown as typeof globalThis.fetch,
+      onCheckpoint: (_owner, _generation, value) => committed.push(value),
+    });
+
+    manager.start();
+    manager.selectOwner({ ownerId, ownerGenerationId });
+    sources[0]!.emit("hello", hello());
+    await flushPromises();
+    // The helper writes these to the stream before answering the POST.
+    sources[0]!.emit("reset", {
+      protocolVersion: BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
+      helperGenerationId,
+      subscriptionId: "subscription-1",
+      ownerId,
+      ownerGenerationId,
+      reason: "subscription_changed",
+      latestSequence: 2,
+    });
+    sources[0]!.emit("checkpoint", checkpointEnvelope("subscription-1", 2));
+    subscriptionResponse.resolve(jsonResponse(subscription(), 202));
+    await waitForSubscription(manager, { ownerId, ownerGenerationId });
+
+    expect(committed.at(-1)?.checkpointId).toBe("checkpoint-2");
+    expect(store.getCheckpoint(ownerId, ownerGenerationId)?.checkpointId).toBe(
+      "checkpoint-2",
+    );
+    manager.close();
+  });
+
+  it("discards cached state and resubscribes when an event cannot be applied", async () => {
+    const sources: EventSourceFixture[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    const store = new RelayOwnerStore();
+    const committed: BrowserGatewayOwnerCheckpoint[] = [];
+    const manager = new RelayConnectionManager({
+      store,
+      eventSourceFactory: (url) => {
+        const source = new EventSourceFixture(url);
+        sources.push(source);
+        return source;
+      },
+      fetch: vi.fn(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return jsonResponse(
+          subscription("connection-1", `subscription-${bodies.length}`),
+          202,
+        );
+      }) as unknown as typeof globalThis.fetch,
+      onCheckpoint: (_owner, _generation, value) => committed.push(value),
+    });
+
+    manager.start();
+    manager.selectOwner({ ownerId, ownerGenerationId });
+    sources[0]!.emit("hello", hello());
+    await waitForSubscription(manager, { ownerId, ownerGenerationId });
+    sources[0]!.emit("checkpoint", checkpointEnvelope("subscription-1", 3));
+    sources[0]!.emit(
+      "owner.event",
+      eventEnvelope(
+        {
+          protocolVersion: BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
+          helperGenerationId,
+          ownerId,
+          ownerGenerationId,
+          ownerSequence: 4,
+          eventId: "event-4",
+          kind: "transcript.block.delta",
+          emittedAt: 4,
+          payload: {
+            messageId: "missing",
+            blockId: "missing",
+            field: "text",
+            delta: "x",
+            revision: 4,
+          },
+        } as BrowserGatewayOwnerEvent,
+        "subscription-1",
+        20,
+      ),
+    );
+    expect(store.getCheckpoint(ownerId, ownerGenerationId)).toBeNull();
+    await waitForSubscription(manager, { ownerId, ownerGenerationId });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).not.toHaveProperty("refresh");
+
+    // The replacement baseline is older than the discarded cache but applies.
+    sources[0]!.emit("checkpoint", {
+      ...checkpointEnvelope("subscription-2", 2),
+      record: {
+        ...checkpointEnvelope("subscription-2", 2).record,
+        relaySequence: 30,
+      },
+    });
+    expect(committed.at(-1)?.checkpointId).toBe("checkpoint-2");
+    manager.close();
+  });
+
+  it("asks VS Code for a fresh checkpoint on manual resync", async () => {
+    const sources: EventSourceFixture[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    const store = new RelayOwnerStore();
+    const manager = new RelayConnectionManager({
+      store,
+      eventSourceFactory: (url) => {
+        const source = new EventSourceFixture(url);
+        sources.push(source);
+        return source;
+      },
+      fetch: vi.fn(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return jsonResponse(
+          subscription("connection-1", `subscription-${bodies.length}`),
+          202,
+        );
+      }) as unknown as typeof globalThis.fetch,
+    });
+
+    manager.start();
+    manager.selectOwner({ ownerId, ownerGenerationId });
+    sources[0]!.emit("hello", hello());
+    await waitForSubscription(manager, { ownerId, ownerGenerationId });
+    sources[0]!.emit("checkpoint", checkpointEnvelope("subscription-1", 3));
+    expect(store.getCheckpoint(ownerId, ownerGenerationId)).not.toBeNull();
+
+    manager.resync({ refreshOwner: true });
+    expect(store.getCheckpoint(ownerId, ownerGenerationId)).toBeNull();
+    await waitForSubscription(manager, { ownerId, ownerGenerationId });
+    expect(bodies[1]).toMatchObject({ ownerId, refresh: true });
+    expect(sources).toHaveLength(1);
+    manager.close();
+  });
+
+  it("reconnects immediately on manual resync while the stream is down", async () => {
+    vi.useFakeTimers();
+    const sources: EventSourceFixture[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    const manager = new RelayConnectionManager({
+      store: new RelayOwnerStore(),
+      eventSourceFactory: (url) => {
+        const source = new EventSourceFixture(url);
+        sources.push(source);
+        return source;
+      },
+      fetch: vi.fn(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return jsonResponse(subscription(), 202);
+      }) as unknown as typeof globalThis.fetch,
+      random: () => 0,
+      minimumReconnectMs: 60_000,
+      maximumReconnectMs: 60_000,
+      checkpointWaitTimeoutMs: 60_000,
+    });
+
+    manager.selectOwner({ ownerId, ownerGenerationId });
+    manager.start();
+    sources[0]!.onerror?.({} as Event);
+    expect(sources).toHaveLength(1);
+    manager.resync({ refreshOwner: true });
+    expect(sources).toHaveLength(2);
+    expect(sources[0]?.closed).toBe(true);
+
+    // The owner refresh survives the reconnect.
+    sources[1]!.emit("hello", hello("connection-1"));
+    await waitForSubscription(manager, { ownerId, ownerGenerationId });
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ refresh: true });
+    manager.close();
+  });
+
+  it("asks VS Code for a fresh checkpoint when no baseline arrives", async () => {
+    vi.useFakeTimers();
+    const sources: EventSourceFixture[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    const manager = new RelayConnectionManager({
+      store: new RelayOwnerStore(),
+      eventSourceFactory: (url) => {
+        const source = new EventSourceFixture(url);
+        sources.push(source);
+        return source;
+      },
+      fetch: vi.fn(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return jsonResponse(
+          subscription("connection-1", `subscription-${bodies.length}`),
+          202,
+        );
+      }) as unknown as typeof globalThis.fetch,
+      checkpointWaitTimeoutMs: 1_000,
+      staleVisibleTimeoutMs: 60_000,
+    });
+
+    manager.start();
+    manager.selectOwner({ ownerId, ownerGenerationId });
+    sources[0]!.emit("hello", hello());
+    await waitForSubscription(manager, { ownerId, ownerGenerationId });
+    expect(bodies).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toMatchObject({ refresh: true });
+    manager.close();
+  });
+
   it("recreates EventSource with a qualified cursor after transport failure", async () => {
     vi.useFakeTimers();
     const sources: EventSourceFixture[] = [];

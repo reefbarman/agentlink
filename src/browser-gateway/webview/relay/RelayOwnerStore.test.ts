@@ -210,6 +210,79 @@ describe("RelayOwnerStore", () => {
     });
   });
 
+  it("advances past content-identical transcript events without a resync", () => {
+    const store = new RelayOwnerStore();
+    const message = {
+      messageId: "message-1",
+      role: "assistant" as const,
+      revision: 100,
+      createdAt: 1,
+      content: { kind: "inline" as const, text: "first" },
+      blocks: [
+        {
+          type: "text" as const,
+          blockId: "block-1",
+          text: { kind: "inline" as const, text: "first" },
+        },
+      ],
+    };
+    store.applyCheckpoint(helperGenerationId, {
+      kind: "checkpoint",
+      relaySequence: 1,
+      ownerSequence: 1,
+      checkpoint: checkpoint({
+        transcript: {
+          messages: [message],
+          earlierCursor: null,
+          hasEarlier: false,
+        },
+      }),
+    });
+
+    expect(
+      store.applyEvent(helperGenerationId, {
+        kind: "event",
+        relaySequence: 2,
+        ownerSequence: 2,
+        event: event(2, "transcript.message.upserted", { message }),
+      }),
+    ).toMatchObject({ status: "applied" });
+    expect(
+      store.applyEvent(helperGenerationId, {
+        kind: "event",
+        relaySequence: 3,
+        ownerSequence: 3,
+        event: event(3, "transcript.message.appended", {
+          message: { ...message, revision: 101 },
+        }),
+      }),
+    ).toMatchObject({ status: "applied" });
+    expect(
+      store.applyEvent(helperGenerationId, {
+        kind: "event",
+        relaySequence: 4,
+        ownerSequence: 4,
+        event: event(4, "transcript.block.delta", {
+          messageId: "message-1",
+          blockId: "block-1",
+          field: "text",
+          delta: " again",
+          revision: 101,
+        }),
+      }),
+    ).toMatchObject({ status: "applied" });
+    const messages = store.getCheckpoint(ownerId, ownerGenerationId)?.transcript
+      .messages;
+    expect(messages).toHaveLength(1);
+    expect(messages?.[0]).toMatchObject({
+      revision: 101,
+      blocks: [{ text: { text: "first" } }],
+    });
+    expect(store.getCheckpoint(ownerId, ownerGenerationId)).toMatchObject({
+      checkpointSequence: 4,
+    });
+  });
+
   it("rejects relay cursor rollback even when owner sequence advances", () => {
     const store = new RelayOwnerStore();
     store.applyCheckpoint(helperGenerationId, {

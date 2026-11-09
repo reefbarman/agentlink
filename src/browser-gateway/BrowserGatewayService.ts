@@ -285,6 +285,7 @@ export class BrowserGatewayService implements vscode.Disposable {
   private urlElicitation: McpUrlElicitationRequest | undefined;
   private urlElicitationSessionId: string | undefined;
   private seededForegroundSessionId: string | undefined;
+  private disposed = false;
   private recentEvents: AgentUiEvent[] = [];
   private modelsVersion = 0;
   private pluginsVersion = 0;
@@ -537,18 +538,22 @@ export class BrowserGatewayService implements vscode.Disposable {
   }
 
   getUiState(): BrowserGatewayUiState {
-    const question = this.getForegroundQuestion();
-    const questionProgress = this.getForegroundQuestionProgress(question?.id);
+    const ownPending = this.getForegroundOwnPendingUi();
+    const question = this.getForegroundQuestion(ownPending);
+    const questionProgress = this.getForegroundQuestionProgress(
+      question?.id,
+      ownPending,
+    );
+    const formElicitation = this.formElicitation ?? ownPending?.formElicitation;
+    const urlElicitation = this.urlElicitation ?? ownPending?.urlElicitation;
     return {
-      approval: this.approval,
+      approval: this.approval ?? ownPending?.approval ?? undefined,
       question,
       questionProgress,
-      formElicitation: this.formElicitation
-        ? cloneFormElicitationRequest(this.formElicitation)
+      formElicitation: formElicitation
+        ? cloneFormElicitationRequest(formElicitation)
         : undefined,
-      urlElicitation: this.urlElicitation
-        ? { ...this.urlElicitation }
-        : undefined,
+      urlElicitation: urlElicitation ? { ...urlElicitation } : undefined,
       recentEvents: [...this.recentEvents],
     };
   }
@@ -832,6 +837,19 @@ export class BrowserGatewayService implements vscode.Disposable {
         questions: structuredClone(pendingQuestion.questions),
       };
     }
+    // Background work with no chat tab of its own is shown in every tab, as in
+    // VS Code. Everything else stays in its owning session's tab: the browser
+    // no longer borrows the focused session's cards for other tabs.
+    const global = this.getGlobalBackgroundUi(session.id);
+    if (!ui.approval && global.approval) {
+      ui.approval = structuredClone(global.approval);
+    }
+    if (!ui.question && global.question) {
+      ui.question = structuredClone(global.question);
+      ui.questionProgress = global.questionProgress
+        ? structuredClone(global.questionProgress)
+        : null;
+    }
 
     return {
       selection: { ...selection },
@@ -952,17 +970,14 @@ export class BrowserGatewayService implements vscode.Disposable {
   }
 
   getSerializableState(): BrowserGatewayWireState {
-    const question = this.getForegroundQuestion();
+    const ui = this.getUiState();
     return {
-      approval: this.approval ?? null,
-      question: question ?? null,
-      questionProgress:
-        this.getForegroundQuestionProgress(question?.id) ?? null,
-      formElicitation: this.formElicitation
-        ? cloneFormElicitationRequest(this.formElicitation)
-        : null,
-      urlElicitation: this.urlElicitation ? { ...this.urlElicitation } : null,
-      recentEvents: [...this.recentEvents],
+      approval: ui.approval ?? null,
+      question: ui.question ?? null,
+      questionProgress: ui.questionProgress ?? null,
+      formElicitation: ui.formElicitation ?? null,
+      urlElicitation: ui.urlElicitation ?? null,
+      recentEvents: ui.recentEvents,
       mcpStatusInfos: this.getMcpStatusInfos(),
     };
   }
@@ -1126,6 +1141,7 @@ export class BrowserGatewayService implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const disposable of this.disposables) {
       disposable.dispose();
     }
@@ -1347,7 +1363,60 @@ export class BrowserGatewayService implements vscode.Disposable {
       .some(({ event }) => isPendingSessionInput(event));
   }
 
-  private getForegroundQuestion(): BrowserGatewayUiState["question"] {
+  /**
+   * The foreground session's own pending cards, read from the per-session
+   * event hub. The single-slot fields above can lose a card when another one
+   * overwrites it or when the foreground session changes; the hub keeps every
+   * pending request until it is resolved.
+   */
+  private getForegroundOwnPendingUi(): BrowserGatewayDetachedSessionUiState | null {
+    if (this.disposed) return null;
+    const sessionId = this.sessionManager.getForegroundSession()?.id;
+    if (!sessionId) return null;
+    return createDetachedSessionUiState(this.uiEventHub.getSnapshot(sessionId));
+  }
+
+  private sessionHasChatTab(sessionId: string): boolean {
+    return Boolean(
+      this.getChatWorkspaceSnapshot()?.tabs.some(
+        (tab) => tab.sessionId === sessionId,
+      ),
+    );
+  }
+
+  /** Background cards from sessions with no chat tab, excluding one session. */
+  private getGlobalBackgroundUi(excludeSessionId: string): {
+    approval: ApprovalRequest | undefined;
+    question: StructuredQuestionRequest | undefined;
+    questionProgress: QuestionProgressState | undefined;
+  } {
+    const approval =
+      this.approval?.backgroundTask &&
+      this.approvalSessionId &&
+      this.approvalSessionId !== excludeSessionId &&
+      !this.sessionHasChatTab(this.approvalSessionId)
+        ? this.approval
+        : undefined;
+    const question =
+      this.question?.backgroundTask &&
+      this.questionSessionId &&
+      this.questionSessionId !== excludeSessionId &&
+      !this.sessionHasChatTab(this.questionSessionId)
+        ? this.question
+        : undefined;
+    return {
+      approval,
+      question,
+      questionProgress:
+        question && this.questionProgress?.id === question.id
+          ? this.questionProgress
+          : undefined,
+    };
+  }
+
+  private getForegroundQuestion(
+    ownPending: BrowserGatewayDetachedSessionUiState | null = this.getForegroundOwnPendingUi(),
+  ): BrowserGatewayUiState["question"] {
     const foreground = this.sessionManager.getForegroundSession();
     const projected = this.getProjectedForegroundState();
     if (foreground && projected?.sessionId === foreground.id) {
@@ -1378,12 +1447,43 @@ export class BrowserGatewayService implements vscode.Disposable {
       };
     }
 
+    // The projection only records a question asked while its session was
+    // focused, and drops it when the focused session changes, so a question
+    // asked in a tab that was not focused never reached the browser once that
+    // tab was focused. The hub copy can be stale, so fall back to the session's
+    // `awaiting_question` run state, which is cleared when it is answered.
+    const pendingQuestion = foreground
+      ? this.sessionManager.getPendingQuestionRecovery?.(foreground.id)
+      : undefined;
+    if (pendingQuestion) {
+      const hubQuestion =
+        ownPending?.question?.id === pendingQuestion.questionRequestId
+          ? ownPending.question
+          : undefined;
+      return hubQuestion
+        ? structuredClone(hubQuestion)
+        : {
+            id: pendingQuestion.questionRequestId,
+            toolCallId: pendingQuestion.toolUseId,
+            context: pendingQuestion.context,
+            questions: structuredClone(pendingQuestion.questions),
+          };
+    }
+
     return undefined;
   }
 
   private getForegroundQuestionProgress(
     questionId: string | undefined,
+    ownPending: BrowserGatewayDetachedSessionUiState | null = null,
   ): QuestionProgressState | undefined {
+    if (
+      questionId &&
+      this.questionProgress?.id !== questionId &&
+      ownPending?.questionProgress?.id === questionId
+    ) {
+      return structuredClone(ownPending.questionProgress);
+    }
     // Progress is broadcast through the UI event hub, while the visible question
     // may come from the foreground projection. Both paths use the same request id.
     if (!questionId || this.questionProgress?.id !== questionId) {
@@ -1414,18 +1514,54 @@ export class BrowserGatewayService implements vscode.Disposable {
     const sessionId = this.sessionManager.getForegroundSession()?.id;
     if (sessionId === this.seededForegroundSessionId) return;
     this.seededForegroundSessionId = sessionId;
-    const visibleBackgroundApproval = this.approval?.backgroundTask
-      ? this.approval
-      : undefined;
+    // Only background work with no chat tab of its own stays visible across a
+    // focus change. A card owned by a tabbed session (accepted while that
+    // session was focused) belongs to its own tab and must not mask or appear
+    // in the newly focused session.
+    const keepAcrossFocus = (ownerSessionId: string | undefined): boolean =>
+      ownerSessionId === sessionId ||
+      !ownerSessionId ||
+      !this.sessionHasChatTab(ownerSessionId);
+    const visibleBackgroundApproval =
+      this.approval?.backgroundTask && keepAcrossFocus(this.approvalSessionId)
+        ? this.approval
+        : undefined;
     const visibleBackgroundApprovalSessionId = visibleBackgroundApproval
       ? this.approvalSessionId
       : undefined;
+    // Keep a background question across a focus change the same way as a
+    // background approval: nothing re-sends it, so clearing it here lost the
+    // card for good and left the agent waiting.
+    const visibleBackgroundQuestion =
+      this.question?.backgroundTask &&
+      this.questionSessionId !== sessionId &&
+      keepAcrossFocus(this.questionSessionId)
+        ? this.question
+        : undefined;
+    const visibleBackgroundQuestionSessionId = visibleBackgroundQuestion
+      ? this.questionSessionId
+      : undefined;
+    const visibleBackgroundQuestionProgress =
+      visibleBackgroundQuestion &&
+      this.questionProgress?.id === visibleBackgroundQuestion.id
+        ? this.questionProgress
+        : undefined;
     this.clearInteractionState();
     this.approval = visibleBackgroundApproval;
     this.approvalSessionId = visibleBackgroundApprovalSessionId;
+    this.question = visibleBackgroundQuestion;
+    this.questionSessionId = visibleBackgroundQuestionSessionId;
+    this.questionProgress = visibleBackgroundQuestionProgress;
     if (!sessionId) return;
     for (const event of this.uiEventHub.getSnapshot(sessionId)) {
       if (visibleBackgroundApproval && event.event.type === "showApproval") {
+        continue;
+      }
+      if (
+        visibleBackgroundQuestion &&
+        (event.event.type === "agentQuestionRequest" ||
+          event.event.type === "agentQuestionProgress")
+      ) {
         continue;
       }
       this.applyEvent(event, false);
@@ -1448,10 +1584,16 @@ export class BrowserGatewayService implements vscode.Disposable {
     const { sessionId, event } = envelope;
     const selectedSessionId = this.sessionManager.getForegroundSession()?.id;
     const isSelectedSession = sessionId === selectedSessionId;
+    // Background work is promoted to every tab only when its session has no
+    // chat tab of its own. VS Code publishes a child agent's request under its
+    // root chat tab's session, where the per-session detail already shows it;
+    // promoting it as well put the card in whichever tab was being viewed.
     const isAttributedBackgroundRequest =
-      (event.type === "showApproval" &&
+      ((event.type === "showApproval" &&
         Boolean(event.request.backgroundTask)) ||
-      (event.type === "agentQuestionRequest" && Boolean(event.backgroundTask));
+        (event.type === "agentQuestionRequest" &&
+          Boolean(event.backgroundTask))) &&
+      (isSelectedSession || !this.sessionHasChatTab(sessionId));
     // Only approvals and questions can be Fleet-attributed background work.
     // Form and URL elicitations remain selected-session-only and are restored
     // from that session's snapshot when it becomes foreground.

@@ -90,6 +90,8 @@ type SubscriptionRequest = {
   csrfNonce: string;
   ownerId: string;
   ownerGenerationId: string;
+  /** Ask the owner to rebuild a fresh checkpoint from its live state. */
+  refresh: boolean;
 };
 
 export class BrowserGatewayRelayRoutes {
@@ -394,6 +396,16 @@ export class BrowserGatewayRelayRoutes {
       null,
       "selection",
     );
+    if (body.refresh) {
+      // Best effort: the cached checkpoint and replay are already queued, so a
+      // rate-limited refresh still leaves the browser with a usable baseline.
+      this.requestCheckpoint(
+        connection,
+        body.ownerId,
+        body.ownerGenerationId,
+        0,
+      );
+    }
     writeJson(res, 202, {
       ok: true,
       protocolVersion: BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
@@ -938,16 +950,20 @@ function parseSubscriptionRequest(value: unknown): SubscriptionRequest {
     throw new Error("invalid_request");
   }
   const record = value as Record<string, unknown>;
-  const allowed = new Set([
+  const required = [
     "browserConnectionId",
     "csrfNonce",
     "ownerId",
     "ownerGenerationId",
-  ]);
+  ];
+  const allowed = new Set([...required, "refresh"]);
   if (Object.keys(record).some((key) => !allowed.has(key))) {
     throw new Error("invalid_request");
   }
-  for (const key of allowed) {
+  if (record.refresh !== undefined && typeof record.refresh !== "boolean") {
+    throw new Error("invalid_request");
+  }
+  for (const key of required) {
     if (
       typeof record[key] !== "string" ||
       !(record[key] as string).trim() ||
@@ -961,6 +977,7 @@ function parseSubscriptionRequest(value: unknown): SubscriptionRequest {
     csrfNonce: (record.csrfNonce as string).trim(),
     ownerId: (record.ownerId as string).trim(),
     ownerGenerationId: (record.ownerGenerationId as string).trim(),
+    refresh: record.refresh === true,
   };
 }
 

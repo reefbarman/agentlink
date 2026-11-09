@@ -49,6 +49,7 @@ export interface RelayConnectionManagerOptions {
   >;
   firstEventTimeoutMs?: number;
   staleVisibleTimeoutMs?: number;
+  checkpointWaitTimeoutMs?: number;
   minimumReconnectMs?: number;
   maximumReconnectMs?: number;
   onCatalog?: (owners: readonly RelayCatalogOwner[]) => void;
@@ -124,7 +125,23 @@ type BufferedOwnerFrame =
       kind: "checkpoint";
       envelope: RelayOwnerRecordEnvelope<RelayCheckpointRecord>;
     }
-  | { kind: "event"; envelope: RelayOwnerRecordEnvelope<RelayEventRecord> };
+  | { kind: "event"; envelope: RelayOwnerRecordEnvelope<RelayEventRecord> }
+  | { kind: "reset"; envelope: RelayResetEnvelope };
+
+type RelayResetEnvelope = {
+  helperGenerationId: string;
+  subscriptionId: string;
+  ownerId: string;
+  ownerGenerationId: string;
+};
+
+export interface RelayResyncOptions {
+  /**
+   * Ask the owning VS Code window to rebuild a fresh checkpoint from its live
+   * state instead of relying only on the helper's cached checkpoint and replay.
+   */
+  refreshOwner?: boolean;
+}
 
 type RelayOwnerRecordEnvelope<TRecord> = {
   protocolVersion: string;
@@ -147,6 +164,12 @@ const DEFAULT_FIRST_EVENT_TIMEOUT_MS = 5_000;
 const DEFAULT_STALE_VISIBLE_TIMEOUT_MS = 45_000;
 const DEFAULT_MINIMUM_RECONNECT_MS = 500;
 const DEFAULT_MAXIMUM_RECONNECT_MS = 15_000;
+const DEFAULT_CHECKPOINT_WAIT_TIMEOUT_MS = 8_000;
+/**
+ * A second automatic resync inside this window escalates to an owner refresh:
+ * the helper's cached baseline evidently did not repair the divergence.
+ */
+const AUTOMATIC_RESYNC_ESCALATION_WINDOW_MS = 30_000;
 
 export class RelayConnectionManager {
   private readonly store: RelayOwnerStore;
@@ -160,6 +183,7 @@ export class RelayConnectionManager {
   private readonly document: RelayConnectionManagerOptions["document"];
   private readonly firstEventTimeoutMs: number;
   private readonly staleVisibleTimeoutMs: number;
+  private readonly checkpointWaitTimeoutMs: number;
   private readonly minimumReconnectMs: number;
   private readonly maximumReconnectMs: number;
   private readonly pendingOperations = new Map<string, PendingOperation>();
@@ -179,6 +203,12 @@ export class RelayConnectionManager {
   private reconnectTimer: RelayTimerHandle | null = null;
   private firstEventTimer: RelayTimerHandle | null = null;
   private staleEventTimer: RelayTimerHandle | null = null;
+  private checkpointWaitTimer: RelayTimerHandle | null = null;
+  /** Owner whose cached state was discarded and still needs a baseline. */
+  private awaitingCheckpointFor: RelayOwnerSelection | null = null;
+  private lastAutomaticResyncAt = Number.NEGATIVE_INFINITY;
+  /** An owner refresh requested while no subscription could be made yet. */
+  private pendingOwnerRefresh = false;
   private lastEventAt = 0;
   private started = false;
   private closed = false;
@@ -205,6 +235,8 @@ export class RelayConnectionManager {
       options.firstEventTimeoutMs ?? DEFAULT_FIRST_EVENT_TIMEOUT_MS;
     this.staleVisibleTimeoutMs =
       options.staleVisibleTimeoutMs ?? DEFAULT_STALE_VISIBLE_TIMEOUT_MS;
+    this.checkpointWaitTimeoutMs =
+      options.checkpointWaitTimeoutMs ?? DEFAULT_CHECKPOINT_WAIT_TIMEOUT_MS;
     this.minimumReconnectMs =
       options.minimumReconnectMs ?? DEFAULT_MINIMUM_RECONNECT_MS;
     this.maximumReconnectMs =
@@ -239,8 +271,36 @@ export class RelayConnectionManager {
     this.clearReconnectTimer();
     this.clearFirstEventTimer();
     this.clearStaleEventTimer();
+    this.clearCheckpointWait();
     this.resolvePendingOperations("relay_client_closed");
     this.options.onStatus?.("closed");
+  }
+
+  /**
+   * Discard the selected owner's cached state and rebuild it from a fresh
+   * baseline. Used by the manual "resync" control and by automatic recovery
+   * when an event cannot be applied. Reconnects immediately when the stream is
+   * down instead of waiting for the backoff timer.
+   */
+  resync(options: RelayResyncOptions = {}): void {
+    if (this.closed || !this.started) return;
+    const owner = this.selectedOwner;
+    if (owner) this.discardOwnerState(owner);
+    if (options.refreshOwner) this.pendingOwnerRefresh = true;
+    if (!this.connection) {
+      this.reconnectAttempt = 0;
+      this.closeSource();
+      this.clearReconnectTimer();
+      this.clearFirstEventTimer();
+      this.clearStaleEventTimer();
+      this.subscriptionRequestId += 1;
+      this.connect("reconnecting");
+      return;
+    }
+    if (!owner) return;
+    this.subscription = null;
+    this.bufferedOwnerFrames.length = 0;
+    void this.subscribeCurrentOwner();
   }
 
   selectOwner(owner: RelayOwnerSelection): void {
@@ -269,6 +329,7 @@ export class RelayConnectionManager {
     }
     this.subscription = null;
     this.bufferedOwnerFrames.length = 0;
+    this.clearCheckpointWait();
     const checkpoint = this.store.getCheckpoint(
       owner.ownerId,
       owner.ownerGenerationId,
@@ -574,18 +635,31 @@ export class RelayConnectionManager {
     ) {
       return;
     }
-    const subscription = this.subscription;
     if (
       value.helperGenerationId !== this.connection?.helperGenerationId ||
-      !subscription ||
-      typeof value.subscriptionId !== "string" ||
-      value.subscriptionId !== subscription.subscriptionId ||
-      value.ownerId !== subscription.ownerId ||
-      value.ownerGenerationId !== subscription.ownerGenerationId
+      typeof value.subscriptionId !== "string"
     ) {
       return;
     }
-    this.store.invalidate(value.ownerId, value.ownerGenerationId);
+    const envelope: RelayResetEnvelope = {
+      helperGenerationId: value.helperGenerationId,
+      subscriptionId: value.subscriptionId,
+      ownerId: value.ownerId,
+      ownerGenerationId: value.ownerGenerationId,
+    };
+    // The helper writes the reset to the stream while it answers the
+    // subscription request, so it usually arrives before this client knows its
+    // subscription ID. Buffer it with the checkpoint/event frames: dropping it
+    // left stale cached state in place, which then rejected the fresh
+    // baseline as a duplicate and stranded the tab behind VS Code.
+    if (!this.subscription) {
+      if (this.selectedOwner && sameOwner(this.selectedOwner, envelope)) {
+        this.bufferedOwnerFrames.push({ kind: "reset", envelope });
+      }
+      return;
+    }
+    if (!this.isCurrentSubscription(envelope)) return;
+    this.applyOwnerFrame({ kind: "reset", envelope });
   }
 
   private handleOwnerFrame(
@@ -612,6 +686,10 @@ export class RelayConnectionManager {
   }
 
   private applyOwnerFrame(frame: BufferedOwnerFrame): void {
+    if (frame.kind === "reset") {
+      this.discardOwnerState(frame.envelope);
+      return;
+    }
     const result =
       frame.kind === "checkpoint"
         ? this.store.applyCheckpoint(
@@ -623,16 +701,43 @@ export class RelayConnectionManager {
             frame.envelope.record,
           );
     if (result.status === "checkpoint_required") {
+      // Live events can arrive between a reset and its baseline (for example
+      // while the helper asks VS Code for a fresh checkpoint). They are
+      // covered by that baseline, so wait for it instead of resubscribing.
+      if (
+        frame.kind === "event" &&
+        this.isAwaitingCheckpoint(frame.envelope) &&
+        !this.store.hasState(
+          frame.envelope.ownerId,
+          frame.envelope.ownerGenerationId,
+        )
+      ) {
+        return;
+      }
       if (!this.checkpointResyncPending) {
         this.checkpointResyncPending = true;
+        // The cached state could not absorb this frame. Drop it so the
+        // replacement baseline is applied even when its sequence is not newer
+        // than the divergent cache.
+        this.discardOwnerState(frame.envelope);
+        const now = this.now();
+        const escalate =
+          now - this.lastAutomaticResyncAt <
+          AUTOMATIC_RESYNC_ESCALATION_WINDOW_MS;
+        this.lastAutomaticResyncAt = now;
         this.subscription = null;
         this.bufferedOwnerFrames.length = 0;
-        void this.subscribeCurrentOwner().finally(() => {
+        void this.subscribeCurrentOwner({ refresh: escalate }).finally(() => {
           this.checkpointResyncPending = false;
         });
       }
       return;
     }
+    if (
+      frame.kind === "checkpoint" &&
+      this.isAwaitingCheckpoint(frame.envelope)
+    )
+      this.clearCheckpointWait();
     if (result.status === "applied") {
       this.options.onCheckpoint?.(
         frame.envelope.ownerId,
@@ -671,11 +776,17 @@ export class RelayConnectionManager {
     this.recordOperation(operation, value.ownerId, value.ownerGenerationId);
   }
 
-  private async subscribeCurrentOwner(): Promise<void> {
+  private async subscribeCurrentOwner(
+    options: { refresh?: boolean } = {},
+  ): Promise<void> {
     const connection = this.connection;
     const owner = this.selectedOwner;
     if (!connection || !owner || this.closed) return;
     const requestId = ++this.subscriptionRequestId;
+    // Carry a manual or timed-out refresh request across a reconnect so the
+    // next subscription still asks VS Code for a fresh checkpoint.
+    const refresh = options.refresh === true || this.pendingOwnerRefresh;
+    this.pendingOwnerRefresh = false;
     try {
       const response = await this.fetch("/api/relay/subscription", {
         method: "POST",
@@ -686,6 +797,7 @@ export class RelayConnectionManager {
           csrfNonce: connection.csrfNonce,
           ownerId: owner.ownerId,
           ownerGenerationId: owner.ownerGenerationId,
+          ...(refresh ? { refresh: true } : {}),
         }),
       });
       const body = (await response.json()) as Partial<SubscriptionIdentity> & {
@@ -707,6 +819,7 @@ export class RelayConnectionManager {
         body.ownerGenerationId !== owner.ownerGenerationId
       ) {
         if (!response.ok && requestId === this.subscriptionRequestId) {
+          if (refresh) this.pendingOwnerRefresh = true;
           this.reconnect(body.error ?? "subscription_failed");
         }
         return;
@@ -723,9 +836,13 @@ export class RelayConnectionManager {
         if (this.isCurrentSubscription(frame.envelope))
           this.applyOwnerFrame(frame);
       }
+      if (!this.store.hasState(owner.ownerId, owner.ownerGenerationId)) {
+        this.awaitCheckpoint(owner);
+      }
       await this.reconcilePendingOperations();
     } catch {
       if (requestId === this.subscriptionRequestId) {
+        if (refresh) this.pendingOwnerRefresh = true;
         this.reconnect("subscription_failed");
       }
     }
@@ -926,11 +1043,56 @@ export class RelayConnectionManager {
     );
   }
 
+  private discardOwnerState(owner: RelayOwnerSelection): void {
+    this.store.invalidate(owner.ownerId, owner.ownerGenerationId);
+    if (this.selectedOwner && sameOwner(this.selectedOwner, owner)) {
+      this.awaitCheckpoint(owner);
+    }
+  }
+
+  private awaitCheckpoint(owner: RelayOwnerSelection): void {
+    this.awaitingCheckpointFor = {
+      ownerId: owner.ownerId,
+      ownerGenerationId: owner.ownerGenerationId,
+    };
+    if (this.checkpointWaitTimer) this.clearTimer(this.checkpointWaitTimer);
+    this.checkpointWaitTimer = this.setTimer(() => {
+      this.checkpointWaitTimer = null;
+      const awaited = this.awaitingCheckpointFor;
+      if (
+        this.closed ||
+        !awaited ||
+        !this.selectedOwner ||
+        !sameOwner(awaited, this.selectedOwner) ||
+        this.store.hasState(awaited.ownerId, awaited.ownerGenerationId)
+      ) {
+        return;
+      }
+      // No baseline arrived: ask the owner to rebuild one.
+      this.resync({ refreshOwner: true });
+    }, this.checkpointWaitTimeoutMs);
+  }
+
+  private isAwaitingCheckpoint(owner: RelayOwnerSelection): boolean {
+    return Boolean(
+      this.awaitingCheckpointFor &&
+      sameOwner(this.awaitingCheckpointFor, owner),
+    );
+  }
+
+  private clearCheckpointWait(): void {
+    this.awaitingCheckpointFor = null;
+    if (!this.checkpointWaitTimer) return;
+    this.clearTimer(this.checkpointWaitTimer);
+    this.checkpointWaitTimer = null;
+  }
+
   private reconnect(_reason: string): void {
     if (this.closed) return;
     this.closeSource();
     this.clearFirstEventTimer();
     this.clearStaleEventTimer();
+    this.clearCheckpointWait();
     this.connection = null;
     this.subscription = null;
     this.checkpointResyncPending = false;

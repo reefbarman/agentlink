@@ -136,6 +136,11 @@ export interface RelayGatewayConnection {
   requestSessionDetail: (
     request: RelaySessionDetailRequest,
   ) => Promise<RelaySessionDetailResponse | null>;
+  /**
+   * Discard the selected owner's cached state and rebuild it, asking VS Code
+   * for a fresh checkpoint. Returns false when the relay client is inactive.
+   */
+  resync: () => boolean;
 }
 
 export function useRelayGatewayConnection(
@@ -340,11 +345,20 @@ export function useRelayGatewayConnection(
     [blockDetailScopeKey, expectedTabId, expectedTabGeneration],
   );
 
+  const resync = useCallback((): boolean => {
+    const manager = managerRef.current;
+    if (!latest.current.enabled || !manager) return false;
+    selectCurrentTab(manager, catalogRef.current, latest.current.selectedTabId);
+    manager.resync({ refreshOwner: true });
+    return true;
+  }, []);
+
   return {
     dispatchCommand,
     requestSessionDetail,
     requestBlockDetail,
     blockDetailScopeKey,
+    resync,
   };
 }
 
@@ -360,6 +374,9 @@ export async function commitRelayCheckpoint(options: {
   isCurrent: () => boolean;
   latest: { current: RelayGatewayConnectionOptions };
   catalog: { current: readonly RelayCatalogOwner[] };
+  /** Retry count for card-detail downloads; internal. */
+  attempt?: number;
+  scheduleRetry?: (callback: () => void, delayMs: number) => void;
 }): Promise<void> {
   const current = options.latest.current;
   const owner = resolveOwnerForTab(
@@ -489,10 +506,35 @@ export async function commitRelayCheckpoint(options: {
     if (!options.isCurrent()) return;
     if (!detailMatchesCheckpoint(handle, options.checkpoint)) {
       options.hydratedInteractions.delete(key);
+      current.setStatus("Relay interaction unavailable — reconnecting…");
+      return;
     }
-    current.setStatus("Relay interaction unavailable — reconnecting…");
+    // A waiting session publishes nothing further, so a single failed card
+    // download would otherwise leave the question or approval invisible.
+    // Retry with backoff while this checkpoint is still the latest one.
+    const attempt = options.attempt ?? 0;
+    if (attempt >= RELAY_INTERACTION_DETAIL_RETRY_LIMIT) {
+      current.setStatus("Relay interaction unavailable — use Resync to retry");
+      return;
+    }
+    current.setStatus("Relay interaction unavailable — retrying…");
+    const schedule =
+      options.scheduleRetry ??
+      ((callback: () => void, delayMs: number) => {
+        globalThis.setTimeout(callback, delayMs);
+      });
+    schedule(
+      () => {
+        if (!options.isCurrent()) return;
+        void commitRelayCheckpoint({ ...options, attempt: attempt + 1 });
+      },
+      RELAY_INTERACTION_DETAIL_RETRY_BASE_MS * 2 ** attempt,
+    );
   }
 }
+
+const RELAY_INTERACTION_DETAIL_RETRY_LIMIT = 5;
+const RELAY_INTERACTION_DETAIL_RETRY_BASE_MS = 500;
 
 export function createRelaySourceEventPaintMarker(
   event: BrowserGatewayOwnerEvent,

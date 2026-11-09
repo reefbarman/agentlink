@@ -249,6 +249,10 @@ const SIDE_PANE_KEYBOARD_STEP = 32;
 // Keep in sync with the phone-layout block in styles.css.
 const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 600px)";
 const TOUCH_POINTER_MEDIA_QUERY = "(hover: none) and (pointer: coarse)";
+/** Minimum spacing between detail refreshes for a tab VS Code has not focused. */
+const DETACHED_DETAIL_REFRESH_MIN_INTERVAL_MS = 1_000;
+/** Poll interval for a busy or waiting tab that VS Code has not focused. */
+const DETACHED_DETAIL_POLL_INTERVAL_MS = 2_000;
 const ASK_AGENT_MOBILE_MEDIA_PICKER_SOURCES: readonly MediaPickerSource[] = [
   "files",
   "photos",
@@ -932,19 +936,16 @@ export function mergeDetachedSessionDetail(
     ...ownerSnapshot,
     ui: {
       ...ownerSnapshot.ui,
-      // Instance-level interaction state is authoritative for the active
-      // workspace session. Do not hide its approval merely because the browser
-      // is currently rendering another logical tab whose detail has no local
-      // interaction; the instance attention indicator otherwise leads to an
-      // empty activity shelf.
-      approval: detail.ui.approval ?? ownerSnapshot.ui.approval,
-      question: detail.ui.question ?? ownerSnapshot.ui.question,
-      questionProgress:
-        detail.ui.questionProgress ?? ownerSnapshot.ui.questionProgress,
-      formElicitation:
-        detail.ui.formElicitation ?? ownerSnapshot.ui.formElicitation,
-      urlElicitation:
-        detail.ui.urlElicitation ?? ownerSnapshot.ui.urlElicitation,
+      // Show only this tab's own cards. The owner snapshot's cards belong to
+      // the session VS Code has focused; borrowing them put another session's
+      // approval in this tab, where answering it acted on the wrong session.
+      // VS Code adds background cards that have no tab of their own to every
+      // tab's detail, and other tabs' cards surface as tab attention badges.
+      approval: detail.ui.approval,
+      question: detail.ui.question,
+      questionProgress: detail.ui.questionProgress,
+      formElicitation: detail.ui.formElicitation,
+      urlElicitation: detail.ui.urlElicitation,
     },
     session: {
       ...ownerSnapshot.session,
@@ -1650,6 +1651,8 @@ export function BrowserGatewayApp({
     Map<string, BrowserLogicalTabSelection>
   >(new Map());
   const detachedDetailRefreshIdRef = useRef(0);
+  /** Detached selection the logical-tab effect last rendered. */
+  const detachedSelectionEffectKeyRef = useRef<string | null>(null);
   const snapshotOriginRef = useRef({
     tabId: initialSelectedTabId,
     generation: 0,
@@ -2509,6 +2512,58 @@ export function BrowserGatewayApp({
     [],
   );
 
+  // Refreshes for a tab VS Code has not focused are throttled rather than
+  // debounced: while the focused session streams, owner updates arrive faster
+  // than the old 150 ms debounce, so the timer kept restarting and the other
+  // tab never refreshed. A request made during an in-flight fetch is replayed
+  // once that fetch finishes so the final state is never skipped.
+  const detachedRefreshStateRef = useRef<{
+    key: string | null;
+    timer: number | null;
+    lastAt: number;
+    inFlight: boolean;
+    dirty: boolean;
+  }>({ key: null, timer: null, lastAt: 0, inFlight: false, dirty: false });
+  const scheduleDetachedRefresh = useCallback(
+    (selection: BrowserLogicalTabSelection): void => {
+      const state = detachedRefreshStateRef.current;
+      const key = logicalTabSelectionKey(selection);
+      if (state.key !== key) {
+        // A fetch still running for the previous tab must not hold back or
+        // absorb this tab's refresh; its result is discarded by its own
+        // selection guard.
+        if (state.timer !== null) window.clearTimeout(state.timer);
+        state.key = key;
+        state.timer = null;
+        state.dirty = false;
+        state.inFlight = false;
+      }
+      if (state.inFlight) {
+        state.dirty = true;
+        return;
+      }
+      if (state.timer !== null) return;
+      const delay = Math.max(
+        0,
+        DETACHED_DETAIL_REFRESH_MIN_INTERVAL_MS - (Date.now() - state.lastAt),
+      );
+      state.timer = window.setTimeout(() => {
+        state.timer = null;
+        state.lastAt = Date.now();
+        refreshDetachedSelection(selection);
+      }, delay);
+    },
+    [refreshDetachedSelection],
+  );
+  useEffect(
+    () => () => {
+      const state = detachedRefreshStateRef.current;
+      if (state.timer !== null) window.clearTimeout(state.timer);
+      state.timer = null;
+    },
+    [],
+  );
+
   useEffect(() => {
     const desktopBridge = askAgentOnly
       ? window.agentlinkDesktopShell
@@ -2745,6 +2800,7 @@ export function BrowserGatewayApp({
     requestSessionDetail: requestRelaySessionDetail,
     requestBlockDetail: requestRelayBlockDetail,
     blockDetailScopeKey,
+    resync: resyncRelay,
   } = useRelayGatewayConnection({
     enabled: relayClientEnabled,
     selectedTabId,
@@ -2793,6 +2849,8 @@ export function BrowserGatewayApp({
     const selectionGeneration = logicalSelectionGenerationRef.current;
     const controller = new AbortController();
     let cancelled = false;
+    const refreshState = detachedRefreshStateRef.current;
+    refreshState.inFlight = true;
     void (async () => {
       try {
         const detail = relayClientEnabled
@@ -2825,10 +2883,23 @@ export function BrowserGatewayApp({
       } catch (error) {
         if (cancelled || controller.signal.aborted) return;
         setStatus(`Session detail unavailable: ${String(error)}`);
+      } finally {
+        if (!cancelled) {
+          refreshState.inFlight = false;
+          // Replay a deferred request only for the tab this fetch served.
+          if (
+            refreshState.dirty &&
+            (refreshState.key ?? detailKey) === detailKey
+          ) {
+            refreshState.dirty = false;
+            scheduleDetachedRefresh(selection);
+          }
+        }
       }
     })();
     return () => {
       cancelled = true;
+      refreshState.inFlight = false;
       controller.abort();
     };
   }, [
@@ -2837,10 +2908,56 @@ export function BrowserGatewayApp({
     detachedDetailRefresh,
     relayClientEnabled,
     requestRelaySessionDetail,
+    scheduleDetachedRefresh,
   ]);
 
+  // Owner updates only describe the session VS Code has focused, so a busy or
+  // waiting tab that is not focused gets nothing to trigger a refresh. Poll it
+  // while it is working or waiting for input; idle tabs do not change.
+  const [detachedPollSelection, setDetachedPollSelection] =
+    useState<BrowserLogicalTabSelection | null>(null);
   useEffect(() => {
-    if (isAskAgentSelected) return;
+    const selection = selectedLogicalTab;
+    const ownerSnapshot = snapshotCacheRef.current.get(selectedTabId)?.snapshot;
+    const tab =
+      selection && !isAskAgentSelected && selection.instanceId === selectedTabId
+        ? ownerSnapshot?.session.chatWorkspace?.tabs.find(
+            (candidate) =>
+              candidate.tabId === selection.tabId &&
+              candidate.sessionId === selection.sessionId,
+          )
+        : undefined;
+    const active =
+      Boolean(tab) &&
+      ownerSnapshot?.session.foreground?.sessionId !== selection?.sessionId &&
+      Boolean(tab?.busy || tab?.needsAttention);
+    const next = active ? selection : null;
+    setDetachedPollSelection((current) =>
+      (current ? logicalTabSelectionKey(current) : null) ===
+      (next ? logicalTabSelectionKey(next) : null)
+        ? current
+        : next,
+    );
+  }, [
+    isAskAgentSelected,
+    ownerSnapshotRevision,
+    selectedLogicalTab,
+    selectedTabId,
+  ]);
+  useEffect(() => {
+    if (!detachedPollSelection) return;
+    const timer = window.setInterval(
+      () => scheduleDetachedRefresh(detachedPollSelection),
+      DETACHED_DETAIL_POLL_INTERVAL_MS,
+    );
+    return () => window.clearInterval(timer);
+  }, [detachedPollSelection, scheduleDetachedRefresh]);
+
+  useEffect(() => {
+    if (isAskAgentSelected) {
+      detachedSelectionEffectKeyRef.current = null;
+      return;
+    }
     const ownerSnapshot = snapshotCacheRef.current.get(selectedTabId)?.snapshot;
     const workspace = ownerSnapshot?.session.chatWorkspace;
     if (!ownerSnapshot || !workspace) return;
@@ -2894,12 +3011,27 @@ export function BrowserGatewayApp({
       storedWorkspaceSelection(selectedTabId, selection),
     );
     if (ownerSnapshot.session.foreground?.sessionId === selection.sessionId) {
+      detachedSelectionEffectKeyRef.current = null;
       setSnapshot(ownerSnapshot);
       return;
     }
 
     const detailKey = logicalTabSelectionKey(selection);
     const cachedDetail = detachedDetailCacheRef.current.get(detailKey);
+    const selectionUnchanged =
+      detachedSelectionEffectKeyRef.current === detailKey;
+    detachedSelectionEffectKeyRef.current = detailKey;
+    if (selectionUnchanged) {
+      // Only the owner snapshot changed: keep any cached detail on screen and
+      // request a throttled refresh through the refresh effect, which owner
+      // updates do not cancel. Restarting the debounced fetch below on every
+      // owner update starved this tab while the focused session streamed.
+      if (cachedDetail) {
+        setSnapshot(mergeDetachedSessionDetail(ownerSnapshot, cachedDetail));
+      }
+      scheduleDetachedRefresh(selection);
+      return;
+    }
     if (cachedDetail) {
       setSnapshot(mergeDetachedSessionDetail(ownerSnapshot, cachedDetail));
     } else {
@@ -4033,14 +4165,53 @@ export function BrowserGatewayApp({
     );
   }
 
+  /**
+   * Manual recovery for the selected VS Code window: discard cached relay
+   * state and ask VS Code for a fresh checkpoint, re-fetch the selected tab's
+   * detail when VS Code has a different tab focused, and refresh the window
+   * list and any missing tab list.
+   */
+  function resyncVsCodeView(): void {
+    const instanceId = selectedTabIdRef.current;
+    if (!instanceId || isAskAgentSelected) return;
+    const previousStatus = status;
+    const resyncStatus = "Resyncing with VS Code…";
+    setStatus(resyncStatus);
+    // The relay reports status only on connection changes, so restore the
+    // previous label if nothing else replaced the transient one.
+    window.setTimeout(
+      () =>
+        setStatus((current) =>
+          current === resyncStatus ? previousStatus : current,
+        ),
+      1_500,
+    );
+    resyncRelay();
+    const selection = selectedLogicalTabRef.current;
+    if (selection && selection.instanceId === instanceId) {
+      refreshDetachedSelection(selection);
+    }
+    void fetchInstances();
+    void hydrateInstanceWorkspace(instanceId);
+  }
+
   async function hydrateInstanceWorkspace(instanceId: string): Promise<void> {
+    const cachedAtStart = snapshotCacheRef.current.get(instanceId);
+    // The selected window normally gets its tabs from its live connection.
+    // In relay mode that connection can fail to deliver a checkpoint (owner not
+    // yet registered after a helper restart or window reload, heartbeat lapse),
+    // which left the workspace listed with no tabs. Fill the gap from a
+    // one-off snapshot until the relay catches up.
+    const hydrateSelected =
+      selectedTabIdRef.current === instanceId &&
+      relayClientEnabled &&
+      !cachedAtStart?.snapshot.session.chatWorkspace;
     if (
       workspaceHydrationInFlightRef.current.has(instanceId) ||
-      selectedTabIdRef.current === instanceId
+      (selectedTabIdRef.current === instanceId && !hydrateSelected)
     ) {
       return;
     }
-    const cachedAtStart = snapshotCacheRef.current.get(instanceId);
     workspaceHydrationInFlightRef.current.add(instanceId);
     try {
       const response = await fetch(
@@ -4050,10 +4221,15 @@ export function BrowserGatewayApp({
           headers: { Authorization: `Bearer ${authToken}` },
         },
       );
-      if (!response.ok) return;
+      if (!response.ok) {
+        console.warn(
+          `[browser-gateway] workspace hydration for ${instanceId} failed: HTTP ${response.status}`,
+        );
+        return;
+      }
       const data = await readGatewaySnapshotResponse(response);
       if (
-        selectedTabIdRef.current === instanceId ||
+        (selectedTabIdRef.current === instanceId && !hydrateSelected) ||
         snapshotCacheRef.current.get(instanceId) !== cachedAtStart
       ) {
         return;
@@ -4064,8 +4240,11 @@ export function BrowserGatewayApp({
         snapshot: data.snapshot,
       });
       setOwnerSnapshotRevision((revision) => revision + 1);
-    } catch {
-      // Best-effort tab-strip hydration; the selected instance connection retries.
+    } catch (error) {
+      // Best-effort tab-strip hydration; the next instance poll retries.
+      console.warn(
+        `[browser-gateway] workspace hydration for ${instanceId} failed: ${String(error)}`,
+      );
     } finally {
       workspaceHydrationInFlightRef.current.delete(instanceId);
     }
@@ -9126,6 +9305,10 @@ export function BrowserGatewayApp({
     () => undefined,
   );
   workspaceTabActionRef.current = (action) => {
+    if (action.action === "resync") {
+      resyncVsCodeView();
+      return;
+    }
     const workspace = snapshotCacheRef.current.get(action.instanceId)?.snapshot
       .session.chatWorkspace;
     if (action.action === "select") {
@@ -9520,7 +9703,34 @@ export function BrowserGatewayApp({
           {desktopRemoteSelected && browserShell && (
             <div class="desktop-header-actions">
               <span>VS Code</span>
+              <button
+                class="icon-button"
+                type="button"
+                title="Resync with VS Code"
+                aria-label="Resync with VS Code"
+                onClick={() =>
+                  sendWorkspaceTabAction({
+                    action: "resync",
+                    instanceId:
+                      hostedWorkspaceTabs?.find((group) => group.active)
+                        ?.instanceId ?? "",
+                  })
+                }
+              >
+                <i class="codicon codicon-sync" aria-hidden="true" />
+              </button>
             </div>
+          )}
+          {!consumerShell && !isAskAgentSelected && !askAgentOnly && (
+            <button
+              class="icon-button"
+              type="button"
+              title="Resync with VS Code"
+              aria-label="Resync with VS Code"
+              onClick={resyncVsCodeView}
+            >
+              <i class="codicon codicon-sync" aria-hidden="true" />
+            </button>
           )}
           {desktopRemoteSelected && !browserShell && (
             <div class="desktop-header-actions">

@@ -979,7 +979,7 @@ describe("carryAskAgentAccessState", () => {
 });
 
 describe("detached session detail cache", () => {
-  it("retains the owner approval when a detached detail has no local card", () => {
+  it("does not borrow the focused session's approval for another tab", () => {
     const ownerSnapshot = createGroupedSnapshot();
     ownerSnapshot.ui.approval = {
       kind: "command",
@@ -1013,7 +1013,53 @@ describe("detached session detail cache", () => {
       } as never,
     );
 
-    expect(merged.ui.approval).toEqual(ownerSnapshot.ui.approval);
+    // The owner approval belongs to the session VS Code has focused; showing
+    // it here would let the user answer it from the wrong tab.
+    expect(merged.ui.approval).toBeNull();
+    expect(merged.session.foreground?.sessionId).toBe("session-2");
+  });
+
+  it("shows the detached tab's own approval", () => {
+    const ownerSnapshot = createGroupedSnapshot();
+    ownerSnapshot.ui.approval = {
+      kind: "command",
+      id: "focused-approval",
+      command: "npm test",
+      cwd: "/workspace",
+      reason: "Focused session.",
+    };
+    const ownApproval = {
+      kind: "command",
+      id: "detached-approval",
+      command: "npm run lint",
+      cwd: "/workspace",
+      reason: "Detached session.",
+    };
+
+    const merged = mergeDetachedSessionDetail(
+      ownerSnapshot as never,
+      {
+        selection: {
+          controllerEpoch: "controller-1",
+          tabId: "tab-2",
+          sessionId: "session-2",
+        },
+        session: {
+          ...ownerSnapshot.session.foreground,
+          sessionId: "session-2",
+        },
+        ui: {
+          approval: ownApproval,
+          question: null,
+          questionProgress: null,
+          formElicitation: null,
+          urlElicitation: null,
+        },
+        revertRecoveryState: null,
+      } as never,
+    );
+
+    expect(merged.ui.approval).toEqual(ownApproval);
   });
 
   it("caps retained transcripts and evicts the oldest entry", () => {

@@ -2989,3 +2989,236 @@ describe("BrowserGatewayService", () => {
     }
   });
 });
+
+describe("BrowserGatewayService per-session card routing", () => {
+  function twoTabWorkspace(extraTabSessionIds: string[] = []) {
+    return {
+      controllerEpoch: "controller-1",
+      focusedTabId: "tab-1",
+      tabs: ["session-1", "session-2", ...extraTabSessionIds].map(
+        (sessionId, index) => ({
+          tabId: `tab-${index + 1}`,
+          displayNumber: index + 1,
+          label: `T${index + 1}`,
+          sessionId,
+          placement: "docked" as const,
+          status: "completed" as const,
+          busy: false,
+        }),
+      ),
+    };
+  }
+
+  function detachedSession(id: string) {
+    return {
+      id,
+      title: `Session ${id}`,
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "idle" as const,
+      reasoningEffort: "high" as const,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      lastCacheReadTokens: 0,
+      estimatedTotalUsed: 0,
+      runState: undefined,
+      projectScope: { projectId: "project-a", displayName: "Project A" },
+      projectAvailability: "available" as const,
+      getAllMessages: vi.fn(() => []),
+    };
+  }
+
+  it("keeps a child agent's approval in its own tab instead of the focused one", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    sessionManager.getSession.mockImplementation((sessionId) =>
+      sessionId === "session-2" ? detachedSession("session-2") : undefined,
+    );
+    const service = makeService(hub, sessionManager);
+    service.setChatWorkspaceProvider(
+      () => twoTabWorkspace(),
+      () => ({ dispose: vi.fn() }),
+    );
+
+    // VS Code publishes a child agent's approval under its root chat tab.
+    hub.publishApproval("session-2", {
+      kind: "command",
+      id: "child-approval",
+      command: "npm test",
+      cwd: "/workspace/a",
+      reason: "child",
+      backgroundTask: "Child agent",
+    } as never);
+
+    expect(service.getUiState().approval).toBeUndefined();
+    expect(service.getSerializableState().approval).toBeNull();
+    expect(
+      service.getSerializableSessionDetail({
+        controllerEpoch: "controller-1",
+        tabId: "tab-2",
+        sessionId: "session-2",
+      })?.ui.approval,
+    ).toMatchObject({ id: "child-approval" });
+    service.dispose();
+    hub.dispose();
+  });
+
+  it("shows background work with no tab of its own in every tab", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    sessionManager.getSession.mockImplementation((sessionId) =>
+      sessionId === "session-2" ? detachedSession("session-2") : undefined,
+    );
+    const service = makeService(hub, sessionManager);
+    service.setChatWorkspaceProvider(
+      () => twoTabWorkspace(),
+      () => ({ dispose: vi.fn() }),
+    );
+
+    hub.publishApproval("orphan-background", {
+      kind: "command",
+      id: "orphan-approval",
+      command: "npm test",
+      cwd: "/workspace/a",
+      reason: "orphan",
+      backgroundTask: "Orphaned agent",
+    } as never);
+
+    expect(service.getUiState().approval).toMatchObject({
+      id: "orphan-approval",
+    });
+    expect(
+      service.getSerializableSessionDetail({
+        controllerEpoch: "controller-1",
+        tabId: "tab-2",
+        sessionId: "session-2",
+      })?.ui.approval,
+    ).toMatchObject({ id: "orphan-approval" });
+    service.dispose();
+    hub.dispose();
+  });
+
+  it("restores the focused session's next pending approval after another is overwritten", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const service = makeService(hub);
+    hub.publishApproval("session-1", {
+      kind: "write",
+      id: "approval-a",
+      filePath: "src/a.ts",
+      writeOperation: "modify",
+    });
+    hub.publishApproval("session-1", {
+      kind: "write",
+      id: "approval-b",
+      filePath: "src/b.ts",
+      writeOperation: "modify",
+    });
+    expect(service.getUiState().approval?.id).toBe("approval-b");
+
+    hub.publishApprovalIdle("session-1", "approval-b");
+
+    // The single slot was cleared, but approval-a is still pending.
+    expect(service.getUiState().approval?.id).toBe("approval-a");
+    service.dispose();
+    hub.dispose();
+  });
+
+  it("shows a question asked in an unfocused tab once that tab is focused", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const service = makeService(hub, sessionManager);
+    // The projection never recorded the question (it was asked while another
+    // session was focused), but the session is still awaiting the answer.
+    sessionManager.getPendingQuestionRecovery.mockImplementation((sessionId) =>
+      sessionId === "session-1"
+        ? {
+            questionRequestId: "question-1",
+            toolUseId: "tool-1",
+            context: "Pick one.",
+            questions: [{ id: "q1", type: "yes_no", question: "Continue?" }],
+          }
+        : null,
+    );
+
+    expect(service.getUiState().question).toMatchObject({
+      id: "question-1",
+      toolCallId: "tool-1",
+      context: "Pick one.",
+    });
+    expect(service.getSerializableState().question?.id).toBe("question-1");
+    service.dispose();
+    hub.dispose();
+  });
+
+  it("drops a tabbed session's background card from view when focus moves away", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    let foregroundId = "session-2";
+    const sessionManager = makeSessionManagerStub();
+    const baseForeground = sessionManager.getForegroundSession();
+    sessionManager.getForegroundSession.mockImplementation(() => ({
+      ...baseForeground,
+      id: foregroundId,
+    }));
+    let notifySessions: (() => void) | undefined;
+    const service = makeService(hub, sessionManager);
+    service.setChatWorkspaceProvider(
+      () => twoTabWorkspace(),
+      () => ({ dispose: vi.fn() }),
+    );
+    service.subscribeToSessionChanges((listener) => {
+      notifySessions = listener;
+      return { dispose: vi.fn() };
+    });
+
+    // Accepted while session-2 (which has its own tab) is focused.
+    hub.publishApproval("session-2", {
+      kind: "command",
+      id: "child-approval",
+      command: "npm test",
+      cwd: "/workspace/a",
+      reason: "child",
+      backgroundTask: "Child agent",
+    } as never);
+    expect(service.getUiState().approval?.id).toBe("child-approval");
+
+    foregroundId = "session-1";
+    notifySessions?.();
+
+    expect(service.getUiState().approval).toBeUndefined();
+    service.dispose();
+    hub.dispose();
+  });
+
+  it("keeps a background question visible across a focus change", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    let foregroundId = "session-1";
+    const sessionManager = makeSessionManagerStub();
+    const baseForeground = sessionManager.getForegroundSession();
+    sessionManager.getForegroundSession.mockImplementation(() => ({
+      ...baseForeground,
+      id: foregroundId,
+    }));
+    let notifySessions: (() => void) | undefined;
+    const service = makeService(hub, sessionManager);
+    service.subscribeToSessionChanges((listener) => {
+      notifySessions = listener;
+      return { dispose: vi.fn() };
+    });
+
+    hub.publishQuestionRequest(
+      "orphan-background",
+      "background-question",
+      "Background needs input.",
+      [],
+      "Orphaned agent",
+    );
+    expect(service.getUiState().question?.id).toBe("background-question");
+
+    foregroundId = "session-2";
+    notifySessions?.();
+
+    expect(service.getUiState().question?.id).toBe("background-question");
+    service.dispose();
+    hub.dispose();
+  });
+});

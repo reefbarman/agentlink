@@ -402,6 +402,24 @@ export class BrowserGatewayOwnerProjectionAdapter {
     source: BrowserGatewayOwnerProjectionSourceKind,
   ): void {
     if (this.disposed || !this.demanded) return;
+    try {
+      this.publishSourceChange(source);
+    } catch {
+      // The change listener runs inside an event emitter that swallows errors.
+      // An incremental failure (for example an oversized event) would leave
+      // `projected` stale and the browser frozen, so publish a full baseline
+      // instead. If even that fails, force the next change to rebuild one.
+      try {
+        this.publishCheckpoint(this.sources.capture());
+      } catch {
+        this.projected = undefined;
+      }
+    }
+  }
+
+  private publishSourceChange(
+    source: BrowserGatewayOwnerProjectionSourceKind,
+  ): void {
     const readSet = this.sources.capture();
     const previous = this.projected;
     if (!previous) {

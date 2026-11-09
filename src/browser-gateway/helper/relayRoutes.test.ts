@@ -290,6 +290,53 @@ describe("BrowserGatewayRelayRoutes", () => {
     fixture.routes.close();
   });
 
+  it("asks the owner for a fresh checkpoint when a subscription requests a refresh", async () => {
+    const fixture = makeFixture();
+    const stream = new ResponseFixture();
+    const auth = { sessionKey: "device:1", deviceId: "device-1" };
+    await fixture.routes.handle(
+      "events",
+      auth,
+      request({ method: "GET", url: "/api/relay/events" }),
+      stream.asServerResponse(),
+      new URL("http://127.0.0.1:47200/api/relay/events"),
+    );
+    const hello = parseSseEvent(stream.writes.join(""), "hello");
+    const subscribe = async (extra: Record<string, unknown>) => {
+      const response = new ResponseFixture();
+      await fixture.routes.handle(
+        "subscription",
+        auth,
+        request({
+          method: "POST",
+          url: "/api/relay/subscription",
+          headers: {
+            host: "127.0.0.1:47200",
+            origin: "http://127.0.0.1:47200",
+          },
+          body: {
+            browserConnectionId: hello.browserConnectionId,
+            csrfNonce: hello.csrfNonce,
+            ownerId,
+            ownerGenerationId,
+            ...extra,
+          },
+        }),
+        response.asServerResponse(),
+        new URL("http://127.0.0.1:47200/api/relay/subscription"),
+      );
+      return response.headers.at(-1)?.status;
+    };
+
+    expect(await subscribe({})).toBe(202);
+    // The cached checkpoint satisfies an ordinary selection.
+    expect(fixture.checkpointRequests).toEqual([]);
+    expect(await subscribe({ refresh: true })).toBe(202);
+    expect(fixture.checkpointRequests).toEqual([0]);
+    expect(await subscribe({ refresh: "yes" })).toBe(400);
+    fixture.routes.close();
+  });
+
   it("binds subscriptions to connection CSRF and publishes only to the selected tab", async () => {
     const fixture = makeFixture();
     const selected = new ResponseFixture();

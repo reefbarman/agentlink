@@ -2063,9 +2063,10 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     state.foreground!.mode = "code";
     adapter.setDemanded(true);
     state.foreground!.mode = "";
-    expect(() => sources.fire("foreground")).toThrow(
-      BrowserGatewayProtocolError,
-    );
+    // A failed incremental update must not leave the projection silently
+    // stale: it is contained, consumes no sequence, and the next change
+    // rebuilds a full baseline.
+    expect(() => sources.fire("foreground")).not.toThrow();
     state.foreground!.mode = "debug";
     sources.fire("foreground");
 
@@ -2075,13 +2076,45 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
         checkpoint: expect.objectContaining({ checkpointSequence: 1 }),
       }),
       expect.objectContaining({
-        kind: "event",
-        event: expect.objectContaining({
-          ownerSequence: 2,
-          kind: "foreground.control.updated",
+        kind: "checkpoint",
+        checkpoint: expect.objectContaining({
+          checkpointSequence: 2,
+          foreground: expect.objectContaining({ mode: "debug" }),
         }),
       }),
     ]);
+  });
+
+  it("publishes a recovery checkpoint when an incremental update throws", () => {
+    const state = readSet();
+    const sources = new ProjectionSources(state);
+    const adapter = makeAdapter(sources);
+    const publications: BrowserGatewayOwnerProjectionPublication[] = [];
+    adapter.onDidPublish((publication) => publications.push(publication));
+    adapter.setDemanded(true);
+
+    // Fail only the incremental path; the follow-up full capture succeeds.
+    const capture = sources.capture.bind(sources);
+    let failNext = true;
+    sources.capture = () => {
+      if (failNext) {
+        failNext = false;
+        throw new Error("incremental capture failed");
+      }
+      return capture();
+    };
+    state.foreground!.mode = "debug";
+    sources.fire("foreground");
+
+    expect(publications.at(-1)).toEqual(
+      expect.objectContaining({
+        kind: "checkpoint",
+        checkpoint: expect.objectContaining({
+          checkpointSequence: 2,
+          foreground: expect.objectContaining({ mode: "debug" }),
+        }),
+      }),
+    );
   });
 
   it("suppresses semantically unchanged source notifications and unsubscribes on dispose", () => {

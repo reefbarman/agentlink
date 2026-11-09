@@ -49,7 +49,9 @@ export interface WorkspaceTabGroup {
 export type WorkspaceTabAction =
   | { action: "select"; instanceId: string; tabId?: string }
   | { action: "new"; instanceId: string }
-  | { action: "close"; instanceId: string; tabId: string };
+  | { action: "close"; instanceId: string; tabId: string }
+  /** Rebuild the selected window's state from VS Code. */
+  | { action: "resync"; instanceId: string };
 
 /** Validate tab data crossing the browser frame or Desktop IPC boundary. */
 export function isWorkspaceTabGroups(
@@ -104,6 +106,7 @@ export function isWorkspaceTabAction(
         candidate.tabId === undefined || typeof candidate.tabId === "string"
       );
     case "new":
+    case "resync":
       return true;
     case "close":
       return typeof candidate.tabId === "string";
