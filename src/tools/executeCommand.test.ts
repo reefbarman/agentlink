@@ -9894,6 +9894,237 @@ describe("handleExecuteCommand", () => {
       expect(executeCommand).toHaveBeenCalledTimes(1);
     });
 
+    const publicationHarness = async () => {
+      const { createReviewPublicationHost } =
+        await import("../approvals/reviewPublicationPolicy.js");
+      const state = {
+        builtinReview: true,
+        foreground: true,
+        humanInputRevision: 17,
+        queuedHumanInputs: [] as string[],
+        humanDecisions: {
+          incomplete: false,
+          entries: [
+            {
+              kind: "instruction" as const,
+              sequence: 1,
+              recordedAt: 1,
+              inputId: "review-intent-17",
+              text: "Review GitHub pull request https://github.com/owner/repo/pull/42. Compare against its base and report actionable findings.",
+            },
+          ],
+        },
+      };
+      const host = createReviewPublicationHost({
+        getSessionSnapshot: () => state,
+      });
+      const command =
+        "gh api repos/owner/repo/pulls/42/comments/9/replies -f body='Review findings'";
+      const observe = (read = "gh api repos/owner/repo/pulls/42") =>
+        host.observe({
+          sessionId: "session-human-input",
+          command: read,
+          cwd: "/workspace",
+          workspaceRoots: ["/workspace"],
+          humanInputRevision: state.humanInputRevision,
+          result: {
+            exit_code: 0,
+            output_complete: true,
+            output_finalized: true,
+            output: JSON.stringify({
+              number: 42,
+              html_url: "https://github.com/owner/repo/pull/42",
+            }),
+          },
+        });
+      return { host, state, command, observe };
+    };
+
+    it("repairs a combined initial read through an explicit standalone prerequisite without launching publication", async () => {
+      const { host, state, command } = await publicationHarness();
+      const review = vi.fn(async (_input: unknown) => allowReview());
+      const enqueue = vi.fn();
+      const providers = {
+        commandApprovalReviewer: { review },
+        reviewPublicationHost: host,
+        getHumanInputRevision: () => state.humanInputRevision,
+      };
+      const readResult = {
+        exit_code: 0,
+        output_captured: true,
+        output_complete: true,
+        output_finalized: true,
+        command_sent: true,
+        terminal_id: "term_1",
+        output: JSON.stringify({
+          number: 42,
+          url: "https://github.com/owner/repo/pull/42",
+          headRefOid: "abc",
+        }),
+      };
+      executeCommand.mockResolvedValueOnce(readResult);
+      await run(
+        providers,
+        enqueue,
+        "git status --short && gh pr view 42 --repo owner/repo --json number,url,headRefOid",
+      );
+      const prerequisite = textPayload(await run(providers, enqueue, command));
+      expect(prerequisite).toMatchObject({
+        status: "prerequisite_required",
+        error_code: "review_publication_evidence_required",
+        command_sent: false,
+        process_launched: false,
+        review_publication: {
+          status: "unavailable",
+          reason: "pr_observation_missing",
+        },
+        prerequisite: {
+          tool: "execute_command",
+          input: {
+            command: expect.stringContaining("--json number,url,headRefOid"),
+            cwd: "/workspace",
+          },
+        },
+      });
+      expect(executeCommand).toHaveBeenCalledTimes(1);
+      expect(enqueue).not.toHaveBeenCalled();
+      const reviewCount = review.mock.calls.length;
+      executeCommand.mockResolvedValueOnce(readResult);
+      await run(providers, enqueue, prerequisite.prerequisite.input.command);
+      state.humanInputRevision += 1;
+      state.humanDecisions.entries.push({
+        kind: "instruction",
+        sequence: 2,
+        recordedAt: 2,
+        inputId: "continue-review",
+        text: "Continue",
+      });
+      const published = textPayload(await run(providers, enqueue, command));
+      expect(published.review_publication).toEqual({ status: "verified" });
+      expect(review.mock.calls.at(-1)?.[0]).toMatchObject({
+        command,
+        humanInputRevision: 18,
+        reviewPublicationContext: {
+          sourceInputIds: expect.arrayContaining(["review-intent-17"]),
+          target: { host: "github.com", repository: "owner/repo", pr: 42 },
+        },
+      });
+      expect(review.mock.calls.length).toBeGreaterThan(reviewCount);
+      expect(executeCommand).toHaveBeenCalledTimes(3);
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    it("offers missing PR evidence only once, then preserves ordinary Guardian and human refusal", async () => {
+      const { host, state, command } = await publicationHarness();
+      const review = vi.fn(async () => ({
+        ...allowReview(),
+        outcome: "deny" as const,
+      }));
+      const enqueue = vi.fn(() => ({
+        promise: Promise.resolve({ decision: "reject" }),
+      }));
+      const providers = {
+        commandApprovalReviewer: { review },
+        reviewPublicationHost: host,
+        getHumanInputRevision: () => state.humanInputRevision,
+      };
+      expect(textPayload(await run(providers, enqueue, command)).status).toBe(
+        "prerequisite_required",
+      );
+      expect(review).not.toHaveBeenCalled();
+      const refused = textPayload(await run(providers, enqueue, command));
+      expect(refused).toMatchObject({
+        status: "rejected_by_user",
+        review_publication: {
+          status: "unavailable",
+          reason: "pr_observation_missing",
+        },
+      });
+      expect(review).toHaveBeenCalledOnce();
+      expect(enqueue).toHaveBeenCalledOnce();
+      expect(executeCommand).not.toHaveBeenCalled();
+    });
+
+    it("does not issue evidence prerequisites for retained denials or manual approval", async () => {
+      for (const manual of [false, true]) {
+        const { host, state, command } = await publicationHarness();
+        const assess = vi.spyOn(host, "assess");
+        const review = vi.fn(async () => ({
+          ...allowReview(),
+          outcome: "deny" as const,
+        }));
+        const enqueue = vi.fn(() => ({
+          promise: Promise.resolve({ decision: "reject" }),
+        }));
+        const refused = textPayload(
+          await run(
+            {
+              commandApprovalReviewer: { review },
+              reviewPublicationHost: host,
+              getHumanInputRevision: () => state.humanInputRevision,
+              getCommandApprovalPolicy: () =>
+                manual ? "manual" : "approve-for-me",
+              retainedCommandReviewDenials: {
+                has: () => true,
+                retain: vi.fn(),
+                clear: vi.fn(),
+              },
+            },
+            enqueue,
+            command,
+          ),
+        );
+        expect(refused.status).toBe("rejected_by_user");
+        expect(enqueue).toHaveBeenCalledOnce();
+        if (manual) expect(assess).not.toHaveBeenCalled();
+        else
+          expect(assess).toHaveBeenCalledWith(
+            expect.objectContaining({ allowPrerequisite: false }),
+          );
+      }
+      expect(executeCommand).not.toHaveBeenCalled();
+    });
+
+    it("rechecks a later refusal during a verified PR review and never dispatches the publication", async () => {
+      const { host, state, command, observe } = await publicationHarness();
+      observe();
+      const review = vi.fn(
+        async (input: { reviewPublicationContext?: unknown }) => {
+          if (review.mock.calls.length === 1) {
+            expect(input.reviewPublicationContext).toBeDefined();
+            state.humanInputRevision += 1;
+            state.humanDecisions.entries.push({
+              kind: "instruction",
+              sequence: 2,
+              recordedAt: 2,
+              inputId: "no-publishing",
+              text: "Do not publish anything, report only.",
+            });
+            return allowReview();
+          }
+          expect(input.reviewPublicationContext).toBeUndefined();
+          return { ...allowReview(), outcome: "deny" as const };
+        },
+      );
+      const enqueue = vi.fn(() => ({
+        promise: Promise.resolve({ decision: "reject" }),
+      }));
+      const result = textPayload(
+        await run(
+          {
+            commandApprovalReviewer: { review },
+            reviewPublicationHost: host,
+            getHumanInputRevision: () => state.humanInputRevision,
+          },
+          enqueue,
+          command,
+        ),
+      );
+      expect(result.status).toBe("rejected_by_user");
+      expect(review).toHaveBeenCalledTimes(2);
+      expect(executeCommand).not.toHaveBeenCalled();
+    });
+
     it("carries one host-bound publication snapshot through the real command and shadow composition", async () => {
       const { createReviewPublicationHost } =
         await import("../approvals/reviewPublicationPolicy.js");
@@ -10026,19 +10257,25 @@ describe("handleExecuteCommand", () => {
 
     it("forwards opaque named-terminal state only to the publication evidence host", async () => {
       const prepare = vi.fn(() => undefined);
+      const assess = vi.fn(() => ({ status: "not_applicable" as const }));
       const observe = vi.fn();
       const review = vi.fn(async (_input: unknown) => allowReview());
       await run(
         {
           commandApprovalReviewer: { review },
           getHumanInputRevision: () => 17,
-          reviewPublicationHost: { prepare, observe, isCurrent: () => false },
+          reviewPublicationHost: {
+            prepare,
+            assess,
+            observe,
+            isCurrent: () => false,
+          },
         },
         vi.fn(),
         "gh pr review 42 --repo owner/repo --approve",
         { terminal_name: "Review terminal" },
       );
-      expect(prepare).toHaveBeenCalledWith(
+      expect(assess).toHaveBeenCalledWith(
         expect.objectContaining({
           environmentOpaque: true,
           humanInputRevision: 17,

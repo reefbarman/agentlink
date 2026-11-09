@@ -4617,8 +4617,17 @@ describe("dispatchToolCall", () => {
       },
     };
     const getCommandReviewContextWithMetadata = vi.fn(() => contextSnapshot);
+    const preparation = {
+      status: "unavailable" as const,
+      reason: "pr_observation_missing" as const,
+      prerequisite: {
+        command:
+          "gh pr view https://github.com/owner/repo/pull/42 --json number,url,headRefOid",
+      },
+    };
     const reviewPublicationHost = {
       prepare: vi.fn(),
+      assess: vi.fn(() => preparation),
       isCurrent: vi.fn(() => true),
       observe: vi.fn(),
     };
@@ -4637,6 +4646,20 @@ describe("dispatchToolCall", () => {
     });
     const providers = vi.mocked(handleExecuteCommand).mock.calls[0]![5]!;
     expect(providers.reviewPublicationHost).toBe(reviewPublicationHost);
+    const assessmentRequest = {
+      sessionId: "session-a",
+      command: "gh api repos/owner/repo/pulls/42/comments -f body=note",
+      cwd: "/tmp/project",
+      workspaceRoots: ["/tmp/project"],
+      humanInputRevision: 41,
+      allowPrerequisite: true,
+    };
+    expect(providers.reviewPublicationHost?.assess(assessmentRequest)).toBe(
+      preparation,
+    );
+    expect(reviewPublicationHost.assess).toHaveBeenCalledWith(
+      assessmentRequest,
+    );
     expect(providers.getReviewContextWithMetadata?.("session-a")).toBe(
       contextSnapshot,
     );
@@ -7109,6 +7132,14 @@ describe("dispatchToolCall", () => {
       [{ status: "cancelled" }, "cancelled"],
       [{ partial: true, failed_blocks: [1] }, "partial"],
       [{ status: "partial" }, "partial"],
+      [
+        {
+          status: "prerequisite_required",
+          command_sent: false,
+          process_launched: false,
+        },
+        "partial",
+      ],
       [{ status: "error" }, "error"],
       [{ error: "failed" }, "error"],
       [{ ok: true }, "ok"],

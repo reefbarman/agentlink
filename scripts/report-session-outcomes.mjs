@@ -12,6 +12,18 @@ const DEFAULT_INPUT = path.join(
   "session-outcome-telemetry.jsonl",
 );
 const DEFAULT_TOP = 25;
+const REVIEW_PUBLICATION_REASONS = new Set([
+  "pr_observation_missing",
+  "scope_unavailable",
+  "ambiguous_target",
+  "stale_human_input",
+  "unsupported_command",
+  "environment_opaque",
+  "ownership_unverified",
+  "payload_unavailable",
+  "unsupported_payload",
+  "collection_failed",
+]);
 const GUARDIAN_SHADOW_ACTION_FAMILIES = new Set([
   "read_only",
   "mutation",
@@ -174,7 +186,16 @@ export function readSessionOutcomes(inputPath, filters = {}) {
     } else if (record.type === "approval_interruption") {
       mergeApprovalInterruption(report, record);
     } else if (record.type === "review_publication_attempt") {
-      report.reviewPublication.guardianAttempts += 1;
+      if (record.stage === "prerequisite")
+        report.reviewPublication.prerequisites += 1;
+      else report.reviewPublication.guardianAttempts += 1;
+      if (record.scopeEvidence === "unavailable") {
+        const reason = REVIEW_PUBLICATION_REASONS.has(record.reason)
+          ? record.reason
+          : "unreported";
+        report.reviewPublication.unavailableReasons[reason] =
+          (report.reviewPublication.unavailableReasons[reason] ?? 0) + 1;
+      }
       const scope = ["verified", "unavailable"].includes(record.scopeEvidence)
         ? record.scopeEvidence
         : "unreported";
@@ -278,6 +299,8 @@ function createEmptyReport() {
     },
     reviewPublication: {
       guardianAttempts: 0,
+      prerequisites: 0,
+      unavailableReasons: {},
       scopeEvidence: {},
       prompts: 0,
       promptSources: {},
@@ -1636,16 +1659,20 @@ function printSummary(report, inputPath, top) {
   }
 
   const publication = report.reviewPublication;
-  if (publication.guardianAttempts || publication.prompts) {
+  if (
+    publication.guardianAttempts ||
+    publication.prerequisites ||
+    publication.prompts
+  ) {
     console.log("");
-    console.log(
-      "Review publication diagnostics (supported literal commands only)",
-    );
+    console.log("Review publication diagnostics (bounded task evidence)");
     printTable(
       ["metric", "value"],
       [
         ["Guardian attempts", publication.guardianAttempts],
+        ["verification prerequisites", publication.prerequisites],
         ["scope evidence", formatCounts(publication.scopeEvidence)],
+        ["unavailable reasons", formatCounts(publication.unavailableReasons)],
         ["tagged approval cards", publication.prompts],
         ["prompt sources", formatCounts(publication.promptSources)],
         ["cards with Guardian review", publication.promptsWithGuardianReview],

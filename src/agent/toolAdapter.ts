@@ -1235,7 +1235,11 @@ export function getToolUsageOutcomeFromResult(
         return "rejected";
       }
       if (parsed.status === "cancelled") return "cancelled";
-      if (parsed.partial === true || parsed.status === "partial")
+      if (
+        parsed.partial === true ||
+        parsed.status === "partial" ||
+        parsed.status === "prerequisite_required"
+      )
         return "partial";
       structuredError =
         parsed.status === "error" || typeof parsed.error !== "undefined";

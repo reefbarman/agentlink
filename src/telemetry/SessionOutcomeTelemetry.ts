@@ -208,7 +208,8 @@ export interface ReviewPublicationAttemptEvent {
   type: "review_publication_attempt";
   sessionId: string;
   scopeEvidence: "verified" | "unavailable";
-  stage: "guardian_attempt";
+  stage: "guardian_attempt" | "prerequisite";
+  reason?: import("../approvals/reviewPublicationPolicy.js").ReviewPublicationUnavailableReason;
 }
 
 export type GuardianShadowActionFamily =

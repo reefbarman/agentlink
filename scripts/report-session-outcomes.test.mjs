@@ -80,11 +80,55 @@ test("separates publication attempts from tagged prompt sources without inferrin
   ]);
   assert.deepEqual(readSessionOutcomes(input).reviewPublication, {
     guardianAttempts: 2,
+    prerequisites: 0,
+    unavailableReasons: { unreported: 1 },
     scopeEvidence: { verified: 1, unavailable: 1 },
     prompts: 2,
     promptSources: { guardian_denied: 1, prompt_rule: 1 },
     promptsWithGuardianReview: 1,
   });
+});
+
+test("reports bounded publication prerequisite reasons separately from Guardian attempts", () => {
+  const input = path.join(makeTempDirectory(), "events.jsonl");
+  writeEvents(input, [
+    event({
+      type: "review_publication_attempt",
+      sessionId: "s",
+      stage: "prerequisite",
+      scopeEvidence: "unavailable",
+      reason: "pr_observation_missing",
+    }),
+    event({
+      type: "review_publication_attempt",
+      sessionId: "s",
+      stage: "guardian_attempt",
+      scopeEvidence: "unavailable",
+      reason: "unsupported_command",
+    }),
+    event({
+      type: "review_publication_attempt",
+      sessionId: "s",
+      stage: "guardian_attempt",
+      scopeEvidence: "unavailable",
+      reason: "private user text must not be printed",
+    }),
+  ]);
+  const publication = readSessionOutcomes(input).reviewPublication;
+  assert.equal(publication.guardianAttempts, 2);
+  assert.equal(publication.prerequisites, 1);
+  assert.deepEqual(publication.unavailableReasons, {
+    pr_observation_missing: 1,
+    unsupported_command: 1,
+    unreported: 1,
+  });
+  const result = spawnSync(process.execPath, [SCRIPT_PATH, "--input", input], {
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /verification prerequisites/);
+  assert.match(result.stdout, /pr_observation_missing:1/);
+  assert.doesNotMatch(result.stdout, /private user text/);
 });
 
 function efficiency(overrides = {}) {

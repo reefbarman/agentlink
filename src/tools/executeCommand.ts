@@ -84,6 +84,7 @@ import { collectCommandReviewEvidenceWithMetadata } from "../approvals/commandRe
 import type {
   ReviewPublicationContext,
   ReviewPublicationHost,
+  ReviewPublicationPreparation,
 } from "../approvals/reviewPublicationPolicy.js";
 import type {
   CommandRecoveryAttempt,
@@ -2543,6 +2544,7 @@ async function executeCommandWithAudit(
   // review saw. Dispatch is revoked if newer human input has arrived since.
   let reviewedHumanInputRevision: number | undefined;
   let reviewedPublicationContext: ReviewPublicationContext | undefined;
+  let publicationDiagnostic: PublicationDiagnostic | undefined;
   const humanInputIsStale = () =>
     (reviewedHumanInputRevision !== undefined &&
       providers.getHumanInputRevision?.(sessionId) !==
@@ -3333,6 +3335,7 @@ async function executeCommandWithAudit(
           reviewedHumanInputRevision =
             approvalResult.reviewedHumanInputRevision;
           reviewedPublicationContext = approvalResult.reviewPublicationContext;
+          publicationDiagnostic = approvalResult.publicationDiagnostic;
 
           if (approvalResult.policyDrift) {
             const driftedPreparation = preparedExecution;
@@ -3363,6 +3366,34 @@ async function executeCommandWithAudit(
             );
           }
 
+          if (approvalResult.publicationPrerequisite) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    status: "prerequisite_required",
+                    error_code: "review_publication_evidence_required",
+                    command: params.command,
+                    command_sent: false,
+                    process_launched: false,
+                    review_publication: publicationDiagnostic,
+                    reason:
+                      "The Review-mode PR task is recognised, but no safely attributable PR read is available. Run the exact standalone verification read below through normal approvals, then retry this publication once. This is not an approval or a denial. Do not repeat a human-rejected action.",
+                    prerequisite: {
+                      tool: "execute_command",
+                      input: {
+                        command: approvalResult.publicationPrerequisite.command,
+                        cwd,
+                      },
+                    },
+                    security: preparedExecution.security,
+                  }),
+                },
+              ],
+            };
+          }
+
           if (!approvalResult.approved) {
             return {
               content: [
@@ -3372,6 +3403,9 @@ async function executeCommandWithAudit(
                     status: "rejected_by_user",
                     command: params.command,
                     reason: approvalResult.reason,
+                    ...(publicationDiagnostic
+                      ? { review_publication: publicationDiagnostic }
+                      : {}),
                     ...(approvalResult.priorReview
                       ? { prior_review: approvalResult.priorReview }
                       : {}),
@@ -4298,7 +4332,23 @@ async function executeCommandWithAudit(
       );
 
       return {
-        content: [{ type: "text", text: JSON.stringify(modelResult, null, 2) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                ...modelResult,
+                ...(!commandEditedByUser &&
+                result.retry_outcome !== "completed" &&
+                publicationDiagnostic
+                  ? { review_publication: publicationDiagnostic }
+                  : {}),
+              },
+              null,
+              2,
+            ),
+          },
+        ],
       };
     } finally {
       preparedExecution?.dispose();
@@ -5111,6 +5161,13 @@ function malformedCommandResult(
   };
 }
 
+type PublicationDiagnostic =
+  | { status: "verified" }
+  | Pick<
+      Extract<ReviewPublicationPreparation, { status: "unavailable" }>,
+      "status" | "reason"
+    >;
+
 /**
  * Approve sub-commands by showing a single dialog with the full command.
  *
@@ -5161,6 +5218,8 @@ async function approveSubCommands(
   /** Human-input revision an automatic reviewer approval was based on. */
   reviewedHumanInputRevision?: number;
   reviewPublicationContext?: ReviewPublicationContext;
+  publicationDiagnostic?: PublicationDiagnostic;
+  publicationPrerequisite?: { command: string };
   priorReview?: PriorCommandReview;
 
   commitMutations?: () => void;
@@ -5328,6 +5387,7 @@ async function approveSubCommands(
   const forceRequested = Boolean(options?.forceRequested);
   let commandReview: CommandReviewSummary | undefined;
   let priorReview: PriorCommandReview | undefined;
+  let publicationDiagnostic: PublicationDiagnostic | undefined;
   let humanOnlyReason: string | undefined = options?.recoveryAttempt
     ? options.recoveryAttempt.commandSent === false &&
       options.recoveryAttempt.processLaunched === false
@@ -5398,6 +5458,48 @@ async function approveSubCommands(
       for (let attempt = 0; attempt < MAX_FRESH_REVIEW_ATTEMPTS; attempt += 1) {
         reviewId = randomUUID();
         reviewedRevision = currentHumanInputRevision();
+        const publication = reviewProviders.reviewPublicationHost?.assess({
+          sessionId,
+          command: reviewedCommand,
+          cwd,
+          workspaceRoots,
+          humanInputRevision: reviewedRevision,
+          hasEnvOverrides,
+          environmentOpaque: options?.publicationEnvironmentOpaque,
+          signal: reviewProviders.toolAbortSignal,
+          allowPrerequisite:
+            !retainedDenial &&
+            !options?.recoveryAttempt &&
+            !options?.requireHumanApproval &&
+            !options?.requireFreshReview &&
+            !forceRequested &&
+            !inlineFiles?.length,
+        });
+        reviewPublicationContext =
+          publication?.status === "verified" ? publication.context : undefined;
+        publicationDiagnostic =
+          publication?.status === "verified"
+            ? { status: "verified" }
+            : publication?.status === "unavailable"
+              ? { status: "unavailable", reason: publication.reason }
+              : undefined;
+        if (
+          publication?.status === "unavailable" &&
+          publication.prerequisite &&
+          currentHumanInputRevision() === reviewedRevision &&
+          !reviewProviders.toolAbortSignal?.aborted
+        ) {
+          if (
+            hasPolicyDrift(reviewProviders, sessionId, options!.routeContext)
+          ) {
+            return { approved: false, policyDrift: true };
+          }
+          return {
+            approved: false,
+            publicationDiagnostic,
+            publicationPrerequisite: publication.prerequisite,
+          };
+        }
         if (options?.security && reviewProviders.terminalProvider) {
           recordExecutionAudit(
             reviewProviders.terminalProvider,
@@ -5411,17 +5513,6 @@ async function approveSubCommands(
           reviewedCommand,
           { cwd, workspaceRoots },
         );
-        reviewPublicationContext =
-          reviewProviders.reviewPublicationHost?.prepare({
-            sessionId,
-            command: reviewedCommand,
-            cwd,
-            workspaceRoots,
-            humanInputRevision: reviewedRevision,
-            hasEnvOverrides,
-            environmentOpaque: options?.publicationEnvironmentOpaque,
-            signal: reviewProviders.toolAbortSignal,
-          });
         review = await reviewProviders.commandApprovalReviewer.review({
           sessionId,
           command: reviewedCommand,
@@ -5539,6 +5630,7 @@ async function approveSubCommands(
               ? { reviewedHumanInputRevision: reviewedRevision }
               : {}),
             ...(reviewPublicationContext ? { reviewPublicationContext } : {}),
+            ...(publicationDiagnostic ? { publicationDiagnostic } : {}),
           };
         }
         if (!reviewerApproved) {
@@ -5693,6 +5785,7 @@ async function approveSubCommands(
     return {
       approved: false,
       reason: response.rejectionReason,
+      ...(publicationDiagnostic ? { publicationDiagnostic } : {}),
       ...(priorReview ? { priorReview } : {}),
     };
   }
@@ -5753,6 +5846,7 @@ async function approveSubCommands(
             ...(priorReview ? { prior_review: priorReview } : {}),
           },
     followUp: response.followUp,
+    ...(publicationDiagnostic ? { publicationDiagnostic } : {}),
     commitMutations,
   };
 }

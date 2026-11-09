@@ -28,7 +28,6 @@ import {
 } from "./approvals/commandApprovalReview.js";
 import {
   createReviewPublicationHost,
-  isReviewPublicationCommand,
   type ReviewPublicationHost,
 } from "./approvals/reviewPublicationPolicy.js";
 import { BUILT_IN_MODES } from "./agent/modes.js";
@@ -3264,15 +3263,21 @@ export async function activate(
   });
   const reviewPublicationHost: ReviewPublicationHost = {
     ...publicationEvidenceHost,
-    prepare(request) {
-      const result = publicationEvidenceHost.prepare(request);
+    assess(request) {
+      const result = publicationEvidenceHost.assess(request);
       try {
-        if (isReviewPublicationCommand(request.command)) {
+        if (result.status !== "not_applicable") {
           sessionOutcomeTelemetry?.record({
             type: "review_publication_attempt",
             sessionId: request.sessionId,
-            scopeEvidence: result ? "verified" : "unavailable",
-            stage: "guardian_attempt",
+            scopeEvidence: result.status,
+            stage:
+              result.status === "unavailable" && result.prerequisite
+                ? "prerequisite"
+                : "guardian_attempt",
+            ...(result.status === "unavailable"
+              ? { reason: result.reason }
+              : {}),
           });
         }
       } catch {

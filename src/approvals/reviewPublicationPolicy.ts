@@ -47,6 +47,27 @@ export interface ReviewPublicationSessionSnapshot {
   queuedHumanInputs: readonly string[];
 }
 
+export type ReviewPublicationUnavailableReason =
+  | "pr_observation_missing"
+  | "scope_unavailable"
+  | "ambiguous_target"
+  | "stale_human_input"
+  | "unsupported_command"
+  | "environment_opaque"
+  | "ownership_unverified"
+  | "payload_unavailable"
+  | "unsupported_payload"
+  | "collection_failed";
+
+export type ReviewPublicationPreparation =
+  | { status: "verified"; context: ReviewPublicationContext }
+  | { status: "not_applicable" }
+  | {
+      status: "unavailable";
+      reason: ReviewPublicationUnavailableReason;
+      prerequisite?: { command: string };
+    };
+
 export interface ReviewPublicationRequest {
   sessionId: string;
   command: string;
@@ -56,6 +77,7 @@ export interface ReviewPublicationRequest {
   hasEnvOverrides?: boolean;
   environmentOpaque?: boolean;
   signal?: AbortSignal;
+  allowPrerequisite?: boolean;
 }
 
 export interface ReviewPublicationCommandObservation extends ReviewPublicationRequest {
@@ -75,6 +97,7 @@ export interface ReviewPublicationHost {
   prepare(
     request: ReviewPublicationRequest,
   ): ReviewPublicationContext | undefined;
+  assess(request: ReviewPublicationRequest): ReviewPublicationPreparation;
   isCurrent(sessionId: string, context: ReviewPublicationContext): boolean;
   observe(request: ReviewPublicationCommandObservation): void;
 }
@@ -219,6 +242,7 @@ function parseGhAction(
   const payloadFiles: string[] = [];
   const fields: Record<string, unknown> = {};
   const seenOptions = new Set<string>();
+  const headerNames = new Set<string>();
   let host = defaultHost.toLowerCase();
   let repository: string | undefined;
   let method: string | undefined;
@@ -271,8 +295,6 @@ function parseGhAction(
         "--input",
         "--body",
         "-b",
-        "--header",
-        "-H",
       ].includes(flag) &&
       seenOptions.has(optionKey)
     )
@@ -288,8 +310,6 @@ function parseGhAction(
         "--input",
         "--body",
         "-b",
-        "--header",
-        "-H",
       ].includes(flag)
     )
       seenOptions.add(optionKey);
@@ -337,8 +357,17 @@ function parseGhAction(
       }
       fields[key] = content;
     } else if (["--header", "-H"].includes(flag) && operation === "api") {
-      if (!/^(Accept|X-GitHub-Api-Version):/i.test(value() ?? ""))
+      const header = value();
+      const match = /^(Accept|X-GitHub-Api-Version):\s*([^\r\n]*)$/i.exec(
+        header ?? "",
+      );
+      if (
+        !match ||
+        /[\r\n]/.test(header ?? "") ||
+        headerNames.has(match[1]!.toLowerCase())
+      )
         return undefined;
+      headerNames.add(match[1]!.toLowerCase());
     } else if (
       ["--comment", "--approve", "--request-changes"].includes(flag) &&
       operation === "review"
@@ -487,6 +516,18 @@ export function isReviewPublicationCommand(command: string): boolean {
   return Boolean(action && action.kind !== "read");
 }
 
+/** Diagnostic only. This broad match never grants publication authority. */
+export function isReviewPublicationCandidate(command: string): boolean {
+  return (
+    /\bgh\s+pr\s+(?:comment|review)\b/i.test(command) ||
+    (/\bgh\s+api\b/i.test(command) &&
+      (/(?:^|\s)(?:--method|-X)(?:=|\s+)(?:POST|PATCH|PUT|DELETE)\b/i.test(
+        command,
+      ) ||
+        /(?:^|\s)(?:--input|--raw-field|--field|-f|-F)(?:=|\s)/.test(command)))
+  );
+}
+
 function scopeInputs(
   snapshot: ReviewPublicationSessionSnapshot,
 ): Array<{ text: string; id: string }> | undefined {
@@ -524,7 +565,9 @@ function scopeInputs(
       inputs.push({
         text:
           affirmative && publicationQuestion
-            ? `Review ${directive}`
+            ? /^\s*review\b/i.test(directive)
+              ? directive
+              : `Review ${directive}`
             : refusal
               ? `No: ${directive}`
               : directive,
@@ -539,47 +582,130 @@ function authorisedTarget(
   inputs: Array<{ text: string; id: string }>,
   target: ReviewPublicationTarget,
 ): string[] | undefined {
-  let source: string | undefined;
-  let publishingRestricted = false;
+  const authorised = new Map<
+    string,
+    { target: ReviewPublicationTarget; sourceIds: string[] }
+  >();
   for (const input of inputs) {
+    const text = input.text.trim();
     if (
-      /^\s*no\b/i.test(input.text) ||
-      /\b(?:do not|don't|never|without|no|not|skip|avoid)\b[\s\S]{0,60}\b(?:post\w*|publish\w*|comment\w*|approv\w*|submit\w*|leave)\b|\b(?:report|read)[ -]only\b|\b(?:only|just)\s+(?:summari[sz]e|report|findings)\b/i.test(
-        input.text,
+      /^no\b/i.test(text) ||
+      /\b(?:do not|don't|never|without|no|not|skip|avoid)\b[\s\S]{0,60}\b(?:post\w*|publish\w*|comment\w*|approv\w*|submit\w*|leave)\b|\b(?:report|read)[ -]only\b|\b(?:only|just)\s+(?:summari[sz]e|report|findings|read|inspect)\b/i.test(
+        text,
+      )
+    )
+      return undefined;
+
+    // Only a complete, clear continuation preserves authority without naming
+    // targets. Words such as "them" or "the review" inside another instruction
+    // are not consent, and reset/stop/ambiguous instructions clear the scope.
+    if (
+      /^(?:please\s+)?(?:continue|resume|carry on|go ahead)(?:\s+(?:with\s+)?(?:the\s+)?(?:review|reviews|same PR|them|those))?[.!]?$/i.test(
+        text,
+      )
+    )
+      continue;
+    const direct =
+      /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?review\b/i.test(text);
+    const additive =
+      /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?also\s+review\b/i.test(
+        text,
+      );
+    const ready =
+      /^(?:PR|pull request)\s*#?\d+(?:\s*(?:,|and|&)\s*(?:(?:PR|pull request)\s*#?|#)?\d+)*\s+(?:is|are)\s+ready\s+for\s+review(?:[.!]|\s*$|\r?\n)/i.test(
+        text,
+      );
+    if (
+      (!direct && !additive && !ready) ||
+      /\b(?:stop|pause|cancel|hold off|wait|forget|reset|clear|instead)\b/i.test(
+        text,
       )
     ) {
-      source = undefined;
-      publishingRestricted = true;
+      authorised.clear();
       continue;
     }
-    if (publishingRestricted) return undefined;
-    if (
-      !/^\s*(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?review\b/i.test(
-        input.text,
+
+    const previous = [...authorised.values()].map(({ target: item }) => item);
+    if (direct) authorised.clear();
+    // Only the leading review-target list grants scope. References in later
+    // explanation ("it supersedes #10", "depends on PR 8") are not requests.
+    const subject = text
+      .replace(
+        /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:also\s+)?review\s+/i,
+        "",
       )
-    ) {
-      source = undefined;
-      continue;
-    }
-    const urls = input.text.match(/https:\/\/[^\s<>"')]+/g) ?? [];
-    const targets = urls
-      // Prose often ends a URL with sentence punctuation ("…/pull/12.").
+      .replace(/^(?:GitHub\s+)?pull requests?\s+(?=https:\/\/)/i, "")
+      .replace(/^GitHub\s+(?=https:\/\/)/i, "")
+      .replace(/^[\w.-]+\/[\w.-]+\s+(?=(?:PR|pull request|#))/i, "");
+    const urlPattern = String.raw`https:\/\/[^\s<>"'),;]+`;
+    const numberedPattern = String.raw`(?:(?:PR|pull request)\s*#?|#)\d+`;
+    const list =
+      new RegExp(
+        `^(?:${urlPattern}|${numberedPattern})(?:\\s*(?:,|and\\b|&)\\s*(?:${urlPattern}|(?:(?:PR|pull request)\\s*#?|#)?\\d+))*`,
+        "i",
+      ).exec(subject)?.[0] ?? "";
+    const urls = list.match(new RegExp(urlPattern, "g")) ?? [];
+    const found = urls
       .map((url) => targetFromUrl(url.replace(/[.,;:!?]+$/, "")))
       .filter((item): item is ReviewPublicationTarget => Boolean(item));
-    const named = new RegExp(
-      `(?:^|[^\\w./-])${target.repository.replace(/\./g, "\\.")}(?:$|[^\\w./-])`,
-      "i",
-    ).test(input.text);
-    const numbered =
-      /\b(?:PR|pull request)\s*#?(\d+)\b/i.exec(input.text)?.[1] ===
-      String(target.pr);
-    source =
-      targets.some((item) => targetKey(item) === targetKey(target)) ||
-      (target.host === "github.com" && named && numbered)
-        ? input.id
-        : undefined;
+    const numbers = [
+      ...list.replace(new RegExp(urlPattern, "g"), "").matchAll(/\d+/g),
+    ].map((match) => Number(match[0]));
+    const withoutUrls = text.replace(/https:\/\/[^\s<>"')]+/g, "");
+    if (numbers.length) {
+      const repos = [
+        ...new Set(
+          [...withoutUrls.matchAll(/\b([\w.-]+\/[\w.-]+)\b/g)].map((match) =>
+            match[1]!.toLowerCase(),
+          ),
+        ),
+      ];
+      const inherited = found.length ? found : previous;
+      const origins = [
+        ...new Map(
+          inherited.map((item) => [`${item.host}/${item.repository}`, item]),
+        ).values(),
+      ];
+      const origin =
+        repos.length === 1
+          ? {
+              host:
+                origins.length === 1 && origins[0]!.repository === repos[0]
+                  ? origins[0]!.host
+                  : "github.com",
+              repository: repos[0]!,
+            }
+          : repos.length === 0 && origins.length === 1
+            ? origins[0]
+            : undefined;
+      if (
+        !origin ||
+        numbers.some((pr) => !Number.isSafeInteger(pr) || pr <= 0)
+      ) {
+        authorised.clear();
+        continue;
+      }
+      found.push(
+        ...numbers.map((pr) => ({
+          host: origin.host,
+          repository: origin.repository,
+          pr,
+        })),
+      );
+    }
+    if (!found.length || found.length > MAX_RECEIPTS) {
+      authorised.clear();
+      continue;
+    }
+    for (const item of found) {
+      const key = targetKey(item);
+      const sourceIds = authorised.get(key)?.sourceIds ?? [];
+      if (!sourceIds.includes(input.id)) sourceIds.push(input.id);
+      authorised.set(key, { target: item, sourceIds });
+    }
+    if (authorised.size > MAX_RECEIPTS) return undefined;
   }
-  return source && source === inputs.at(-1)?.id ? [source] : undefined;
+  return authorised.get(targetKey(target))?.sourceIds;
 }
 
 function capturePayloadFiles(
@@ -587,7 +713,7 @@ function capturePayloadFiles(
   request: ReviewPublicationRequest,
 ):
   | Pick<ReviewPublicationContext, "payloadFiles" | "payloadPreviews">
-  | undefined {
+  | { error: "payload_unavailable" | "unsupported_payload" } {
   const files: ReviewPublicationContext["payloadFiles"] = [];
   const previews: NonNullable<ReviewPublicationContext["payloadPreviews"]> = [];
   let bytes = 0;
@@ -601,16 +727,17 @@ function capturePayloadFiles(
           ...(process.platform === "win32" ? [] : [SHARED_TEMP_ROOT]),
         ])
       )
-        return undefined;
+        return { error: "payload_unavailable" };
       const stat = fs.statSync(resolved);
       bytes += stat.size;
-      if (!stat.isFile() || bytes > MAX_PAYLOAD_BYTES) return undefined;
+      if (!stat.isFile() || bytes > MAX_PAYLOAD_BYTES)
+        return { error: "payload_unavailable" };
       const fd = fs.openSync(resolved, "r");
       let content: Buffer;
       try {
         const buffer = Buffer.alloc(stat.size + 1);
         const read = fs.readSync(fd, buffer, 0, buffer.length, 0);
-        if (read !== stat.size) return undefined;
+        if (read !== stat.size) return { error: "payload_unavailable" };
         content = buffer.subarray(0, read);
       } finally {
         fs.closeSync(fd);
@@ -622,7 +749,12 @@ function capturePayloadFiles(
           (value) => typeof value === "string" && value.startsWith("@"),
         )
       ) {
-        const payload: unknown = JSON.parse(content.toString("utf8"));
+        let payload: unknown;
+        try {
+          payload = JSON.parse(content.toString("utf8"));
+        } catch {
+          return { error: "unsupported_payload" };
+        }
         if (
           !payload ||
           typeof payload !== "object" ||
@@ -643,7 +775,7 @@ function capturePayloadFiles(
               ].includes(key),
           )
         )
-          return undefined;
+          return { error: "unsupported_payload" };
       }
       files.push({
         reference,
@@ -652,7 +784,7 @@ function capturePayloadFiles(
       });
       previews.push({ reference, content: content.toString("utf8") });
     } catch {
-      return undefined;
+      return { error: "payload_unavailable" };
     }
   }
   return { payloadFiles: files, payloadPreviews: previews };
@@ -686,6 +818,7 @@ export function createReviewPublicationHost(options: {
   ): ReviewPublicationSessionSnapshot | undefined;
 }): ReviewPublicationHost {
   const sessions = new Map<string, SessionFacts>();
+  const prerequisiteAttempts = new Map<string, Set<string>>();
   const factsFor = (sessionId: string) => {
     let facts = sessions.get(sessionId);
     if (!facts) {
@@ -696,28 +829,34 @@ export function createReviewPublicationHost(options: {
     }
     return facts;
   };
-  const prepare = (
+  const assess = (
     request: ReviewPublicationRequest,
-  ): ReviewPublicationContext | undefined => {
+  ): ReviewPublicationPreparation => {
     try {
       const snapshot = options.getSessionSnapshot(request.sessionId);
-      if (
-        !snapshot?.builtinReview ||
-        !snapshot.foreground ||
-        request.signal?.aborted ||
-        request.hasEnvOverrides ||
-        request.environmentOpaque ||
-        !isCommandPathInsideWorkspace(request.cwd, request.workspaceRoots) ||
-        snapshot.humanInputRevision !== request.humanInputRevision
-      )
-        return undefined;
-      const inputs = scopeInputs(snapshot);
-      if (!inputs) return undefined;
+      if (!snapshot?.builtinReview || !snapshot.foreground)
+        return { status: "not_applicable" };
       const action = parseGhAction(
         request.command,
         process.env.GH_HOST || "github.com",
       );
-      if (!action || action.kind === "read") return undefined;
+      if (action?.kind === "read") return { status: "not_applicable" };
+      if (!action)
+        return isReviewPublicationCandidate(request.command)
+          ? { status: "unavailable", reason: "unsupported_command" }
+          : { status: "not_applicable" };
+      if (snapshot.humanInputRevision !== request.humanInputRevision)
+        return { status: "unavailable", reason: "stale_human_input" };
+      if (
+        request.signal?.aborted ||
+        request.hasEnvOverrides ||
+        request.environmentOpaque ||
+        !isCommandPathInsideWorkspace(request.cwd, request.workspaceRoots)
+      )
+        return { status: "unavailable", reason: "environment_opaque" };
+      const inputs = scopeInputs(snapshot);
+      if (!inputs)
+        return { status: "unavailable", reason: "scope_unavailable" };
       const facts = sessions.get(request.sessionId);
       const receipt =
         action.id && action.endpoint
@@ -726,12 +865,14 @@ export function createReviewPublicationHost(options: {
             )
           : undefined;
       const target = action.target ?? receipt?.target;
-      if (
-        !target ||
-        facts?.prs.get(targetKey(target))?.revision !==
-          request.humanInputRevision
-      )
-        return undefined;
+      if (!target)
+        return {
+          status: "unavailable",
+          reason:
+            action.kind === "edit_comment" || action.kind === "submit_review"
+              ? "ownership_unverified"
+              : "ambiguous_target",
+        };
 
       if (receipt && action.endpoint) {
         const repository = /^repos\/([\w.-]+\/[\w.-]+)\//
@@ -741,10 +882,11 @@ export function createReviewPublicationHost(options: {
           repository !== receipt.target.repository ||
           action.host !== receipt.target.host
         )
-          return undefined;
+          return { status: "unavailable", reason: "ownership_unverified" };
       }
       const sourceInputIds = authorisedTarget(inputs, target);
-      if (!sourceInputIds) return undefined;
+      if (!sourceInputIds)
+        return { status: "unavailable", reason: "scope_unavailable" };
       const currentView = facts?.currentViews.get(targetKey(target));
       const currentObject =
         currentView && action.id
@@ -768,9 +910,10 @@ export function createReviewPublicationHost(options: {
               receipt.emptyDraft !== true ||
               !currentView.emptyDraftReads.has(action.id!))))
       )
-        return undefined;
+        return { status: "unavailable", reason: "ownership_unverified" };
       const payloadEvidence = capturePayloadFiles(action, request);
-      if (!payloadEvidence) return undefined;
+      if ("error" in payloadEvidence)
+        return { status: "unavailable", reason: payloadEvidence.error };
       let payload = action.payload ?? {};
       if (
         action.endpoint &&
@@ -785,7 +928,7 @@ export function createReviewPublicationHost(options: {
         action.kind === "edit_comment" &&
         Object.keys(payload).some((key) => key !== "body")
       )
-        return undefined;
+        return { status: "unavailable", reason: "unsupported_payload" };
       if (
         action.kind === "submit_review" &&
         (Object.keys(payload).some((key) => !["body", "event"].includes(key)) ||
@@ -793,7 +936,7 @@ export function createReviewPublicationHost(options: {
             String(payload.event),
           ))
       )
-        return undefined;
+        return { status: "unavailable", reason: "unsupported_payload" };
       if (
         action.kind === "review" &&
         payload.event !== undefined &&
@@ -801,29 +944,81 @@ export function createReviewPublicationHost(options: {
           String(payload.event),
         )
       )
-        return undefined;
+        return { status: "unavailable", reason: "unsupported_payload" };
+      if (
+        action.kind === "comment" &&
+        payload.body === undefined &&
+        !action.payloadFiles.length
+      )
+        return { status: "unavailable", reason: "unsupported_payload" };
+      const prObservation = facts?.prs.get(targetKey(target));
+      if (
+        !prObservation ||
+        (prObservation.revision !== request.humanInputRevision &&
+          !["comment", "review"].includes(action.kind))
+      ) {
+        const unavailable = {
+          status: "unavailable",
+          reason: "pr_observation_missing",
+        } as const;
+        if (
+          !request.allowPrerequisite ||
+          !["comment", "review"].includes(action.kind)
+        )
+          return unavailable;
+        let attempts = prerequisiteAttempts.get(request.sessionId);
+        if (!attempts) {
+          if (prerequisiteAttempts.size >= MAX_SESSIONS)
+            prerequisiteAttempts.delete(
+              prerequisiteAttempts.keys().next().value!,
+            );
+          attempts = new Set();
+          prerequisiteAttempts.set(request.sessionId, attempts);
+        }
+        const key = `${targetKey(target)}\u0000${request.humanInputRevision}`;
+        if (attempts.has(key) || attempts.size >= MAX_RECEIPTS)
+          return unavailable;
+        attempts.add(key);
+        const url = `https://${target.host}/${target.repository}/pull/${target.pr}`;
+        return {
+          ...unavailable,
+          prerequisite: {
+            command: `gh pr view ${url} --json number,url,headRefOid`,
+          },
+        };
+      }
       return {
-        version: 1,
-        mode: "builtin_review",
-        command: request.command,
-        cwd: request.cwd,
-        humanInputRevision: snapshot.humanInputRevision,
-        target,
-        kind: action.kind,
-        sourceInputIds,
-        verified: true,
-        ...payloadEvidence,
-        workspaceRoots: [...request.workspaceRoots],
-        ...(action.kind === "submit_review"
-          ? { pendingReviewBody: currentObject!.body }
-          : {}),
+        status: "verified",
+        context: {
+          version: 1,
+          mode: "builtin_review",
+          command: request.command,
+          cwd: request.cwd,
+          humanInputRevision: snapshot.humanInputRevision,
+          target,
+          kind: action.kind,
+          sourceInputIds,
+          verified: true,
+          ...payloadEvidence,
+          workspaceRoots: [...request.workspaceRoots],
+          ...(action.kind === "submit_review"
+            ? { pendingReviewBody: currentObject!.body }
+            : {}),
+        },
       };
     } catch {
-      return undefined;
+      return { status: "unavailable", reason: "collection_failed" };
     }
+  };
+  const prepare = (
+    request: ReviewPublicationRequest,
+  ): ReviewPublicationContext | undefined => {
+    const result = assess({ ...request, allowPrerequisite: false });
+    return result.status === "verified" ? result.context : undefined;
   };
   return {
     prepare,
+    assess,
     isCurrent(sessionId, context) {
       const current = prepare({
         sessionId,
