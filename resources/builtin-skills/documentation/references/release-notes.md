@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.86.2
+
 - Auto Continue now recovers turns that stop without `set_task_status`, asking the agent to resume remaining in-scope work or explicitly mark the full request complete. The existing turn limit, no-progress guard, queued-message priority, Stop and error safeguards still apply in VS Code and its browser remote view.
 
 ## 1.86.1

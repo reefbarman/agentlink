@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9",
-  "createdAt": "2026-11-08T23:40:17.480Z",
+  "sourceSha": "ad375c29c68021ac93c50bc39a4006e34a3ff5db",
+  "createdAt": "2026-11-09T00:28:30.258Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.86.0",
-      "baselineRef": "v1.86.0",
-      "reserved": "1.86.0",
-      "commits": ["0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9"],
+      "published": "1.86.1",
+      "baselineRef": "v1.86.1",
+      "reserved": "1.86.1",
+      "commits": ["ad375c29c68021ac93c50bc39a4006e34a3ff5db"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.86.1",
+      "version": "1.86.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.86.1",
+      "tag": "v1.86.2",
       "notes": [
         {
-          "sha": "0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9",
-          "subject": "fix(chat): improve shelf interaction and clear cancelled approvals",
-          "summary": "Chat shows original question details beside saved answers, the activity shelf can be resized by touch, browser shelf layout matches VS Code, and cancelled sessions now clear pending inline approvals.",
+          "sha": "ad375c29c68021ac93c50bc39a4006e34a3ff5db",
+          "subject": "fix(agent): recover auto-continue turns without final status",
+          "summary": "Auto Continue now recovers when a turn ends without a final task status, prompting the agent to resume remaining work or call set_task_status, with the same turn limit and no-progress guard. Manual condense no longer triggers it.}]}</br>",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.86.0",
-      "baselineRef": "desktop-v0.86.0",
-      "reserved": "0.86.0",
-      "commits": ["0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9"],
+      "published": "0.86.1",
+      "baselineRef": "desktop-v0.86.1",
+      "reserved": "0.86.1",
+      "commits": ["ad375c29c68021ac93c50bc39a4006e34a3ff5db"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.86.1",
+      "version": "0.86.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.86.1",
+      "tag": "desktop-v0.86.2",
       "notes": [
         {
-          "sha": "0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9",
-          "subject": "fix(chat): improve shelf interaction and clear cancelled approvals",
-          "summary": "Chat shows original question details beside saved answers, the activity shelf can be resized by touch, browser shelf layout matches VS Code, and cancelled sessions now clear pending inline approvals.",
+          "sha": "ad375c29c68021ac93c50bc39a4006e34a3ff5db",
+          "subject": "fix(agent): recover auto-continue turns without final status",
+          "summary": "Auto Continue now recovers when a turn ends without a final task status, prompting the agent to resume remaining work or call set_task_status, with the same turn limit and no-progress guard. Manual condense no longer triggers it.}]}</br>",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.58.0",
-      "baselineRef": "assistant-v0.58.0",
-      "reserved": "0.58.0",
-      "commits": ["0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9"],
+      "published": "0.58.1",
+      "baselineRef": "assistant-v0.58.1",
+      "reserved": "0.58.1",
+      "commits": ["ad375c29c68021ac93c50bc39a4006e34a3ff5db"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.58.1",
+      "version": "0.58.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.58.1",
+      "tag": "assistant-v0.58.2",
       "notes": [
         {
-          "sha": "0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9",
-          "subject": "fix(chat): improve shelf interaction and clear cancelled approvals",
-          "summary": "Chat shows original question details beside saved answers, the activity shelf can be resized by touch, browser shelf layout matches VS Code, and cancelled sessions now clear pending inline approvals.",
+          "sha": "ad375c29c68021ac93c50bc39a4006e34a3ff5db",
+          "subject": "fix(agent): recover auto-continue turns without final status",
+          "summary": "Auto Continue now recovers when a turn ends without a final task status, prompting the agent to resume remaining work or call set_task_status, with the same turn limit and no-progress guard. Manual condense no longer triggers it.}]}</br>",
           "breaking": false
         }
       ]
@@ -111,6 +111,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Chat shows original question details beside saved answers, the activity shelf can be resized by touch, browser shelf layout matches VS Code, and cancelled sessions now clear pending inline approvals.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ad375c29c68021ac93c50bc39a4006e34a3ff5db": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Auto Continue now recovers when a turn ends without a final task status, prompting the agent to resume remaining work or call set_task_status, with the same turn limit and no-progress guard. Manual condense no longer triggers it.}]}</br>",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
