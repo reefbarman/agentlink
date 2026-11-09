@@ -1,6 +1,6 @@
 {
   "name": "@agentlink/server",
-  "version": "0.58.2",
+  "version": "0.58.3",
   "private": true,
   "description": "Standalone AgentLink assistant server",
   "license": "MIT",

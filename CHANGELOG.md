@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.86.3
+
 - Review-mode PR publication now repairs a missing PR observation with a separate, normally approved `gh pr view` prerequisite before one retry, only when the foreground task scope is valid. Clear continuations preserve the exact PR scope, while ambiguous/replaced requests, report-only turns, compound or filtered evidence, and all existing approval, receipts and content safeguards retain their limits. This applies to built-in foreground Review with Approve for Me, including its browser remote view through the same VS Code host.
 
 ## 1.86.2
