@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.87.0
+
 - Browser remote views of VS Code are more reliable. The browser no longer stays behind VS Code after an update it cannot apply: it discards its cached copy and rebuilds from a fresh snapshot. Chat tabs VS Code is not focused on refresh while they are working or waiting for input. Each tab shows only its own approval and question cards, so another session's card no longer appears in the tab you are viewing. Questions asked in an unfocused tab, background questions across tab switches, and approvals hidden behind a newer one are no longer lost. A window listed with no tabs now loads them from a one-off snapshot. A new **Resync with VS Code** header button forces recovery for the selected window.
 
 ## 1.86.4

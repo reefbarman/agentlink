@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "409f1a9fee76b8887a1727c92cd410fc3e9889d7",
-  "createdAt": "2026-11-09T03:34:39.692Z",
+  "sourceSha": "5937a52c858de81d9a87db704a906252bc2f45d7",
+  "createdAt": "2026-11-09T05:02:19.786Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.86.3",
-      "baselineRef": "v1.86.3",
-      "reserved": "1.86.3",
-      "commits": ["409f1a9fee76b8887a1727c92cd410fc3e9889d7"],
+      "published": "1.86.4",
+      "baselineRef": "v1.86.4",
+      "reserved": "1.86.4",
+      "commits": ["5937a52c858de81d9a87db704a906252bc2f45d7"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.86.4",
-      "effectiveBump": "patch",
+      "version": "1.87.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.86.4",
+      "tag": "v1.87.0",
       "notes": [
         {
-          "sha": "409f1a9fee76b8887a1727c92cd410fc3e9889d7",
-          "subject": "fix(desktop): show VS Code chat tabs in the sidebar",
-          "summary": "Desktop's VS Code view now lists chat tabs in the Desktop sidebar, grouped by VS Code window, replacing the horizontal tab strip once hosted; older gateway builds keep the strip.",
+          "sha": "5937a52c858de81d9a87db704a906252bc2f45d7",
+          "subject": "fix(browser-gateway): keep remote VS Code views in sync and route cards per session",
+          "summary": "Browser remote views of VS Code stay in sync and show approval and question cards in the correct session tab, with a new Resync with VS Code header button and automatic recovery when updates cannot be applied.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.86.3",
-      "baselineRef": "desktop-v0.86.3",
-      "reserved": "0.86.3",
-      "commits": ["409f1a9fee76b8887a1727c92cd410fc3e9889d7"],
+      "published": "0.86.4",
+      "baselineRef": "desktop-v0.86.4",
+      "reserved": "0.86.4",
+      "commits": ["5937a52c858de81d9a87db704a906252bc2f45d7"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.86.4",
-      "effectiveBump": "patch",
+      "version": "0.87.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.86.4",
+      "tag": "desktop-v0.87.0",
       "notes": [
         {
-          "sha": "409f1a9fee76b8887a1727c92cd410fc3e9889d7",
-          "subject": "fix(desktop): show VS Code chat tabs in the sidebar",
-          "summary": "Desktop's VS Code view now lists chat tabs in the Desktop sidebar, grouped by VS Code window, replacing the horizontal tab strip once hosted; older gateway builds keep the strip.",
+          "sha": "5937a52c858de81d9a87db704a906252bc2f45d7",
+          "subject": "fix(browser-gateway): keep remote VS Code views in sync and route cards per session",
+          "summary": "Browser remote views of VS Code stay in sync and show approval and question cards in the correct session tab, with a new Resync with VS Code header button and automatic recovery when updates cannot be applied.",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.58.3",
-      "baselineRef": "assistant-v0.58.3",
-      "reserved": "0.58.3",
-      "commits": ["409f1a9fee76b8887a1727c92cd410fc3e9889d7"],
+      "published": "0.58.4",
+      "baselineRef": "assistant-v0.58.4",
+      "reserved": "0.58.4",
+      "commits": ["5937a52c858de81d9a87db704a906252bc2f45d7"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.58.4",
-      "effectiveBump": "patch",
+      "version": "0.59.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.58.4",
+      "tag": "assistant-v0.59.0",
       "notes": [
         {
-          "sha": "409f1a9fee76b8887a1727c92cd410fc3e9889d7",
-          "subject": "fix(desktop): show VS Code chat tabs in the sidebar",
-          "summary": "Desktop's VS Code view now lists chat tabs in the Desktop sidebar, grouped by VS Code window, replacing the horizontal tab strip once hosted; older gateway builds keep the strip.",
+          "sha": "5937a52c858de81d9a87db704a906252bc2f45d7",
+          "subject": "fix(browser-gateway): keep remote VS Code views in sync and route cards per session",
+          "summary": "Browser remote views of VS Code stay in sync and show approval and question cards in the correct session tab, with a new Resync with VS Code header button and automatic recovery when updates cannot be applied.",
           "breaking": false
         }
       ]
@@ -135,6 +135,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Desktop's VS Code view now lists chat tabs in the Desktop sidebar, grouped by VS Code window, replacing the horizontal tab strip once hosted; older gateway builds keep the strip.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "5937a52c858de81d9a87db704a906252bc2f45d7": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Browser remote views of VS Code stay in sync and show approval and question cards in the correct session tab, with a new Resync with VS Code header button and automatic recovery when updates cannot be applied.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
