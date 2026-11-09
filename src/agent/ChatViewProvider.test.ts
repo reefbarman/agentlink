@@ -6508,6 +6508,61 @@ describe("ChatViewProvider session state sync", () => {
     },
   );
 
+  it.each(["natural stop", "manual condense"])(
+    "only recovers real turns without final status: %s",
+    async (completion) => {
+      vi.useFakeTimers();
+      try {
+        const session = makeBrowserQueueSession("session-auto", "idle");
+        const { provider, sendMessage } = await makeBrowserQueueProvider(
+          [session],
+          { current: session },
+        );
+        const host = provider as unknown as {
+          handleWebviewMessage(message: unknown): Promise<void>;
+          postMessage(message: unknown): void;
+          sessionManager: object;
+        };
+        const condense = vi.fn().mockResolvedValue(undefined);
+        Object.assign(host.sessionManager, { condenseSessionById: condense });
+        await host.handleWebviewMessage({
+          command: "agentSetAutoContinue",
+          sessionId: session.id,
+          enabled: true,
+        });
+        if (completion === "manual condense") {
+          await host.handleWebviewMessage({
+            command: "agentSlashCommand",
+            name: "condense",
+            sessionId: session.id,
+          });
+          expect(condense).toHaveBeenCalledWith(session.id);
+        } else {
+          host.postMessage({ type: "agentDone", sessionId: session.id });
+        }
+        await vi.runAllTimersAsync();
+
+        if (completion === "manual condense") {
+          expect(sendMessage).not.toHaveBeenCalled();
+          expect(
+            provider.getBrowserDetachedSessionState(session.id).autoContinue,
+          ).toMatchObject({ enabled: true });
+        } else {
+          expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
+            session.id,
+            expect.stringContaining(
+              "You stopped without calling set_task_status",
+            ),
+            "code",
+            expect.objectContaining({ origin: "vscode" }),
+          );
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("continues an already-completed idle turn when Auto Continue is turned on", async () => {
     vi.useFakeTimers();
     try {

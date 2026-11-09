@@ -282,7 +282,7 @@ describe("SessionAutoContinueController", () => {
     expect(sent).toEqual([]);
     expect(controller.getState("session-a").enabled).toBe(true);
 
-    controller.noteManualStop("session-a");
+    controller.suppressNextDone("session-a");
     finishTurn("session-a");
     expect(sent).toEqual([]);
     expect(controller.getState("session-a").enabled).toBe(true);
@@ -337,15 +337,95 @@ describe("SessionAutoContinueController", () => {
     );
   });
 
-  it("logs why a finished turn was not continued", () => {
-    const { controller, logs } = makeController();
+  it("recovers a turn without a final status and asks for explicit completion", () => {
+    const { controller, sent, updates, logs } = makeController();
     controller.setEnabled("session-a", true);
 
     controller.observe({ type: "agentDone", sessionId: "session-a" });
 
-    expect(logs.at(-1)).toBe(
-      "[auto-continue] session=session-a turn ended without a final status; not continuing",
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.displayText).toContain(
+      "You stopped without calling set_task_status",
     );
+    expect(sent[0]!.displayText).toContain(
+      "continue any remaining safe, in-scope work",
+    );
+    expect(sent[0]!.displayText).toContain("status completed");
+    expect(sent[0]!.displayText).toContain("call ask_user instead");
+    expect(sent[0]!.modelText).toBe(
+      formatAutoContinueModelPrompt(sent[0]!.displayText, "default"),
+    );
+    expect(sent[0]!.isStillWanted()).toBe(true);
+    expect(updates.at(-1)).toEqual({
+      sessionId: "session-a",
+      enabled: true,
+      status: `Auto Continue sent 1/${AUTO_CONTINUE_MAX_TURNS}.`,
+    });
+    expect(logs).toContain(
+      "[auto-continue] session=session-a turn ended without a final status; requesting recovery",
+    );
+    controller.setEnabled("session-a", false);
+    expect(sent[0]!.isStillWanted()).toBe(false);
+  });
+
+  it("stops repeated status recovery without progress, even with no turn cap", () => {
+    const { controller, sent } = makeController(false, {}, () => 0);
+    controller.setEnabled("session-a", true);
+    controller.observe({ type: "agentDone", sessionId: "session-a" });
+    controller.observe({ type: "agentDone", sessionId: "session-a" });
+
+    expect(sent).toHaveLength(1);
+    expect(controller.getState("session-a")).toEqual({
+      enabled: false,
+      status: AUTO_CONTINUE_NO_PROGRESS_REASON,
+    });
+  });
+
+  it("lets a recovered turn explicitly complete without another no-progress nudge", () => {
+    const { controller, sent, finishTurn } = makeController();
+    controller.setEnabled("session-a", true);
+    controller.observe({ type: "agentDone", sessionId: "session-a" });
+    finishTurn("session-a");
+
+    expect(sent).toHaveLength(1);
+    expect(controller.getState("session-a").enabled).toBe(false);
+  });
+
+  it("shares progress and turn limits between recovery and normal continuation", () => {
+    const { controller, sent, finishTurn } = makeController(false, {}, () => 2);
+    controller.setEnabled("session-a", true);
+    finishTurn("session-a");
+    controller.observe({
+      type: "agentToolComplete",
+      sessionId: "session-a",
+      toolName: "write_file",
+    });
+    controller.observe({ type: "agentDone", sessionId: "session-a" });
+    finishTurn("session-a", "completed", true);
+
+    expect(sent).toHaveLength(2);
+    expect(controller.getState("session-a").status).toBe(
+      "Auto Continue stopped after 2 turns to avoid an infinite loop.",
+    );
+  });
+
+  it("does not recover stopped, queued, errored, disabled or unadmitted turns", () => {
+    const { controller, sent, hasQueued } = makeController();
+    controller.observe({ type: "agentDone", sessionId: "session-a" });
+    controller.setEnabled("session-a", true);
+    controller.suppressNextDone("session-a");
+    controller.observe({ type: "agentDone", sessionId: "session-a" });
+    hasQueued.mockReturnValueOnce(true);
+    controller.observe({ type: "agentDone", sessionId: "session-a" });
+    controller.observe({
+      type: "agentDone",
+      sessionId: "session-a",
+      mcpResourceAdmissionPending: true,
+    });
+    controller.observe({ type: "agentError", sessionId: "session-a" });
+    controller.observe({ type: "agentDone", sessionId: "session-a" });
+
+    expect(sent).toEqual([]);
   });
 
   it("pauses after an agent error and ignores sessions that are off", () => {

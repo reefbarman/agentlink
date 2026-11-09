@@ -85,6 +85,9 @@ interface SessionAutoContinueRecord extends SessionAutoContinueState {
   generation: number;
 }
 
+const MISSING_FINAL_STATUS_PROMPT =
+  "You stopped without calling set_task_status. Re-check the original user request and continue any remaining safe, in-scope work from where you left off. Do not redo completed work, invent work, or broaden scope. If the full request is already complete, call set_task_status with status completed and the real user-facing summary, explicitly confirming that no work remains. If you need the user's input, decision, or permission, call ask_user instead. Otherwise use set_task_status with blocked or cancelled only when that is the true state.";
+
 const DISABLED_STATE: SessionAutoContinueState = {
   enabled: false,
   status: "",
@@ -152,8 +155,8 @@ export class SessionAutoContinueController {
     this.stop(sessionId, record, `Auto Continue paused: ${reason}`);
   }
 
-  /** The user stopped the turn: do not continue it automatically. */
-  noteManualStop(sessionId: string): void {
+  /** Ignore the next completion after a user Stop or a non-run operation. */
+  suppressNextDone(sessionId: string): void {
     const record = this.sessions.get(sessionId);
     if (record?.enabled) record.skipNextDone = true;
   }
@@ -215,12 +218,17 @@ export class SessionAutoContinueController {
     record.latestMarker = null;
     if (record.skipNextDone) {
       record.skipNextDone = false;
-      this.log(sessionId, "turn was stopped by the user; not continuing");
+      this.log(
+        sessionId,
+        "completion was suppressed by the host; not continuing",
+      );
       return;
     }
     if (!marker) {
-      this.log(sessionId, "turn ended without a final status; not continuing");
-      return;
+      this.log(
+        sessionId,
+        "turn ended without a final status; requesting recovery",
+      );
     }
     this.decide(sessionId, record, marker);
   }
@@ -228,16 +236,18 @@ export class SessionAutoContinueController {
   private decide(
     sessionId: string,
     record: SessionAutoContinueRecord,
-    marker: FinalMessageMarker,
+    marker: FinalMessageMarker | null,
   ): void {
-    const action = getFinalMessageContinueAction(marker);
+    const action = marker
+      ? getFinalMessageContinueAction(marker)
+      : { prompt: MISSING_FINAL_STATUS_PROMPT };
     if (!action) {
       this.stop(
         sessionId,
         record,
-        marker.status === "waiting_for_user"
+        marker?.status === "waiting_for_user"
           ? "Auto Continue stopped because the agent is waiting for input."
-          : `Auto Continue stopped because the task status is ${marker.status.replaceAll("_", " ")}.`,
+          : `Auto Continue stopped because the task status is ${marker?.status.replaceAll("_", " ")}.`,
       );
       return;
     }
@@ -266,7 +276,7 @@ export class SessionAutoContinueController {
     const progress = `${record.count}/${maxTurns === 0 ? "unlimited" : maxTurns}`;
     record.status = `Auto Continue sent ${progress}.`;
     this.log(sessionId, `sending continue ${progress}`);
-    this.publish(sessionId, record, { kind: "continued" });
+    this.publish(sessionId, record, marker ? { kind: "continued" } : undefined);
     const generation = record.generation;
     this.options.sendPrompt({
       sessionId,
@@ -274,7 +284,7 @@ export class SessionAutoContinueController {
       modelText: formatAutoContinueModelPrompt(
         action.prompt,
         // getFinalMessageContinueAction prefers the agent's own next step.
-        marker.continueAction ? "agent_proposed" : "default",
+        marker?.continueAction ? "agent_proposed" : "default",
       ),
       isStillWanted: () =>
         this.sessions.get(sessionId) === record &&

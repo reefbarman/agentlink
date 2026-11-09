@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Auto Continue now recovers turns that stop without `set_task_status`, asking the agent to resume remaining in-scope work or explicitly mark the full request complete. The existing turn limit, no-progress guard, queued-message priority, Stop and error safeguards still apply in VS Code and its browser remote view.
+
 ## 1.86.1
 
 - Inline approvals now clear their cards and VS Code status-bar alerts when the owning session run is cancelled outside the chat's Stop button, preventing stale “Tool approval required” indicators.

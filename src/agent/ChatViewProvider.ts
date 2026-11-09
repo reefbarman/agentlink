@@ -6592,7 +6592,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ): void {
     if (!this.sessionManager) return;
     const session = this.sessionManager.getSession(sessionId);
-    this.autoContinue.noteManualStop(sessionId);
+    this.autoContinue.suppressNextDone(sessionId);
     if (opts?.preserveBackgroundAgents) {
       this.sessionManager.interruptSession(sessionId);
     } else {
@@ -10417,6 +10417,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           await this.sessionManager.condenseSessionById(sourceSession.id);
           // Manual condense doesn't go through run() — emit agentDone so the
           // webview drains any messages queued during the condense operation.
+          // This is not an agent turn and must not trigger status recovery.
+          this.autoContinue.suppressNextDone(sourceSession.id);
           this.postMessage({
             type: "agentDone",
             sessionId: sourceSession.id,
