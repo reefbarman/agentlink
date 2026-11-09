@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "db7a5d4ff89a22ef4f3595990bcbb4dc75f2c2f6",
-  "createdAt": "2026-11-09T01:06:37.234Z",
+  "sourceSha": "409f1a9fee76b8887a1727c92cd410fc3e9889d7",
+  "createdAt": "2026-11-09T03:34:39.692Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.86.2",
-      "baselineRef": "v1.86.2",
-      "reserved": "1.86.2",
-      "commits": ["db7a5d4ff89a22ef4f3595990bcbb4dc75f2c2f6"],
+      "published": "1.86.3",
+      "baselineRef": "v1.86.3",
+      "reserved": "1.86.3",
+      "commits": ["409f1a9fee76b8887a1727c92cd410fc3e9889d7"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.86.3",
+      "version": "1.86.4",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.86.3",
+      "tag": "v1.86.4",
       "notes": [
         {
-          "sha": "db7a5d4ff89a22ef4f3595990bcbb4dc75f2c2f6",
-          "subject": "fix(approvals): preserve scoped PR review authority and repair evidence",
-          "summary": "Review-mode PR publication under Approve for Me now keeps scope across clear continuations and multi-PR requests, returns a prerequisite read when PR evidence is missing, and reports publication status diagnostics.",
+          "sha": "409f1a9fee76b8887a1727c92cd410fc3e9889d7",
+          "subject": "fix(desktop): show VS Code chat tabs in the sidebar",
+          "summary": "Desktop's VS Code view now lists chat tabs in the Desktop sidebar, grouped by VS Code window, replacing the horizontal tab strip once hosted; older gateway builds keep the strip.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.86.2",
-      "baselineRef": "desktop-v0.86.2",
-      "reserved": "0.86.2",
-      "commits": ["db7a5d4ff89a22ef4f3595990bcbb4dc75f2c2f6"],
+      "published": "0.86.3",
+      "baselineRef": "desktop-v0.86.3",
+      "reserved": "0.86.3",
+      "commits": ["409f1a9fee76b8887a1727c92cd410fc3e9889d7"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.86.3",
+      "version": "0.86.4",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.86.3",
+      "tag": "desktop-v0.86.4",
       "notes": [
         {
-          "sha": "db7a5d4ff89a22ef4f3595990bcbb4dc75f2c2f6",
-          "subject": "fix(approvals): preserve scoped PR review authority and repair evidence",
-          "summary": "Review-mode PR publication under Approve for Me now keeps scope across clear continuations and multi-PR requests, returns a prerequisite read when PR evidence is missing, and reports publication status diagnostics.",
+          "sha": "409f1a9fee76b8887a1727c92cd410fc3e9889d7",
+          "subject": "fix(desktop): show VS Code chat tabs in the sidebar",
+          "summary": "Desktop's VS Code view now lists chat tabs in the Desktop sidebar, grouped by VS Code window, replacing the horizontal tab strip once hosted; older gateway builds keep the strip.",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.58.2",
-      "baselineRef": "assistant-v0.58.2",
-      "reserved": "0.58.2",
-      "commits": ["db7a5d4ff89a22ef4f3595990bcbb4dc75f2c2f6"],
+      "published": "0.58.3",
+      "baselineRef": "assistant-v0.58.3",
+      "reserved": "0.58.3",
+      "commits": ["409f1a9fee76b8887a1727c92cd410fc3e9889d7"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.58.3",
+      "version": "0.58.4",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.58.3",
+      "tag": "assistant-v0.58.4",
       "notes": [
         {
-          "sha": "db7a5d4ff89a22ef4f3595990bcbb4dc75f2c2f6",
-          "subject": "fix(approvals): preserve scoped PR review authority and repair evidence",
-          "summary": "Review-mode PR publication under Approve for Me now keeps scope across clear continuations and multi-PR requests, returns a prerequisite read when PR evidence is missing, and reports publication status diagnostics.",
+          "sha": "409f1a9fee76b8887a1727c92cd410fc3e9889d7",
+          "subject": "fix(desktop): show VS Code chat tabs in the sidebar",
+          "summary": "Desktop's VS Code view now lists chat tabs in the Desktop sidebar, grouped by VS Code window, replacing the horizontal tab strip once hosted; older gateway builds keep the strip.",
           "breaking": false
         }
       ]
@@ -127,6 +127,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Review-mode PR publication under Approve for Me now keeps scope across clear continuations and multi-PR requests, returns a prerequisite read when PR evidence is missing, and reports publication status diagnostics.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "409f1a9fee76b8887a1727c92cd410fc3e9889d7": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Desktop's VS Code view now lists chat tabs in the Desktop sidebar, grouped by VS Code window, replacing the horizontal tab strip once hosted; older gateway builds keep the strip.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

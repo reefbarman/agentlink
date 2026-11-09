@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.86.4
+
 - Desktop now lists VS Code chat tabs in its sidebar, grouped by window, using the same tab list as the browser gateway. Select, create, and close tabs there instead of using the horizontal strip above the chat. Older gateways keep the strip until updated.
 
 ## 1.86.3
