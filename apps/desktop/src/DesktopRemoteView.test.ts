@@ -27,6 +27,8 @@ vi.mock("electron", async () => {
     session: { fromPartition: vi.fn(() => electron.remoteSession) },
     WebContentsView: class {
       webContents = Object.assign(new EventEmitter(), {
+        mainFrame: { url: "http://127.0.0.1:47137/?desktopWorkspace=1" },
+        send: vi.fn(),
         loadURL: vi.fn(async () => undefined),
         stop: vi.fn(),
         close: vi.fn(),
@@ -116,7 +118,9 @@ describe("native desktop remote composition", () => {
       nodeIntegration: false,
       session: electron.remoteSession,
     });
-    expect(f.view.options.webPreferences).not.toHaveProperty("preload");
+    expect(f.view.options.webPreferences.preload).toMatch(
+      /workspace-preload\.cjs$/,
+    );
     f.layout("vscode");
     await flush();
     expect(f.view.webContents.loadURL).toHaveBeenCalledExactlyOnceWith(
@@ -256,6 +260,107 @@ describe("native desktop remote composition", () => {
     await flush();
     expect(f.view.setVisible).toHaveBeenLastCalledWith(true);
     f.remote.dispose();
+  });
+
+  it("relays tabs and actions only between the owning shell and workspace main frames", async () => {
+    const f = fixture();
+    f.layout("vscode");
+    await flush();
+    const groups = [
+      {
+        instanceId: "distinct-window",
+        workspaceName: "Project",
+        color: "#4ec9b0",
+        statusKind: "idle",
+        statusLabel: "Completed",
+        active: true,
+        disconnected: false,
+        manageable: true,
+        pending: false,
+        tabs: [
+          {
+            tabId: "distinct-tab",
+            label: "T2",
+            title: "Sidebar chat",
+            statusKind: "idle",
+            statusLabel: "Completed",
+            active: true,
+            selectable: true,
+            popped: false,
+          },
+        ],
+      },
+    ];
+    const remoteSender = {
+      sender: f.view.webContents,
+      senderFrame: f.view.webContents.mainFrame,
+    };
+    electron.ipc.emit("agentlink:remote:tabs", remoteSender, groups);
+    expect(f.view.webContents.send).not.toHaveBeenCalled();
+    electron.ipc.emit("agentlink:remote:tabs-subscribe", f.sender);
+    expect(f.contents.send).toHaveBeenLastCalledWith(
+      "agentlink:remote:tabs",
+      groups,
+    );
+    expect(f.view.webContents.send).toHaveBeenLastCalledWith(
+      "agentlink:remote:tabs-hosted",
+    );
+    for (const action of [
+      {
+        action: "select",
+        instanceId: "distinct-window",
+        tabId: "distinct-tab",
+      },
+      { action: "new", instanceId: "distinct-window" },
+      { action: "close", instanceId: "distinct-window", tabId: "distinct-tab" },
+    ]) {
+      electron.ipc.emit("agentlink:remote:tab-action", f.sender, action);
+      expect(f.view.webContents.send).toHaveBeenLastCalledWith(
+        "agentlink:remote:tab-action",
+        action,
+      );
+    }
+    f.contents.send.mockClear();
+    f.view.webContents.send.mockClear();
+    electron.ipc.emit("agentlink:remote:tabs", f.sender, groups);
+    electron.ipc.emit(
+      "agentlink:remote:tabs",
+      { ...remoteSender, senderFrame: { url: target.url } },
+      groups,
+    );
+    electron.ipc.emit("agentlink:remote:tabs", remoteSender, [
+      { instanceId: "malformed" },
+    ]);
+    electron.ipc.emit("agentlink:remote:tab-action", remoteSender, {
+      action: "new",
+      instanceId: "distinct-window",
+    });
+    expect(f.contents.send).not.toHaveBeenCalled();
+    expect(f.view.webContents.send).not.toHaveBeenCalled();
+    f.view.webContents.emit(
+      "did-start-navigation",
+      {},
+      target.url,
+      false,
+      true,
+    );
+    f.view.webContents.emit(
+      "did-fail-load",
+      {},
+      -3,
+      "aborted",
+      target.url,
+      true,
+    );
+    expect(f.contents.send).not.toHaveBeenCalled();
+    f.view.webContents.emit("did-navigate", {}, target.url);
+    expect(f.contents.send).toHaveBeenCalledWith("agentlink:remote:tabs", null);
+    electron.ipc.emit("agentlink:remote:tabs", remoteSender, groups);
+    f.contents.send.mockClear();
+    f.view.webContents.emit("render-process-gone");
+    expect(f.contents.send).toHaveBeenCalledWith("agentlink:remote:tabs", null);
+    f.remote.dispose();
+    expect(electron.ipc.listenerCount("agentlink:remote:tabs")).toBe(0);
   });
 
   it("clamps zoom-scaled rectangles to content bounds", () => {

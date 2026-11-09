@@ -1,5 +1,17 @@
+import type {
+  WorkspaceTabAction,
+  WorkspaceTabGroup,
+} from "../browser-gateway/webview/workspaceTabsBridge.js";
+
 import type { ReleaseInstallState } from "../updates/releaseInstall.js";
 import type { ReleaseUpdateState } from "../updates/releaseUpdateTypes.js";
+
+/** Tab-only API for the isolated VS Code workspace view. */
+export interface DesktopWorkspaceBridge {
+  publishTabs(groups: WorkspaceTabGroup[]): void;
+  onHosted(listener: () => void): () => void;
+  onAction(listener: (action: WorkspaceTabAction) => void): () => void;
+}
 
 export const AGENTLINK_DESKTOP_OWNER_ID = "agentlink-desktop";
 export const AGENTLINK_DESKTOP_OWNER_ARGUMENT_PREFIX =
@@ -103,6 +115,10 @@ export interface DesktopBridge {
   onAskAgentOwnerIdChanged(listener: (ownerId: string) => void): () => void;
   setRemoteLayout(layout: DesktopRemoteLayout): void;
   retryRemote(): void;
+  onRemoteTabs?(
+    listener: (groups: WorkspaceTabGroup[] | null) => void,
+  ): () => void;
+  sendRemoteTabAction?(action: WorkspaceTabAction): void;
   onRemoteState(listener: (state: DesktopRemoteState) => void): () => void;
   /** Reload the Assistant view after a failure. */
   retryAssistant?(): void;
@@ -156,6 +172,7 @@ export interface DesktopBridge {
 declare global {
   interface Window {
     agentlinkDesktopShell?: DesktopBridge;
+    agentlinkDesktopWorkspace?: DesktopWorkspaceBridge;
     agentlinkDesktopEmbed?: DesktopEmbedBridge;
   }
 }

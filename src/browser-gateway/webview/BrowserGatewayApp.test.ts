@@ -25,6 +25,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppState } from "../../shared/chatProjection";
+import type { WorkspaceTabGroup } from "./workspaceTabsBridge";
 import type {
   DesktopAssistantChrome,
   DesktopAssistantState,
@@ -5080,9 +5081,62 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(document.querySelector(".browser-shell-desktop")).toBeNull();
   });
 
+  it("publishes Desktop workspace tabs and hides the strip only after the shell hosts them", async () => {
+    const publishTabs = vi.fn();
+    let host = () => {};
+    const stopHosted = vi.fn();
+    const stopAction = vi.fn();
+    window.agentlinkDesktopWorkspace = {
+      publishTabs,
+      onHosted: (listener) => {
+        host = listener;
+        return stopHosted;
+      },
+      onAction: () => stopAction,
+    };
+    try {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "instance-1",
+          workspaceName: "Workspace",
+          routeByInstance: true,
+          workspaceOnly: true,
+        }),
+      );
+      await screen.findByRole("tab", { name: /Workspace/ });
+      await waitFor(() =>
+        expect(publishTabs).toHaveBeenCalledWith(
+          expect.arrayContaining([
+            expect.objectContaining({
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+            }),
+          ]),
+        ),
+      );
+      act(() => host());
+      await waitFor(() =>
+        expect(screen.queryByRole("tablist", { name: "Instances" })).toBeNull(),
+      );
+    } finally {
+      cleanup();
+      delete window.agentlinkDesktopWorkspace;
+    }
+    await waitFor(() => expect(stopHosted).toHaveBeenCalled());
+    expect(stopAction).toHaveBeenCalled();
+  });
+
   it("switches desktop modes without unmounting the Ask Agent composer", async () => {
     const setRemoteLayout = vi.fn();
+    const sendRemoteTabAction = vi.fn();
+    let publishTabs: ((groups: WorkspaceTabGroup[] | null) => void) | undefined;
     window.agentlinkDesktopShell = {
+      sendRemoteTabAction,
+      onRemoteTabs: (listener) => {
+        publishTabs = listener;
+        return () => {};
+      },
       askAgentOwnerId: "agentlink-desktop",
       onAskAgentOwnerIdChanged: () => () => {},
       setRemoteLayout,
@@ -5113,6 +5167,66 @@ describe("BrowserGatewayApp /mcp behavior", () => {
         expect.objectContaining({ mode: "vscode" }),
       );
       expect(document.querySelector(".browser-main")).toBe(composer);
+      await waitFor(() => expect(publishTabs).toBeTypeOf("function"));
+      act(() =>
+        publishTabs!([
+          {
+            instanceId: "desktop-window",
+            workspaceName: "Sidebar project",
+            color: "#4ec9b0",
+            statusKind: "idle",
+            statusLabel: "Completed",
+            active: true,
+            disconnected: false,
+            manageable: true,
+            pending: false,
+            tabs: [
+              {
+                tabId: "desktop-tab",
+                label: "T2",
+                title: "Desktop sidebar chat",
+                statusKind: "idle",
+                statusLabel: "Completed",
+                active: true,
+                selectable: true,
+                popped: false,
+              },
+            ],
+          },
+        ]),
+      );
+      const tab = await screen.findByTitle(
+        "T2 · Desktop sidebar chat · Completed",
+      );
+      expect(tab.getAttribute("aria-current")).toBe("page");
+      fireEvent.click(tab);
+      fireEvent.click(
+        screen.getByRole("button", { name: "New tab in Sidebar project" }),
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Close T2 · Desktop sidebar chat" }),
+      );
+      expect(sendRemoteTabAction.mock.calls).toEqual([
+        [
+          {
+            action: "select",
+            instanceId: "desktop-window",
+            tabId: "desktop-tab",
+          },
+        ],
+        [{ action: "new", instanceId: "desktop-window" }],
+        [
+          {
+            action: "close",
+            instanceId: "desktop-window",
+            tabId: "desktop-tab",
+          },
+        ],
+      ]);
+      act(() => publishTabs!(null));
+      expect(
+        screen.queryByRole("navigation", { name: "VS Code chat tabs" }),
+      ).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: "Ask AgentLink" }));
       expect(document.querySelector(".browser-main")).toBe(composer);
       expect((composer as HTMLElement).style.display).not.toBe("none");

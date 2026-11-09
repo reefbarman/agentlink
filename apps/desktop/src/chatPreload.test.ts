@@ -58,6 +58,7 @@ it("exposes only the shell bridge and strips Electron events from state callback
     "onReleaseInstallState",
     "onReleaseUpdateState",
     "onRemoteState",
+    "onRemoteTabs",
     "onViewRequest",
     "openMcpConfig",
     "openMcpManager",
@@ -66,6 +67,7 @@ it("exposes only the shell bridge and strips Electron events from state callback
     "restartForReleaseUpdate",
     "retryAssistant",
     "retryRemote",
+    "sendRemoteTabAction",
     "setAssistantChrome",
     "setMcpOperation",
     "setRemoteLayout",
@@ -110,6 +112,27 @@ it("exposes only the shell bridge and strips Electron events from state callback
   expect(electron.removeListener).toHaveBeenCalledWith(
     "agentlink:remote:state",
     handler,
+  );
+
+  const tabsListener = vi.fn();
+  const stopTabs = bridge.onRemoteTabs!(tabsListener);
+  expect(electron.send).toHaveBeenCalledWith("agentlink:remote:tabs-subscribe");
+  const tabsHandler = electron.on.mock.calls.find(
+    ([channel]) => channel === "agentlink:remote:tabs",
+  )?.[1];
+  tabsHandler({ sender: "privileged" }, []);
+  tabsHandler({}, null);
+  tabsHandler({}, [{ instanceId: "malformed" }]);
+  expect(tabsListener.mock.calls).toEqual([[[]], [null]]);
+  bridge.sendRemoteTabAction!({ action: "new", instanceId: "distinct-window" });
+  expect(electron.send).toHaveBeenCalledWith("agentlink:remote:tab-action", {
+    action: "new",
+    instanceId: "distinct-window",
+  });
+  stopTabs();
+  expect(electron.removeListener).toHaveBeenCalledWith(
+    "agentlink:remote:tabs",
+    tabsHandler,
   );
 
   bridge.retryAssistant!();

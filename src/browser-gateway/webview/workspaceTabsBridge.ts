@@ -51,6 +51,47 @@ export type WorkspaceTabAction =
   | { action: "new"; instanceId: string }
   | { action: "close"; instanceId: string; tabId: string };
 
+/** Validate tab data crossing the browser frame or Desktop IPC boundary. */
+export function isWorkspaceTabGroups(
+  value: unknown,
+): value is WorkspaceTabGroup[] {
+  const status = (kind: unknown): boolean =>
+    kind === "working" ||
+    kind === "awaiting_approval" ||
+    kind === "error" ||
+    kind === "disconnected" ||
+    kind === "idle";
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (group: WorkspaceTabGroup) =>
+        group &&
+        typeof group.instanceId === "string" &&
+        typeof group.workspaceName === "string" &&
+        typeof group.color === "string" &&
+        status(group.statusKind) &&
+        typeof group.statusLabel === "string" &&
+        typeof group.active === "boolean" &&
+        typeof group.disconnected === "boolean" &&
+        typeof group.manageable === "boolean" &&
+        typeof group.pending === "boolean" &&
+        Array.isArray(group.tabs) &&
+        group.tabs.every(
+          (tab: WorkspaceTabItem) =>
+            tab &&
+            typeof tab.tabId === "string" &&
+            typeof tab.label === "string" &&
+            typeof tab.title === "string" &&
+            status(tab.statusKind) &&
+            typeof tab.statusLabel === "string" &&
+            typeof tab.active === "boolean" &&
+            typeof tab.selectable === "boolean" &&
+            typeof tab.popped === "boolean",
+        ),
+    )
+  );
+}
+
 export function isWorkspaceTabAction(
   value: unknown,
 ): value is WorkspaceTabAction {

@@ -54,6 +54,7 @@ import {
   WORKSPACE_TAB_ACTION_MESSAGE,
   WORKSPACE_TABS_HOST_MESSAGE,
   WORKSPACE_TABS_MESSAGE,
+  isWorkspaceTabGroups,
   isWorkspaceTabAction,
   type WorkspaceTabAction,
   type WorkspaceTabGroup,
@@ -9114,7 +9115,10 @@ export function BrowserGatewayApp({
   // ── VS Code tabs in the shell sidebar (see workspaceTabsBridge.ts) ──
   // Workspace page role: post the tab list to the shell and act on its
   // requests. The strip stays until the shell confirms it lists the tabs,
-  // so the desktop app and the classic per-window page keep it.
+  // so older Desktop builds and the classic per-window page keep it.
+  const desktopWorkspace = workspaceOnly
+    ? window.agentlinkDesktopWorkspace
+    : undefined;
   const embeddedInShell =
     workspaceOnly && !externalBrowserUnavailable && window.parent !== window;
   const [tabsHostedByShell, setTabsHostedByShell] = useState(false);
@@ -9168,59 +9172,79 @@ export function BrowserGatewayApp({
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [embeddedInShell]);
-  const workspaceTabGroupsJson = embeddedInShell
-    ? JSON.stringify(
-        instanceOptions.map((instance): WorkspaceTabGroup => {
-          const instanceStatus = getInstanceStatus(instance);
-          const workspace = snapshotCacheRef.current.get(instance.instanceId)
-            ?.snapshot.session.chatWorkspace;
-          const tabs = workspace ? selectableLogicalTabs(workspace) : [];
-          const activeInstance = instance.instanceId === selectedInstanceId;
-          const disconnected = instance.disconnectedAt !== undefined;
-          return {
-            instanceId: instance.instanceId,
-            workspaceName: instance.workspaceName,
-            color: instanceGroupColor(instance.instanceId),
-            statusKind: instanceStatus.kind,
-            statusLabel: instanceStatus.label,
-            active: activeInstance,
-            disconnected,
-            manageable: Boolean(workspace) && tabs.length > 0,
-            pending: newTabPendingInstance === instance.instanceId,
-            tabs: workspace
-              ? tabs.map((tab) => {
-                  const selection = logicalTabSelection(
-                    instance.instanceId,
-                    workspace,
-                    tab,
-                  );
-                  const status = disconnected
-                    ? instanceStatus
-                    : getLogicalTabStatus(tab.status);
-                  return {
-                    tabId: tab.tabId,
-                    label: tab.label,
-                    title: tab.title ?? "Empty chat",
-                    statusKind: status.kind,
-                    statusLabel: status.label,
-                    active: Boolean(
-                      activeInstance &&
-                      selection &&
-                      selectedLogicalTab &&
-                      logicalTabSelectionKey(selection) ===
-                        logicalTabSelectionKey(selectedLogicalTab),
-                    ),
-                    selectable: Boolean(selection),
-                    popped: tab.placement === "popped",
-                  };
-                })
-              : [],
-          };
-        }),
-      )
-    : "";
+  useEffect(() => {
+    if (!desktopWorkspace) return;
+    const stopHosted = desktopWorkspace.onHosted(() =>
+      setTabsHostedByShell(true),
+    );
+    const stopAction = desktopWorkspace.onAction((action) =>
+      workspaceTabActionRef.current(action),
+    );
+    return () => {
+      stopHosted();
+      stopAction();
+    };
+  }, [desktopWorkspace]);
+  const workspaceTabGroupsJson =
+    embeddedInShell || desktopWorkspace
+      ? JSON.stringify(
+          instanceOptions.map((instance): WorkspaceTabGroup => {
+            const instanceStatus = getInstanceStatus(instance);
+            const workspace = snapshotCacheRef.current.get(instance.instanceId)
+              ?.snapshot.session.chatWorkspace;
+            const tabs = workspace ? selectableLogicalTabs(workspace) : [];
+            const activeInstance = instance.instanceId === selectedInstanceId;
+            const disconnected = instance.disconnectedAt !== undefined;
+            return {
+              instanceId: instance.instanceId,
+              workspaceName: instance.workspaceName,
+              color: instanceGroupColor(instance.instanceId),
+              statusKind: instanceStatus.kind,
+              statusLabel: instanceStatus.label,
+              active: activeInstance,
+              disconnected,
+              manageable: Boolean(workspace) && tabs.length > 0,
+              pending: newTabPendingInstance === instance.instanceId,
+              tabs: workspace
+                ? tabs.map((tab) => {
+                    const selection = logicalTabSelection(
+                      instance.instanceId,
+                      workspace,
+                      tab,
+                    );
+                    const status = disconnected
+                      ? instanceStatus
+                      : getLogicalTabStatus(tab.status);
+                    return {
+                      tabId: tab.tabId,
+                      label: tab.label,
+                      title: tab.title ?? "Empty chat",
+                      statusKind: status.kind,
+                      statusLabel: status.label,
+                      active: Boolean(
+                        activeInstance &&
+                        selection &&
+                        selectedLogicalTab &&
+                        logicalTabSelectionKey(selection) ===
+                          logicalTabSelectionKey(selectedLogicalTab),
+                      ),
+                      selectable: Boolean(selection),
+                      popped: tab.placement === "popped",
+                    };
+                  })
+                : [],
+            };
+          }),
+        )
+      : "";
   useEffect(() => {
     if (!workspaceTabGroupsJson) return;
+    if (desktopWorkspace) {
+      desktopWorkspace.publishTabs(
+        JSON.parse(workspaceTabGroupsJson) as WorkspaceTabGroup[],
+      );
+      return;
+    }
     window.parent.postMessage(
       {
         type: WORKSPACE_TABS_MESSAGE,
@@ -9228,13 +9252,17 @@ export function BrowserGatewayApp({
       },
       window.location.origin,
     );
-  }, [workspaceTabGroupsJson]);
+  }, [workspaceTabGroupsJson, desktopWorkspace]);
 
   // Shell role: list the workspace page's tabs in the sidebar.
   const workspaceFrameRef = useRef<HTMLIFrameElement>(null);
   const [hostedWorkspaceTabs, setHostedWorkspaceTabs] = useState<
     WorkspaceTabGroup[] | null
   >(null);
+  useEffect(
+    () => desktopShell?.onRemoteTabs?.(setHostedWorkspaceTabs),
+    [desktopShell],
+  );
   useEffect(() => {
     if (!browserShell) return;
     const onMessage = (event: MessageEvent) => {
@@ -9247,7 +9275,10 @@ export function BrowserGatewayApp({
         return;
       }
       const data = event.data as { type?: unknown; groups?: unknown } | null;
-      if (data?.type !== WORKSPACE_TABS_MESSAGE || !Array.isArray(data.groups))
+      if (
+        data?.type !== WORKSPACE_TABS_MESSAGE ||
+        !isWorkspaceTabGroups(data.groups)
+      )
         return;
       setHostedWorkspaceTabs(data.groups as WorkspaceTabGroup[]);
       frame.postMessage(
@@ -9259,10 +9290,14 @@ export function BrowserGatewayApp({
     return () => window.removeEventListener("message", onMessage);
   }, [browserShell]);
   const sendWorkspaceTabAction = (action: WorkspaceTabAction): void => {
-    workspaceFrameRef.current?.contentWindow?.postMessage(
-      { type: WORKSPACE_TAB_ACTION_MESSAGE, action },
-      window.location.origin,
-    );
+    if (desktopShell?.sendRemoteTabAction) {
+      desktopShell.sendRemoteTabAction(action);
+    } else {
+      workspaceFrameRef.current?.contentWindow?.postMessage(
+        { type: WORKSPACE_TAB_ACTION_MESSAGE, action },
+        window.location.origin,
+      );
+    }
     // The sidebar overlays the chat on small screens; get out of the way.
     if (action.action === "select" && window.innerWidth <= 720) {
       setDesktopSidebarOpen(false);
@@ -10079,7 +10114,7 @@ export function BrowserGatewayApp({
               ) : undefined
             }
             vscodeContent={
-              browserShell && hostedWorkspaceTabs ? (
+              hostedWorkspaceTabs ? (
                 <WorkspaceTabList
                   groups={hostedWorkspaceTabs}
                   onAction={sendWorkspaceTabAction}

@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import * as path from "node:path";
+import {
+  isWorkspaceTabAction,
+  isWorkspaceTabGroups,
+  type WorkspaceTabGroup,
+} from "../../../src/browser-gateway/webview/workspaceTabsBridge.js";
 import {
   ipcMain,
   session,
@@ -86,6 +92,8 @@ export class DesktopRemoteView {
   private loaded = false;
   private disposed = false;
   private checking = false;
+  private tabGroups: WorkspaceTabGroup[] | null = null;
+  private tabsSubscribed = false;
   private retryPending = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -106,6 +114,7 @@ export class DesktopRemoteView {
     this.view = new WebContentsView({
       webPreferences: {
         session: remoteSession,
+        preload: path.join(__dirname, "workspace-preload.cjs"),
         sandbox: true,
         backgroundThrottling: false,
         contextIsolation: true,
@@ -141,6 +150,11 @@ export class DesktopRemoteView {
     );
     ipcMain.on("agentlink:remote:layout", this.onLayout);
     ipcMain.on("agentlink:remote:retry", this.onRetry);
+    ipcMain.on("agentlink:remote:tabs", this.onTabs);
+    ipcMain.on("agentlink:remote:tabs-subscribe", this.onTabsSubscribe);
+    ipcMain.on("agentlink:remote:tab-action", this.onTabAction);
+    // A cancelled navigation leaves the old document and its hosted tabs alive.
+    contents.on("did-navigate", () => this.clearTabs());
     window.on("resize", this.onResize);
     window.on("closed", this.dispose);
     window.webContents.on("zoom-changed", this.onResize);
@@ -194,6 +208,51 @@ export class DesktopRemoteView {
     void this.check();
   };
 
+  private publishTabs(): void {
+    if (this.tabsSubscribed && !this.window.webContents.isDestroyed()) {
+      this.window.webContents.send("agentlink:remote:tabs", this.tabGroups);
+      if (this.tabGroups)
+        this.view.webContents.send("agentlink:remote:tabs-hosted");
+    }
+  }
+
+  private clearTabs(): void {
+    this.tabGroups = null;
+    this.publishTabs();
+  }
+
+  private readonly onTabs = (event: IpcMainEvent, groups: unknown): void => {
+    if (
+      event.sender !== this.view.webContents ||
+      event.senderFrame !== this.view.webContents.mainFrame ||
+      !this.isRemoteDocument(event.senderFrame.url) ||
+      !isWorkspaceTabGroups(groups)
+    )
+      return;
+    this.tabGroups = groups;
+    this.publishTabs();
+  };
+
+  private readonly onTabsSubscribe = (event: IpcMainEvent): void => {
+    if (!isTrustedDesktopSender(event, this.window, this.shellOrigin)) return;
+    this.tabsSubscribed = true;
+    this.publishTabs();
+  };
+
+  private readonly onTabAction = (
+    event: IpcMainEvent,
+    action: unknown,
+  ): void => {
+    if (
+      !isTrustedDesktopSender(event, this.window, this.shellOrigin) ||
+      this.layout.mode !== "vscode" ||
+      !this.tabGroups ||
+      !isWorkspaceTabAction(action)
+    )
+      return;
+    this.view.webContents.send("agentlink:remote:tab-action", action);
+  };
+
   private readonly onResize = (): void => this.updateBounds();
 
   private readonly onShellNavigation = (
@@ -203,6 +262,7 @@ export class DesktopRemoteView {
     isMainFrame: boolean,
   ): void => {
     if (isMainFrame && !isInPlace) {
+      this.tabsSubscribed = false;
       this.layout.mode = "ask";
       this.clearTimer();
       this.updateBounds();
@@ -242,6 +302,7 @@ export class DesktopRemoteView {
   private loadFailed(): void {
     if (this.disposed) return;
     this.loaded = false;
+    this.clearTabs();
     this.setStatus("unavailable");
   }
 
@@ -269,6 +330,7 @@ export class DesktopRemoteView {
       const key = `${target.generation}:${target.url}`;
       if (key !== this.attemptedKey) {
         this.attemptedKey = key;
+        this.clearTabs();
         this.targetUrl = target.url;
         this.loaded = false;
         this.setStatus("connecting");
@@ -312,6 +374,12 @@ export class DesktopRemoteView {
     this.clearTimer();
     ipcMain.removeListener("agentlink:remote:layout", this.onLayout);
     ipcMain.removeListener("agentlink:remote:retry", this.onRetry);
+    ipcMain.removeListener("agentlink:remote:tabs", this.onTabs);
+    ipcMain.removeListener(
+      "agentlink:remote:tabs-subscribe",
+      this.onTabsSubscribe,
+    );
+    ipcMain.removeListener("agentlink:remote:tab-action", this.onTabAction);
     this.window.removeListener("resize", this.onResize);
     this.window.removeListener("closed", this.dispose);
     if (!this.window.isDestroyed()) {

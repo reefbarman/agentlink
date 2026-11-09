@@ -8,6 +8,10 @@ import {
   type DesktopMcpManagerOpenRequest,
 } from "../../../src/shared/desktopBridge.js";
 import { contextBridge, ipcRenderer } from "electron";
+import {
+  isWorkspaceTabGroups,
+  type WorkspaceTabGroup,
+} from "../../../src/browser-gateway/webview/workspaceTabsBridge.js";
 import type { ReleaseUpdateState } from "../../../src/updates/releaseUpdateTypes.js";
 import type { ReleaseInstallState } from "../../../src/updates/releaseInstall.js";
 
@@ -38,6 +42,19 @@ if (process.isMainFrame) {
     setRemoteLayout: (layout) =>
       ipcRenderer.send("agentlink:remote:layout", layout),
     retryRemote: () => ipcRenderer.send("agentlink:remote:retry"),
+    onRemoteTabs: (listener) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        groups: WorkspaceTabGroup[] | null,
+      ): void => {
+        if (groups === null || isWorkspaceTabGroups(groups)) listener(groups);
+      };
+      ipcRenderer.on("agentlink:remote:tabs", handler);
+      ipcRenderer.send("agentlink:remote:tabs-subscribe");
+      return () => ipcRenderer.removeListener("agentlink:remote:tabs", handler);
+    },
+    sendRemoteTabAction: (action) =>
+      ipcRenderer.send("agentlink:remote:tab-action", action),
     onRemoteState: (listener) => {
       const handler = (
         _event: Electron.IpcRendererEvent,
