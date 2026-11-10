@@ -662,7 +662,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         taskClass: {
           type: "string",
           description:
-            "Task class used for routing policy (e.g. review_code, review_plan, readonly-research, research, explore, debug, design, general). Use readonly-research for pure read-only lookup/exploration. Native debug from a Code-mode parent with non-empty ownedPaths defaults to Code unless mode is explicitly set or permissionProfile is review-only; debug without writable ownership remains Debug. Explicit mode=code is reliable for writable debugging, subject to all inherited restrictions. General defaults to Code. ACP routing is unchanged.",
+            "Task class used for routing policy (e.g. review_code, review_plan, readonly-research, research, explore, debug, design, general). Use readonly-research for pure read-only lookup/exploration. Native debug or research from a Code-mode parent with non-empty ownedPaths defaults to Code unless mode is explicitly set or permissionProfile is review-only; without writable ownership they remain Debug or Ask. Explicit mode=code is reliable for writable work, subject to all inherited restrictions. General defaults to Code. ACP routing is unchanged.",
         },
         modelTier: {
           type: "string",

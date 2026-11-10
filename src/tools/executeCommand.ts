@@ -1436,7 +1436,7 @@ async function attachProtectedGitMetadataRetryGuidance(input: {
     result.backgrounded ||
     result.is_running ||
     !result.process_launched ||
-    !PROTECTED_GIT_DENIAL_PATTERNS.every((pattern) => pattern.test(output))
+    !PROTECTED_GIT_DENIAL_PATTERNS[0].test(output)
   ) {
     return;
   }
@@ -1447,19 +1447,23 @@ async function attachProtectedGitMetadataRetryGuidance(input: {
   if (!protection) return;
   const normalizedMarker = protection.marker.replaceAll("\\", "/");
   const normalizedOutput = output.replaceAll("\\", "/");
+  const outputLines = normalizedOutput.split(/\r?\n/);
+  const protectedRoots = (protection.deniedWrite ?? [protection.marker]).map(
+    (root) => root.replaceAll("\\", "/"),
+  );
   const referencesProtectedPath =
-    normalizedOutput.includes(normalizedMarker) ||
-    normalizedOutput
-      .split(/\r?\n/)
-      .some(
-        (line) =>
-          /(?:index\.lock|ORIG_HEAD\.lock|FETCH_HEAD|objects\/tmp_object_)/i.test(
-            line,
-          ) &&
-          /(?:permission denied|operation not permitted|read-only file system|unable to create|could not create|failed to write)/i.test(
-            line,
-          ),
-      );
+    (PROTECTED_GIT_DENIAL_PATTERNS.every((pattern) => pattern.test(output)) &&
+      (normalizedOutput.includes(normalizedMarker) ||
+        outputLines.some((line) =>
+          PROTECTED_GIT_DENIAL_PATTERNS.every((pattern) => pattern.test(line)),
+        ))) ||
+    // A tool or script (for example a Node EPERM) denied a write under the
+    // protected Git directory itself, without naming a Git lock file.
+    outputLines.some(
+      (line) =>
+        PROTECTED_GIT_DENIAL_PATTERNS[0].test(line) &&
+        protectedRoots.some((root) => line.includes(`${root}/`)),
+    );
   if (!referencesProtectedPath) return;
   if (result.exit_code === 0 && !internalApplyFailure) {
     const protectedDenial = normalizedOutput.split(/\r?\n/).some((line) => {

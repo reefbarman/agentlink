@@ -18,6 +18,7 @@ export type PredictableGitMetadataWriterSubcommand =
   | "remote"
   | "config"
   | "fetch"
+  | "pull"
   | "rebase";
 
 export interface GitMetadataWriterClassificationInput {
@@ -49,6 +50,7 @@ const SUBCOMMANDS = new Set<PredictableGitMetadataWriterSubcommand>([
   "remote",
   "config",
   "fetch",
+  "pull",
   "rebase",
 ]);
 
@@ -107,6 +109,35 @@ function hasUnsupportedShellSyntax(command: string): boolean {
     }
   }
   return escaped || quote !== null;
+}
+
+/**
+ * An unquoted `&` that backgrounds a job. Redirections such as `2>&1`, `>&2`
+ * and `&>` are not background operators.
+ */
+function hasBackgroundOperator(command: string): boolean {
+  let quote: "single" | "double" | null = null;
+  for (let index = 0; index < command.length; index++) {
+    const character = command[index];
+    if (character === "\\" && quote !== "single") {
+      index++;
+      continue;
+    }
+    if (character === "'" && quote !== "double") {
+      quote = quote === "single" ? null : "single";
+      continue;
+    }
+    if (character === '"' && quote !== "single") {
+      quote = quote === "double" ? null : "double";
+      continue;
+    }
+    if (quote || character !== "&") continue;
+    const previous = command[index - 1];
+    const next = command[index + 1];
+    if (previous === ">" || previous === "<" || next === ">") continue;
+    return true;
+  }
+  return false;
 }
 
 function decodeWord(raw: string): string | null {
@@ -602,6 +633,45 @@ function classifyFetch(args: readonly string[]): boolean {
   return remote === undefined || /^[a-z0-9._-]+$/i.test(remote);
 }
 
+/**
+ * A pull that cannot stop for an editor: fast-forward only, rebase, or an
+ * explicit `--no-edit` merge. Remotes are names, never URLs.
+ */
+function classifyPull(args: readonly string[]): boolean {
+  const parsed = parseArguments(
+    args,
+    new Set([
+      "--ff-only",
+      "--ff",
+      "--no-ff",
+      "--rebase",
+      "-r",
+      "--no-rebase",
+      "--no-edit",
+      "--autostash",
+      "--no-autostash",
+      "-p",
+      "--prune",
+      "-t",
+      "--tags",
+      "--no-tags",
+      "--stat",
+      "--no-stat",
+      "-q",
+      "--quiet",
+      "-v",
+      "--verbose",
+    ]),
+    new Set(),
+  );
+  if (!parsed || parsed.separatorIndex !== undefined) return false;
+  if (!hasAny(parsed.options, ["--ff-only", "--rebase", "-r", "--no-edit"]))
+    return false;
+  if (parsed.operands.length > 2) return false;
+  const remote = parsed.operands[0];
+  return remote === undefined || /^[a-z0-9._-]+$/i.test(remote);
+}
+
 function classifyRebase(args: readonly string[]): boolean {
   if (
     args.length === 1 &&
@@ -669,6 +739,7 @@ const CLASSIFIERS: Record<
   remote: classifyRemote,
   config: classifyLocalConfigWrite,
   fetch: classifyFetch,
+  pull: classifyPull,
   rebase: classifyRebase,
 };
 
@@ -1093,6 +1164,12 @@ function isDirectGitInspection(command: string): boolean {
  * ending in an index-access Git apply. A match enables guidance only;
  * it never grants or selects execution authority. `null` means unrecognized or
  * ineligible, not safe.
+ *
+ * Every step before the first writer must be a recognised read-only inspection,
+ * because an unrecognised step (such as `cd`) could change which repository the
+ * writer targets. Steps after the first writer cannot change that, and the
+ * writer always fails in the sandbox, so they may be any command: the native
+ * retry still reviews the whole chain. `git init` chains stay strict.
  */
 export function classifyPredictableGitMetadataWriter(
   input: GitMetadataWriterClassificationInput,
@@ -1144,12 +1221,16 @@ export function classifyPredictableGitMetadataWriter(
       subcommands.push(subcommand);
       continue;
     }
-    if (
-      hasInit
-        ? subcommands.length > 0 && isDirectGitStatusFollowup(segment)
-        : isDirectGitInspection(segment)
-    )
+    if (hasInit) {
+      if (subcommands.length > 0 && isDirectGitStatusFollowup(segment))
+        continue;
+      return null;
+    }
+    if (subcommands.length > 0) {
+      if (hasBackgroundOperator(segment)) return null;
       continue;
+    }
+    if (isDirectGitInspection(segment)) continue;
     return null;
   }
   // Inline files serve as an apply patch or a commit message file; the

@@ -847,6 +847,78 @@ describe("handleExecuteCommand", () => {
     });
   });
 
+  it("adds protected Git recovery when a script is denied a write under .git", async () => {
+    resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+      marker: "/workspace/.git",
+    });
+    executeCommand.mockResolvedValue({
+      exit_code: 2,
+      output:
+        "Error: EPERM: operation not permitted, mkdir '/workspace/.git/agentlink-preflight/0cec65d2'",
+      output_captured: true,
+      terminal_id: "term_git_script_denial",
+      command_sent: true,
+      process_launched: true,
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm run preflight", cwd: "/workspace" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-git-script-denial",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      exit_code: 2,
+      capability_code: "protected_git_metadata",
+      retry_guidance: {
+        code: "protected_git_metadata",
+        options: [
+          expect.objectContaining({
+            sandbox_permissions: "require_escalated",
+            command: "npm run preflight",
+          }),
+        ],
+      },
+    });
+  });
+
+  it("does not treat a denial on a .git-prefixed sibling path as protected", async () => {
+    resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+      marker: "/workspace/.git",
+    });
+    executeCommand.mockResolvedValue({
+      exit_code: 1,
+      output:
+        "Error: EPERM: operation not permitted, open '/workspace/.github/workflows/ci.yml'",
+      output_captured: true,
+      terminal_id: "term_git_sibling",
+      command_sent: true,
+      process_launched: true,
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm run gen", cwd: "/workspace" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-git-sibling",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(textPayload(result)).not.toHaveProperty("retry_guidance");
+  });
+
   it("does not trust a quoted protected path without a denial signature", async () => {
     resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
       marker: "/workspace/.git",

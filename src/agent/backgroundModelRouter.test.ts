@@ -115,6 +115,50 @@ describe("resolveBackgroundRoute", () => {
     },
   );
 
+  // Reported: research delegates told to write results into an owned build
+  // directory started in Ask, which has no edit tools.
+  it.each([
+    [{ ownedPaths: ["build/out"] }, "code"],
+    [{ ownedPaths: [] }, "ask"],
+    [{}, "ask"],
+    [{ ownedPaths: ["build/out"], mode: "ask" }, "ask"],
+    [{ ownedPaths: ["build/out"], permissionProfile: "review-only" }, "ask"],
+  ] as Array<[Partial<SpawnBackgroundRequest>, string]>)(
+    "routes research request %j by declared ownership",
+    async (overrides, expectedMode) => {
+      const model = tieredModel("research-model", "custom", "balanced");
+      const registry = makeRegistry([makeProvider("custom", [model])]);
+      const route = await resolveBackgroundRoute(
+        registry,
+        generalRequest({
+          taskClass: "research",
+          model: model.id,
+          ...overrides,
+        }),
+        { mode: "code", model: model.id },
+      );
+      expect(route.resolvedMode).toBe(expectedMode);
+    },
+  );
+
+  it.each(["ask", "architect", "review"])(
+    "keeps scoped research read-only from a %s parent",
+    async (mode) => {
+      const model = tieredModel("research-model", "custom", "balanced");
+      const registry = makeRegistry([makeProvider("custom", [model])]);
+      const route = await resolveBackgroundRoute(
+        registry,
+        generalRequest({
+          taskClass: "research",
+          model: model.id,
+          ownedPaths: ["build/out"],
+        }),
+        { mode, model: model.id },
+      );
+      expect(route.resolvedMode).toBe("ask");
+    },
+  );
+
   it.each(["ask", "architect", "review", "debug", "orchestrate", "custom"])(
     "does not default scoped debugging to writable mode from %s",
     async (mode) => {

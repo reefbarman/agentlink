@@ -88,6 +88,14 @@ function getTaskRule(taskClass?: string): {
   };
 }
 
+/**
+ * Task classes whose default mode cannot write, but which a Code-mode parent
+ * may hand writable ownership. Declared ownedPaths means the delegate is
+ * expected to produce files, so it runs in Code. `readonly-research` stays
+ * read-only.
+ */
+const OWNERSHIP_UPGRADES_TO_CODE = new Set(["debug", "research"]);
+
 function pickMode(
   request: SpawnBackgroundRequest,
   foregroundMode: string,
@@ -97,7 +105,7 @@ function pickMode(
   if (explicitMode) return explicitMode;
   if (
     foregroundMode === "code" &&
-    request.taskClass?.trim() === "debug" &&
+    OWNERSHIP_UPGRADES_TO_CODE.has(request.taskClass?.trim() ?? "") &&
     request.ownedPaths?.length &&
     request.permissionProfile !== "review-only"
   ) {

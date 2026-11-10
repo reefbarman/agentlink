@@ -158,6 +158,15 @@ const positives: Array<[PredictableGitMetadataWriterSubcommand, string[]]> = [
     ],
   ],
   [
+    "pull",
+    [
+      "git pull --ff-only",
+      "git pull --ff-only origin main",
+      "git pull --rebase --autostash origin main",
+      "git pull -q --no-edit origin",
+    ],
+  ],
+  [
     "rebase",
     [
       "git rebase main",
@@ -222,19 +231,19 @@ const negatives = [
   "GIT_DIR=.git git ls-files -z plans | xargs -0 git add -- && git commit -m fix",
   "git log --oneline",
   "git show --stat",
-  "git add . && git log --show-signature -1",
-  "git add . && git log -1 --format='%h %G?'",
-  "git add . && git show --pretty='format:%GS'",
+  "git log --show-signature -1 && git add .",
+  "git log -1 --format='%h %G?' && git add .",
+  "git show --pretty='format:%GS' && git add .",
 
-  "git add . && git config --unset user.email",
-  "git add . && git config user.email other@example.com",
-  "git add . && git config --get-regexp user",
-  "git add . && git rev-parse --git-path hooks",
-  "git add . && git rev-parse --parseopt",
-  "git add . && git rev-list --all",
-  "git add . && git remote get-url --all origin",
-  "git add . && git remote get-url",
-  "git add . && git branch --show-current extra",
+  "git config --unset user.email && git add .",
+  "git config user.email other@example.com && git add .",
+  "git config --get-regexp user && git add .",
+  "git rev-parse --git-path hooks && git add .",
+  "git rev-parse --parseopt && git add .",
+  "git rev-list --all && git add .",
+  "git remote get-url --all origin && git add .",
+  "git remote get-url && git add .",
+  "git branch --show-current extra && git add .",
   "git config --local --get user.email",
   "git config --global user.email example@example.com",
   "git config --local --file alternate user.email example@example.com",
@@ -249,15 +258,21 @@ const negatives = [
   "git config --local filter.example.smudge command",
   "git config --local diff.example.textconv command",
   "git config --local credential.helper command",
-  "git add . && git diff --output result.patch",
-  "git add . && git diff --ext-diff",
-  "git add . && git diff --textconv",
-  "git add . && git ls-files --with-tree HEAD",
+  "git diff --output result.patch && git add .",
+  "git diff --ext-diff && git add .",
+  "git diff --textconv && git add .",
+  "git ls-files --with-tree HEAD && git add .",
   "git diff",
   "git log",
   "git branch",
   "git stash list",
   "git pull",
+  "git pull origin main",
+  "git pull --rebase=interactive origin main",
+  "git pull --ff-only https://example.com/owner/repo.git main",
+  "git pull --ff-only origin main extra",
+  "git pull --ff-only --dry-run",
+  "git pull --ff-only -- origin",
   "git push",
   "git remote -v",
   "git remote add origin",
@@ -324,11 +339,14 @@ const negatives = [
   "git --namespace=x add .",
   "git --config-env=x=Y add .",
   "git --no-pager add .",
-  "git add . && npm test",
+  "npm test && git add .",
   "cd sub && git add .",
   "git add . || git commit -m x",
-  "git add .; echo done",
-  "git add .; git status --ignored",
+  "echo done; git add .",
+  "git status --ignored; git add .",
+  "git add . && npm test || true",
+  "git add . && npm test # comment",
+  "git add . && npm test &",
   "git add .; ; git status --short",
   "; git add .",
   "git add .;",
@@ -451,6 +469,25 @@ describe("classifyPredictableGitMetadataWriter", () => {
       "git fetch origin && git rev-list --left-right --count HEAD...origin/main && git log --oneline HEAD..origin/main",
       ["fetch"],
     ],
+    // Reported: any steps after the first writer, which always fails first
+    // in the sandbox.
+    [
+      'git add driver/a.h driver/b.h && git diff --cached --check && git diff --cached --stat && git commit -m "fix(w6): remove quota" && git show -s --format=fuller HEAD && git status --short',
+      ["add", "commit"],
+    ],
+    [
+      "git add CHANGELOG.md src/a.ts && git diff --cached --stat && git diff --cached --name-only && git commit -m \"fix(desktop): show tabs\" && git log -1 --format='%h %an <%ae> %cn <%ce>' && npm run preflight",
+      ["add", "commit"],
+    ],
+    [
+      "git show --stat --format='%B' 0b15aac0; git pull --ff-only; git log --oneline -3",
+      ["pull"],
+    ],
+    ["git add . && npm test", ["add"]],
+    ["git add .; echo done", ["add"]],
+    ["git add .; git status --ignored", ["add"]],
+    ["git commit -m fix && npm test > out.log 2>&1", ["commit"]],
+    ["git add a.ts && npm test && git commit -m fix", ["add", "commit"]],
   ] as const)("classifies writer chain: %s", (command, subcommands) => {
     expect(classify(command)).toEqual({
       kind: "predictable_git_metadata_writer",
@@ -529,7 +566,7 @@ describe("classifyPredictableGitMetadataWriter", () => {
     expect(classify("git add .", { files: true })).toBeNull();
   });
 
-  it.each(["&& true", "|| true", "| cat", ">out", "<in", "&", "# comment"])(
+  it.each(["|| true", "| cat", ">out", "<in", "&", "# comment"])(
     "rejects transformed writers with %s",
     (suffix) => {
       expect(classify(`git add src/a.ts ${suffix}`)).toBeNull();
