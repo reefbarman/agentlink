@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.52.0 — 2026-11-10
+
+- Browser gateway relay now shows agent communication cards, handoff chips, and background agent prompts and routing reasons on remote surfaces, negotiated through a new additive transcript-agent-context-v1 feature.
+- find_and_replace globs now skip git-ignored files in VS Code (with an include_ignored opt-in and ignored_files_skipped reporting), and the CLI and Assistant glob walk refuses over-limit globs instead of editing a partial set.
+
 ## 0.51.0 — 2026-11-08
 
 - Request info now shows the selected, sent and provider-confirmed speed tier (Fast/Ultrafast) for Codex requests, including in the browser remote view, and the SDK exposes the new service tier fields.

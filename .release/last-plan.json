@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "e44be21b66e43fcb639faf3fc7dd08dd5b7a1263",
-  "createdAt": "2026-11-10T01:43:35.613Z",
+  "sourceSha": "bf5e42809493d873035f85b2e76922e5cfe399f3",
+  "createdAt": "2026-11-10T04:03:36.003Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,25 +10,34 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.87.1",
-      "baselineRef": "v1.87.1",
-      "reserved": "1.87.1",
-      "commits": ["e44be21b66e43fcb639faf3fc7dd08dd5b7a1263"],
+      "published": "1.87.2",
+      "baselineRef": "v1.87.2",
+      "reserved": "1.87.2",
+      "commits": [
+        "16b6f99277ecf71b4e8779ceba1e85b234987781",
+        "bf5e42809493d873035f85b2e76922e5cfe399f3"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.87.2",
-      "effectiveBump": "patch",
+      "version": "1.88.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.87.2",
+      "tag": "v1.88.0",
       "notes": [
         {
-          "sha": "e44be21b66e43fcb639faf3fc7dd08dd5b7a1263",
-          "subject": "fix(tools): give Git chains pre-launch guidance and let scoped research write",
-          "summary": "Compound Git write chains like add, commit and npm run preflight now get pre-launch native-retry guidance, .git write denials from scripts get Git recovery, and scoped background research from Code parents starts in Code mode.",
+          "sha": "16b6f99277ecf71b4e8779ceba1e85b234987781",
+          "subject": "fix(browser-gateway): relay agent communication cards, handoff chips and background agent context",
+          "summary": "Browser gateway relay now shows agent communication cards, handoff chips, and background agent prompts and routing reasons on remote surfaces, negotiated through a new additive transcript-agent-context-v1 feature.",
+          "breaking": false
+        },
+        {
+          "sha": "bf5e42809493d873035f85b2e76922e5cfe399f3",
+          "subject": "fix(tools): stop find_and_replace globs editing git-ignored files",
+          "summary": "find_and_replace globs now skip git-ignored files in VS Code (with an include_ignored opt-in and ignored_files_skipped reporting), and the CLI and Assistant glob walk refuses over-limit globs instead of editing a partial set.",
           "breaking": false
         }
       ]
@@ -36,23 +45,39 @@
     "desktop": {
       "published": "0.87.1",
       "baselineRef": "desktop-v0.87.1",
-      "reserved": "0.87.1",
-      "commits": ["e44be21b66e43fcb639faf3fc7dd08dd5b7a1263"],
+      "reserved": "0.87.2",
+      "commits": [
+        "e44be21b66e43fcb639faf3fc7dd08dd5b7a1263",
+        "16b6f99277ecf71b4e8779ceba1e85b234987781",
+        "bf5e42809493d873035f85b2e76922e5cfe399f3"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.87.2",
-      "effectiveBump": "patch",
+      "version": "0.88.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.87.2",
+      "tag": "desktop-v0.88.0",
       "notes": [
         {
           "sha": "e44be21b66e43fcb639faf3fc7dd08dd5b7a1263",
           "subject": "fix(tools): give Git chains pre-launch guidance and let scoped research write",
           "summary": "Compound Git write chains like add, commit and npm run preflight now get pre-launch native-retry guidance, .git write denials from scripts get Git recovery, and scoped background research from Code parents starts in Code mode.",
+          "breaking": false
+        },
+        {
+          "sha": "16b6f99277ecf71b4e8779ceba1e85b234987781",
+          "subject": "fix(browser-gateway): relay agent communication cards, handoff chips and background agent context",
+          "summary": "Browser gateway relay now shows agent communication cards, handoff chips, and background agent prompts and routing reasons on remote surfaces, negotiated through a new additive transcript-agent-context-v1 feature.",
+          "breaking": false
+        },
+        {
+          "sha": "bf5e42809493d873035f85b2e76922e5cfe399f3",
+          "subject": "fix(tools): stop find_and_replace globs editing git-ignored files",
+          "summary": "find_and_replace globs now skip git-ignored files in VS Code (with an include_ignored opt-in and ignored_files_skipped reporting), and the CLI and Assistant glob walk refuses over-limit globs instead of editing a partial set.",
           "breaking": false
         }
       ]
@@ -61,52 +86,111 @@
       "published": "0.61.0",
       "baselineRef": "cli-v0.61.0",
       "reserved": "0.61.0",
-      "commits": [],
+      "commits": [
+        "16b6f99277ecf71b4e8779ceba1e85b234987781",
+        "bf5e42809493d873035f85b2e76922e5cfe399f3"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.62.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.62.0",
+      "notes": [
+        {
+          "sha": "16b6f99277ecf71b4e8779ceba1e85b234987781",
+          "subject": "fix(browser-gateway): relay agent communication cards, handoff chips and background agent context",
+          "summary": "Browser gateway relay now shows agent communication cards, handoff chips, and background agent prompts and routing reasons on remote surfaces, negotiated through a new additive transcript-agent-context-v1 feature.",
+          "breaking": false
+        },
+        {
+          "sha": "bf5e42809493d873035f85b2e76922e5cfe399f3",
+          "subject": "fix(tools): stop find_and_replace globs editing git-ignored files",
+          "summary": "find_and_replace globs now skip git-ignored files in VS Code (with an include_ignored opt-in and ignored_files_skipped reporting), and the CLI and Assistant glob walk refuses over-limit globs instead of editing a partial set.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.51.0",
       "baselineRef": "sdk-v0.51.0",
       "reserved": "0.51.0",
-      "commits": [],
+      "commits": [
+        "16b6f99277ecf71b4e8779ceba1e85b234987781",
+        "bf5e42809493d873035f85b2e76922e5cfe399f3"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "assistant": {
-      "published": "0.59.1",
-      "baselineRef": "assistant-v0.59.1",
-      "reserved": "0.59.1",
-      "commits": ["e44be21b66e43fcb639faf3fc7dd08dd5b7a1263"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.59.2",
-      "effectiveBump": "patch",
+      "version": "0.52.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.59.2",
+      "tag": "sdk-v0.52.0",
       "notes": [
         {
-          "sha": "e44be21b66e43fcb639faf3fc7dd08dd5b7a1263",
-          "subject": "fix(tools): give Git chains pre-launch guidance and let scoped research write",
-          "summary": "Compound Git write chains like add, commit and npm run preflight now get pre-launch native-retry guidance, .git write denials from scripts get Git recovery, and scoped background research from Code parents starts in Code mode.",
+          "sha": "16b6f99277ecf71b4e8779ceba1e85b234987781",
+          "subject": "fix(browser-gateway): relay agent communication cards, handoff chips and background agent context",
+          "summary": "Browser gateway relay now shows agent communication cards, handoff chips, and background agent prompts and routing reasons on remote surfaces, negotiated through a new additive transcript-agent-context-v1 feature.",
+          "breaking": false
+        },
+        {
+          "sha": "bf5e42809493d873035f85b2e76922e5cfe399f3",
+          "subject": "fix(tools): stop find_and_replace globs editing git-ignored files",
+          "summary": "find_and_replace globs now skip git-ignored files in VS Code (with an include_ignored opt-in and ignored_files_skipped reporting), and the CLI and Assistant glob walk refuses over-limit globs instead of editing a partial set.",
+          "breaking": false
+        }
+      ]
+    },
+    "assistant": {
+      "published": "0.59.2",
+      "baselineRef": "assistant-v0.59.2",
+      "reserved": "0.59.2",
+      "commits": [
+        "16b6f99277ecf71b4e8779ceba1e85b234987781",
+        "bf5e42809493d873035f85b2e76922e5cfe399f3"
+      ],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.60.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.60.0",
+      "notes": [
+        {
+          "sha": "16b6f99277ecf71b4e8779ceba1e85b234987781",
+          "subject": "fix(browser-gateway): relay agent communication cards, handoff chips and background agent context",
+          "summary": "Browser gateway relay now shows agent communication cards, handoff chips, and background agent prompts and routing reasons on remote surfaces, negotiated through a new additive transcript-agent-context-v1 feature.",
+          "breaking": false
+        },
+        {
+          "sha": "bf5e42809493d873035f85b2e76922e5cfe399f3",
+          "subject": "fix(tools): stop find_and_replace globs editing git-ignored files",
+          "summary": "find_and_replace globs now skip git-ignored files in VS Code (with an include_ignored opt-in and ignored_files_skipped reporting), and the CLI and Assistant glob walk refuses over-limit globs instead of editing a partial set.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
+    "e44be21b66e43fcb639faf3fc7dd08dd5b7a1263": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Compound Git write chains like add, commit and npm run preflight now get pre-launch native-retry guidance, .git write denials from scripts get Git recovery, and scoped background research from Code parents starts in Code mode.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
     "0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9": {
       "bump": "patch",
       "breakingUnits": [],
@@ -155,10 +239,18 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "e44be21b66e43fcb639faf3fc7dd08dd5b7a1263": {
+    "16b6f99277ecf71b4e8779ceba1e85b234987781": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Compound Git write chains like add, commit and npm run preflight now get pre-launch native-retry guidance, .git write denials from scripts get Git recovery, and scoped background research from Code parents starts in Code mode.",
+      "summary": "Browser gateway relay now shows agent communication cards, handoff chips, and background agent prompts and routing reasons on remote surfaces, negotiated through a new additive transcript-agent-context-v1 feature.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "bf5e42809493d873035f85b2e76922e5cfe399f3": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "find_and_replace globs now skip git-ignored files in VS Code (with an include_ignored opt-in and ignored_files_skipped reporting), and the CLI and Assistant glob walk refuses over-limit globs instead of editing a partial set.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
