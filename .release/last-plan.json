@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "5937a52c858de81d9a87db704a906252bc2f45d7",
-  "createdAt": "2026-11-09T05:02:19.786Z",
+  "sourceSha": "71c1a15c9e675291c08c28ea5c577d90feeb5196",
+  "createdAt": "2026-11-10T00:20:40.441Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.86.4",
-      "baselineRef": "v1.86.4",
-      "reserved": "1.86.4",
-      "commits": ["5937a52c858de81d9a87db704a906252bc2f45d7"],
+      "published": "1.87.0",
+      "baselineRef": "v1.87.0",
+      "reserved": "1.87.0",
+      "commits": ["71c1a15c9e675291c08c28ea5c577d90feeb5196"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.87.0",
-      "effectiveBump": "minor",
+      "version": "1.87.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.87.0",
+      "tag": "v1.87.1",
       "notes": [
         {
-          "sha": "5937a52c858de81d9a87db704a906252bc2f45d7",
-          "subject": "fix(browser-gateway): keep remote VS Code views in sync and route cards per session",
-          "summary": "Browser remote views of VS Code stay in sync and show approval and question cards in the correct session tab, with a new Resync with VS Code header button and automatic recovery when updates cannot be applied.",
+          "sha": "71c1a15c9e675291c08c28ea5c577d90feeb5196",
+          "subject": "fix(edits): stop auto-approved saves raising VS Code save conflicts",
+          "summary": "Auto-approved edits no longer raise VS Code's \"file is newer\" save conflict dialog. They wait for VS Code's copy to match disk, or write directly to disk and report commit_path direct_write_stale_editor. Edit-commit decisions are now logged.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.86.4",
-      "baselineRef": "desktop-v0.86.4",
-      "reserved": "0.86.4",
-      "commits": ["5937a52c858de81d9a87db704a906252bc2f45d7"],
+      "published": "0.87.0",
+      "baselineRef": "desktop-v0.87.0",
+      "reserved": "0.87.0",
+      "commits": ["71c1a15c9e675291c08c28ea5c577d90feeb5196"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.87.0",
-      "effectiveBump": "minor",
+      "version": "0.87.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.87.0",
+      "tag": "desktop-v0.87.1",
       "notes": [
         {
-          "sha": "5937a52c858de81d9a87db704a906252bc2f45d7",
-          "subject": "fix(browser-gateway): keep remote VS Code views in sync and route cards per session",
-          "summary": "Browser remote views of VS Code stay in sync and show approval and question cards in the correct session tab, with a new Resync with VS Code header button and automatic recovery when updates cannot be applied.",
+          "sha": "71c1a15c9e675291c08c28ea5c577d90feeb5196",
+          "subject": "fix(edits): stop auto-approved saves raising VS Code save conflicts",
+          "summary": "Auto-approved edits no longer raise VS Code's \"file is newer\" save conflict dialog. They wait for VS Code's copy to match disk, or write directly to disk and report commit_path direct_write_stale_editor. Edit-commit decisions are now logged.",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.58.4",
-      "baselineRef": "assistant-v0.58.4",
-      "reserved": "0.58.4",
-      "commits": ["5937a52c858de81d9a87db704a906252bc2f45d7"],
+      "published": "0.59.0",
+      "baselineRef": "assistant-v0.59.0",
+      "reserved": "0.59.0",
+      "commits": ["71c1a15c9e675291c08c28ea5c577d90feeb5196"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.59.0",
-      "effectiveBump": "minor",
+      "version": "0.59.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.59.0",
+      "tag": "assistant-v0.59.1",
       "notes": [
         {
-          "sha": "5937a52c858de81d9a87db704a906252bc2f45d7",
-          "subject": "fix(browser-gateway): keep remote VS Code views in sync and route cards per session",
-          "summary": "Browser remote views of VS Code stay in sync and show approval and question cards in the correct session tab, with a new Resync with VS Code header button and automatic recovery when updates cannot be applied.",
+          "sha": "71c1a15c9e675291c08c28ea5c577d90feeb5196",
+          "subject": "fix(edits): stop auto-approved saves raising VS Code save conflicts",
+          "summary": "Auto-approved edits no longer raise VS Code's \"file is newer\" save conflict dialog. They wait for VS Code's copy to match disk, or write directly to disk and report commit_path direct_write_stale_editor. Edit-commit decisions are now logged.",
           "breaking": false
         }
       ]
@@ -143,6 +143,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Browser remote views of VS Code stay in sync and show approval and question cards in the correct session tab, with a new Resync with VS Code header button and automatic recovery when updates cannot be applied.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "71c1a15c9e675291c08c28ea5c577d90feeb5196": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Auto-approved edits no longer raise VS Code's \"file is newer\" save conflict dialog. They wait for VS Code's copy to match disk, or write directly to disk and report commit_path direct_write_stale_editor. Edit-commit decisions are now logged.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

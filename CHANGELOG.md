@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.87.1
+
 - Auto-approved edits no longer trigger VS Code's "file is newer" Compare/Overwrite save dialog, open editor tabs, or leave unsaved buffers that need a human-approved `save_editor`. These happened when VS Code's hidden copy of a file had not yet reloaded a newer disk version (written by a formatter, Git, another agent, or an earlier exact edit) and AgentLink saved through it. Ordinary saves now wait briefly for that copy to match disk and otherwise write straight to disk without format-on-save, reported as `commit_path: "direct_write_stale_editor"`. Exact saves always write straight to disk when the copy has no unsaved changes, including exact `find_and_replace`. A failed save that conflicts with a newer file is reverted instead of retried. `find_and_replace` refuses to match against an out-of-date copy. The AgentLink output channel now logs these decisions, and tool telemetry records the commit path and auto-recovery outcome.
 
 ## 1.87.0
