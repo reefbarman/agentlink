@@ -142,8 +142,9 @@ function measureResizeStart(shelf: HTMLElement): ResizeStart {
  * composer. Until the user resizes it, the shelf fits its content up to a
  * responsive cap. Once resized, it keeps exactly the chosen height (content
  * scrolls inside it) until the user double-clicks the handle to reset. When a
- * new card appears, the shelf grows once to fit it (never shrinking), and that
- * becomes the user's height until they resize again.
+ * new card appears, the shelf temporarily grows to fit it. As cards go away it
+ * shrinks back towards the user's height, unless the user resized it in the
+ * meantime, which makes the grown size their own.
  */
 export function ChatActivityShelf({
   children,
@@ -162,15 +163,23 @@ export function ChatActivityShelf({
   /** User-chosen height, or null to fit content up to the responsive cap. */
   const [maxHeight, setMaxHeight] = useState<number | null>(readStoredHeight);
   const [revealedHeight, setRevealedHeight] = useState<number | null>(null);
+  /**
+   * Temporary growth above the user's height to fit newly added cards. Not
+   * persisted, and released as the cards that needed it are removed.
+   */
+  const [grownHeight, setGrownHeight] = useState<number | null>(null);
   const [resizing, setResizing] = useState(false);
   const maxHeightRef = useRef(maxHeight);
   maxHeightRef.current = maxHeight;
+  const grownHeightRef = useRef(grownHeight);
+  grownHeightRef.current = grownHeight;
   const lastTapRef = useRef(0);
 
   const resizeTo = useCallback((height: number) => {
     const shelf = shelfRef.current;
     if (!shelf) return;
     setRevealedHeight(null);
+    setGrownHeight(null);
     setMaxHeight(
       clampChatActivityShelfHeight(height, findMaximumHeight(shelf)),
     );
@@ -193,21 +202,29 @@ export function ChatActivityShelf({
     const content = contentRef.current;
     if (!content || typeof MutationObserver === "undefined") return;
 
+    const hasElement = (nodes: NodeList) =>
+      Array.from(nodes).some((node) => node.nodeType === Node.ELEMENT_NODE);
     const observer = new MutationObserver((records) => {
       // Without a user-chosen height the shelf already fits its content.
-      if (maxHeightRef.current === null) return;
-      const cardAdded = records.some((record) =>
-        Array.from(record.addedNodes).some(
-          (node) => node.nodeType === Node.ELEMENT_NODE,
-        ),
+      const userHeight = maxHeightRef.current;
+      if (userHeight === null) return;
+      const cardAdded = records.some((record) => hasElement(record.addedNodes));
+      const cardRemoved = records.some((record) =>
+        hasElement(record.removedNodes),
       );
       const shelf = shelfRef.current;
-      if (!cardAdded || !shelf) return;
+      if (!shelf) return;
 
       const fit = findFitHeight(shelf, content);
-      if (fit > shelf.getBoundingClientRect().height) {
-        setMaxHeight((current) =>
-          current === null ? null : Math.max(current, fit),
+      const grown = grownHeightRef.current;
+      if (cardRemoved && grown !== null) {
+        // Shrink back towards the user's height as the extra cards go away.
+        setGrownHeight(fit > userHeight ? Math.min(fit, grown) : null);
+        if (!cardAdded) return;
+      }
+      if (cardAdded && fit > shelf.getBoundingClientRect().height) {
+        setGrownHeight((current) =>
+          fit > userHeight ? Math.max(current ?? 0, fit) : current,
         );
       }
     });
@@ -254,6 +271,11 @@ export function ChatActivityShelf({
         setMaxHeight(clampChatActivityShelfHeight(maxHeight, maximum));
       }
       setRevealedHeight((current) =>
+        current === null
+          ? null
+          : clampChatActivityShelfHeight(current, maximum),
+      );
+      setGrownHeight((current) =>
         current === null
           ? null
           : clampChatActivityShelfHeight(current, maximum),
@@ -311,6 +333,7 @@ export function ChatActivityShelf({
     const card = shelf ? findQuestionCard(shelf) : null;
     if (card) setQuestionCardHeight(card, null);
     setRevealedHeight(null);
+    setGrownHeight(null);
     setMaxHeight(null);
     storeHeight(null);
   }, [stopResize]);
@@ -393,7 +416,12 @@ export function ChatActivityShelf({
     [resizeBy, resizeTo],
   );
 
-  const effectiveMaxHeight = revealedHeight ?? maxHeight;
+  const userHeight =
+    maxHeight === null ? null : Math.max(maxHeight, grownHeight ?? 0);
+  const effectiveMaxHeight =
+    revealedHeight === null
+      ? userHeight
+      : Math.max(revealedHeight, userHeight ?? 0);
   const style: CSSProperties =
     maxHeight !== null
       ? // A user-chosen size is an exact height, so the shelf can be made
