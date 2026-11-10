@@ -197,6 +197,7 @@ import {
   CodexImageGenerationError,
   codexGeneratedImageMetadata,
   codexImageGenerationErrorMetadata,
+  codexImageGenerationRequiresPerCallApproval,
   generateCodexImages,
   normalizeCodexImageGenerationModel,
   validateCodexMaskedEdit,
@@ -8166,7 +8167,7 @@ export class BrowserGatewayHelper {
       referenceImages,
       providerReferenceImages,
       timeoutMs,
-      advanced: Object.keys(options).length > 0,
+      advanced: codexImageGenerationRequiresPerCallApproval(options),
     };
   }
 
@@ -8508,8 +8509,8 @@ export class BrowserGatewayHelper {
       "",
       "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before images are returned to chat.",
       params.advanced
-        ? "Advanced Image 2.5 controls and edits always require approval in Browser Ask Agent."
-        : "Generate for Session authorizes later display-only legacy generate_image calls in this Ask Agent chat.",
+        ? "xhigh/max quality and output sizes above 2560x1440 require approval for each call."
+        : "Generate for Session authorizes later display-only generate_image calls in this Ask Agent chat, including edits and masks. Calls using xhigh/max quality or output sizes above 2560x1440 still ask each time.",
     ]
       .filter((line): line is string => line !== undefined)
       .join("\n");

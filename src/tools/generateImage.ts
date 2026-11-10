@@ -8,6 +8,7 @@ import {
   assertCodexMaskCompositeSupported,
   codexGeneratedImageMetadata,
   codexImageGenerationErrorMetadata,
+  codexImageGenerationRequiresPerCallApproval,
   CODEX_IMAGE_GENERATION_ACTIONS,
   CODEX_IMAGE_GENERATION_BACKGROUNDS,
   CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS,
@@ -466,9 +467,9 @@ export async function requestImageGenerationApprovalForTest(params: {
   billing: string;
 }): Promise<ImageGenerationApprovalResult> {
   const options = params.options ?? {};
-  const advanced = Object.keys(options).length > 0;
+  const perCallOnly = codexImageGenerationRequiresPerCallApproval(options);
   if (
-    !advanced &&
+    !perCallOnly &&
     params.approvalManager.isBuiltInToolApproved(
       params.sessionId,
       "generate_image",
@@ -513,9 +514,9 @@ export async function requestImageGenerationApprovalForTest(params: {
     targets.length > 0
       ? "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before files are written."
       : "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before images are returned to chat.",
-    advanced
-      ? "Advanced Image 2.5 controls and edits require approval for each call."
-      : "Generate for Session also authorizes later legacy generate_image calls in this chat, including creation of new workspace PNG outputs.",
+    perCallOnly
+      ? "xhigh/max quality and output sizes above 2560x1440 require approval for each call."
+      : "Generate for Session also authorizes later generate_image calls in this chat, including edits, masks and new workspace image outputs. Calls using xhigh/max quality or output sizes above 2560x1440 still ask each time.",
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
@@ -529,7 +530,7 @@ export async function requestImageGenerationApprovalForTest(params: {
         targetPath:
           targets[0]?.absolutePath ??
           (targets.length === 1 ? targets[0]?.relPath : undefined),
-        choices: advanced
+        choices: perCallOnly
           ? [
               { label: "Generate", value: "accept", isPrimary: true },
               { label: "Deny", value: "reject", isDanger: true },
@@ -539,7 +540,7 @@ export async function requestImageGenerationApprovalForTest(params: {
               { label: "Generate for Session", value: "accept-session" },
               { label: "Deny", value: "reject", isDanger: true },
             ],
-        writeChoices: advanced
+        writeChoices: perCallOnly
           ? [
               { label: "Generate", value: "accept", isPrimary: true },
               { label: "Deny", value: "reject", isDanger: true },
@@ -553,7 +554,7 @@ export async function requestImageGenerationApprovalForTest(params: {
       params.sessionId,
     );
     const decision = typeof raw === "string" ? raw : raw.decision;
-    if (decision === "accept-session" && !advanced) {
+    if (decision === "accept-session" && !perCallOnly) {
       params.approvalManager.approveBuiltInTool(
         params.sessionId,
         "generate_image",

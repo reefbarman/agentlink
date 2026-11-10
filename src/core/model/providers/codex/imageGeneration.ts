@@ -337,6 +337,26 @@ export function assertCodexImageGenerationOptionsSupported(
   }
 }
 
+/** Largest output (in pixels) a session-wide image approval covers. */
+export const CODEX_IMAGE_GENERATION_SESSION_MAX_PIXELS = 2560 * 1440;
+
+/**
+ * Whether a call must be approved individually even after "Generate for
+ * Session": the costly xhigh/max qualities and experimental sizes above
+ * 2560x1440. Other controls, edits and masks are covered by session approval.
+ */
+export function codexImageGenerationRequiresPerCallApproval(
+  options: CodexImageGenerationOptions,
+): boolean {
+  if (options.quality === "xhigh" || options.quality === "max") return true;
+  const match = /^(\d+)x(\d+)$/.exec(options.outputSize ?? "");
+  return Boolean(
+    match &&
+    Number(match[1]) * Number(match[2]) >
+      CODEX_IMAGE_GENERATION_SESSION_MAX_PIXELS,
+  );
+}
+
 export function buildCodexImageGenerationRequestBody(params: {
   prompt: string;
   count: number;

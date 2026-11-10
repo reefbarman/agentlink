@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Generate for Session** is back on `generate_image` approval cards for edits, masks and most image options. Before, setting any option such as quality, size, format, an edit image or a mask hid the button, which became common once ChatGPT/Codex login supported those options. A session approval now covers those calls too. Calls using `xhigh`/`max` quality or output sizes above 2560x1440 still ask each time, because they cost much more. This applies in VS Code and Browser Ask Agent.
 - Masked `generate_image` edits now come back at the edit target's exact size, with the pixels outside the mask unchanged. Before, the provider's own size was returned (for example 1254x1254 for a 512x512 tile) and the whole image was re-rendered, so colours outside the mask drifted. AgentLink now resizes PNG results to the target, restores the original pixels wherever the mask is opaque, and blends the seam. Results report `provider_size` and `mask_composite`. Set `mask_composite: false` to get the raw provider output. JPEG and WebP output is returned unchanged.
 
 ## 1.89.0

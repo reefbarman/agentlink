@@ -138,7 +138,7 @@ When a VS Code edit save fails, `save_failure.save_outcome` distinguishes `retur
 - `save_session_image` (VS Code, Code and Architect modes) writes an image already in the session, such as a pasted attachment, a screenshot, or a generated image, to a workspace file by its `image_N` ID. Bytes are written as stored, the file extension must match the image type, and existing files are replaced only with `overwrite: true`. It follows the same write approvals as file edits.
 - Session image IDs stay the same after context condensing; the condense summary lists older images by ID without putting the images back into context. Details: [session image IDs](complete-reference.md#session-image-ids).
 
-VS Code can save generated PNG, JPEG, and WebP files and use workspace-local edit/reference images. Browser Ask Agent remains display-only and uses retained session image IDs. Advanced calls require approval each time; legacy generation can still use **Generate for Session**. Partial streaming frames are never reported or saved as completed assets. Exact parameters: [image tools](complete-reference.md#generate_image).
+VS Code can save generated PNG, JPEG, and WebP files and use workspace-local edit/reference images. Browser Ask Agent remains display-only and uses retained session image IDs. **Generate for Session** covers later calls in that chat, including edits, masks and ordinary controls. Calls using `xhigh`/`max` quality or output sizes above 2560x1440 always ask for approval and never offer the session option. Partial streaming frames are never reported or saved as completed assets. Exact parameters: [image tools](complete-reference.md#generate_image).
 
 ## Run and inspect commands
 

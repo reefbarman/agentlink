@@ -110,7 +110,7 @@ describe("requestImageGenerationApprovalForTest", () => {
       "Reference images (1):\n- image_1 (hexaza.png)",
     );
     expect(approvalRequest?.detail).toContain(
-      "Generate for Session also authorizes later legacy generate_image calls in this chat, including creation of new workspace PNG outputs.",
+      "Generate for Session also authorizes later generate_image calls in this chat, including edits, masks and new workspace image outputs.",
     );
     expect(onApprovalRequest.mock.calls[0]?.[1]).toBe("session-1");
   });
@@ -167,6 +167,77 @@ describe("requestImageGenerationApprovalForTest", () => {
     expect(onApprovalRequest).not.toHaveBeenCalled();
     expect(approvalManager.approveBuiltInTool).not.toHaveBeenCalled();
   });
+
+  it("lets a session grant cover edits, masks and ordinary controls", async () => {
+    const approvalManager = {
+      isBuiltInToolApproved: vi.fn().mockReturnValue(true),
+      approveBuiltInTool: vi.fn(),
+    };
+    const onApprovalRequest = vi.fn<OnApprovalRequest>();
+    const mask: GenerateImageReferenceImage = {
+      id: "image_2",
+      label: "mask.png",
+      mimeType: "image/png",
+      base64: tinyRgbaPngBase64,
+      source: "session",
+    };
+
+    const result = await requestImageGenerationApprovalForTest({
+      approvalManager: approvalManager as never,
+      sessionId: "session-1",
+      onApprovalRequest,
+      prompt: "Repaint the masked area.",
+      count: 1,
+      imageModel: "gpt-image-2.5-sunburst",
+      options: {
+        action: "edit",
+        maskImage: mask,
+        quality: "high",
+        outputSize: "2560x1440",
+        outputFormat: "webp",
+      },
+      billing: "ChatGPT/Codex OAuth quota (active account)",
+    });
+
+    expect(result).toEqual({ approved: true });
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ quality: "xhigh" as const }],
+    [{ quality: "max" as const }],
+    [{ outputSize: "3840x2160" }],
+  ])(
+    "asks per call without a session option for costly controls %o",
+    async (options) => {
+      const approvalManager = {
+        isBuiltInToolApproved: vi.fn().mockReturnValue(true),
+        approveBuiltInTool: vi.fn(),
+      };
+      const onApprovalRequest = vi.fn<OnApprovalRequest>(async () => ({
+        decision: "accept-session",
+      }));
+
+      await requestImageGenerationApprovalForTest({
+        approvalManager: approvalManager as never,
+        sessionId: "session-1",
+        onApprovalRequest,
+        prompt: "Create an icon.",
+        count: 1,
+        imageModel: "gpt-image-2.5-flare",
+        options,
+        billing: "OpenAI API key billing",
+      });
+
+      expect(onApprovalRequest).toHaveBeenCalledOnce();
+      const request = onApprovalRequest.mock.calls[0]![0];
+      expect(request.choices?.map((choice) => choice.value)).toEqual([
+        "accept",
+        "reject",
+      ]);
+      expect(approvalManager.approveBuiltInTool).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects unadvertised accept-prefixed decisions", async () => {
     const approvalManager = {
