@@ -185,6 +185,7 @@ import {
 } from "../browserGatewayModelProviderIds.js";
 import {
   assertCodexImageGenerationOptionsSupported,
+  assertCodexMaskCompositeSupported,
   CODEX_IMAGE_GENERATION_ACTIONS,
   CODEX_IMAGE_GENERATION_BACKGROUNDS,
   CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS,
@@ -8079,6 +8080,21 @@ export class BrowserGatewayHelper {
       throw new Error("A mask requires edit_image_id");
     }
     validateCodexMaskedEdit({ editImage, maskImage });
+    if (
+      input.mask_composite != null &&
+      typeof input.mask_composite !== "boolean"
+    ) {
+      throw new Error("mask_composite must be a boolean");
+    }
+    const maskComposite =
+      typeof input.mask_composite === "boolean"
+        ? input.mask_composite
+        : undefined;
+    assertCodexMaskCompositeSupported({
+      maskImage,
+      maskComposite,
+      outputFormat,
+    });
     if (background === "transparent" && outputFormat === "jpeg") {
       throw new Error("transparent backgrounds require PNG or WebP output");
     }
@@ -8098,6 +8114,7 @@ export class BrowserGatewayHelper {
       ...(action ? { action } : {}),
       ...(inputFidelity ? { inputFidelity } : {}),
       ...(maskImage ? { maskImage } : {}),
+      ...(maskComposite !== undefined ? { maskComposite } : {}),
     };
     const numericTimeoutSeconds = Number(
       input.timeout_seconds ?? CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS / 1000,
@@ -8479,6 +8496,9 @@ export class BrowserGatewayHelper {
       params.options.maskImage
         ? `Mask: ${params.options.maskImage.label}`
         : undefined,
+      params.options.maskComposite === false
+        ? "Mask composite: off (raw provider output)"
+        : undefined,
       params.referenceImages.length > 0
         ? `Reference images (${params.referenceImages.length}):`
         : undefined,
@@ -8609,6 +8629,7 @@ export class BrowserGatewayHelper {
         size: input.size,
         options: input.options,
         referenceImages: input.providerReferenceImages,
+        editImage: input.editImage,
         timeoutMs: input.timeoutMs,
         generatedImages,
         sessionId: this.askAgentSessionStore.getActiveSessionId(),
@@ -8655,6 +8676,9 @@ export class BrowserGatewayHelper {
                         mime_type: input.options.maskImage.mimeType,
                       },
                     }
+                  : {}),
+                ...(input.options.maskComposite !== undefined
+                  ? { mask_composite: input.options.maskComposite }
                   : {}),
               },
               saved: false,

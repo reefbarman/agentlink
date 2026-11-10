@@ -9,6 +9,8 @@ import {
   type CodexResolvedAuthForClient,
 } from "@agentlink/core/codex";
 
+import { fitMaskedEditImage } from "./maskedEditFit.js";
+
 export const CODEX_IMAGE_GENERATION_MAX_COUNT = 4;
 export const CODEX_IMAGE_GENERATION_MAX_REFERENCE_IMAGES = 8;
 export const CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS = 300_000;
@@ -65,6 +67,12 @@ export interface CodexImageGenerationOptions {
   action?: CodexImageGenerationAction;
   inputFidelity?: CodexImageGenerationInputFidelity;
   maskImage?: CodexImageReferenceImage;
+  /**
+   * Masked edits only. Unset: fit PNG results to the edit target and restore
+   * unmasked pixels, skipping non-PNG output. true: require it. false: return
+   * the provider's raw output.
+   */
+  maskComposite?: boolean;
 }
 
 const TRANSIENT_RETRIES = 2;
@@ -141,6 +149,75 @@ export function validateCodexMaskedEdit(params: {
   }
 }
 
+export function assertCodexMaskCompositeSupported(params: {
+  maskImage: CodexImageReferenceImage | undefined;
+  maskComposite: boolean | undefined;
+  outputFormat: CodexImageGenerationOutputFormat | undefined;
+}): void {
+  if (params.maskComposite === undefined) return;
+  if (!params.maskImage) {
+    throw new Error("mask_composite requires a mask image");
+  }
+  if (
+    params.maskComposite &&
+    params.outputFormat &&
+    params.outputFormat !== "png"
+  ) {
+    throw new Error(
+      "mask_composite requires PNG output. Use output_format png, or set mask_composite false to keep the provider's raw output.",
+    );
+  }
+}
+
+/**
+ * Resize masked-edit results to the edit target and restore its pixels
+ * outside the mask. Never throws: a paid image is kept raw and the reason is
+ * reported on the image when fitting is not possible.
+ */
+export function applyCodexMaskComposite(params: {
+  images: CodexGeneratedImage[];
+  editImage: CodexImageReferenceImage | undefined;
+  options: CodexImageGenerationOptions;
+}): void {
+  const { maskImage, maskComposite } = params.options;
+  if (!maskImage || !params.editImage || maskComposite === false) return;
+  const editPng = Buffer.from(params.editImage.base64, "base64");
+  const maskPng = Buffer.from(maskImage.base64, "base64");
+  for (const [index, image] of params.images.entries()) {
+    if (image.mimeType !== "image/png") {
+      params.images[index] = {
+        ...image,
+        mask_composite: "skipped",
+        mask_composite_reason: "requires PNG output",
+      };
+      continue;
+    }
+    try {
+      const fitted = fitMaskedEditImage({
+        generatedPng: Buffer.from(image.base64, "base64"),
+        editPng,
+        maskPng,
+      });
+      const base64 = fitted.png.toString("base64");
+      params.images[index] = {
+        ...image,
+        base64,
+        bytes: fitted.png.byteLength,
+        size: `${fitted.width}x${fitted.height}`,
+        provider_size: `${fitted.providerWidth}x${fitted.providerHeight}`,
+        mask_composite: "applied",
+      };
+    } catch (error) {
+      params.images[index] = {
+        ...image,
+        mask_composite: "skipped",
+        mask_composite_reason:
+          error instanceof Error ? error.message.slice(0, 200) : "failed",
+      };
+    }
+  }
+}
+
 export interface CodexGeneratedImage {
   bytes: number;
   mimeType: string;
@@ -152,6 +229,10 @@ export interface CodexGeneratedImage {
   provider_id?: string;
   revised_prompt?: string;
   event_type: string;
+  /** Provider dimensions before a mask composite resized the image. */
+  provider_size?: string;
+  mask_composite?: "applied" | "skipped";
+  mask_composite_reason?: string;
 }
 
 interface StreamImageEvent {
@@ -857,6 +938,8 @@ export async function generateCodexImages(params: {
   options?: CodexImageGenerationOptions;
   imageModel: CodexImageGenerationModel;
   referenceImages?: CodexImageReferenceImage[];
+  /** Explicit edit target; with options.maskImage enables mask compositing. */
+  editImage?: CodexImageReferenceImage;
   timeoutMs: number;
   generatedImages?: CodexGeneratedImage[];
   sessionId?: string;
@@ -878,7 +961,7 @@ export async function generateCodexImages(params: {
   let lastError: unknown;
   for (let attempt = 0; attempt <= TRANSIENT_RETRIES; attempt++) {
     try {
-      return await callCodexImageGeneration({
+      const result = await callCodexImageGeneration({
         auth: params.auth,
         prompt: params.prompt,
         count: params.count,
@@ -892,6 +975,12 @@ export async function generateCodexImages(params: {
         sessionId: params.sessionId,
         signal: params.signal,
       });
+      applyCodexMaskComposite({
+        images: result.images,
+        editImage: params.editImage,
+        options,
+      });
+      return result;
     } catch (error) {
       lastError = error;
       if (

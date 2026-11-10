@@ -536,7 +536,7 @@ describe("handleGenerateImage", () => {
           type: "response.image_generation_call.completed",
           item_id: "ig_oauth_edit",
           output_index: 0,
-          result: tinyPngBase64,
+          result: tinyRgbaPngBase64,
           output_format: "png",
         },
       ]),
@@ -590,6 +590,56 @@ describe("handleGenerateImage", () => {
         image_url: `data:image/png;base64,${tinyRgbaPngBase64}`,
       },
     });
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(JSON.parse(text).images).toEqual([
+      expect.objectContaining({
+        size: "1x1",
+        provider_size: "1x1",
+        mask_composite: "applied",
+      }),
+    ]);
+  });
+
+  it("rejects an explicit mask composite with non-PNG output before generation", async () => {
+    vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+      method: "apiKey",
+      bearerToken: "test-key",
+      canRefresh: false,
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const onApprovalRequest = vi.fn<OnApprovalRequest>();
+    const sessionImages = ["image_1", "image_2"].map((id, index) => ({
+      id,
+      name: `${id}.png`,
+      mimeType: "image/png",
+      base64: tinyRgbaPngBase64,
+      messageIndex: index,
+      imageIndex: 0,
+    }));
+
+    const result = await handleGenerateImage(
+      {
+        prompt: "Change only the selected area",
+        edit_image_id: "image_1",
+        mask_image_id: "image_2",
+        output_format: "webp",
+        mask_composite: true,
+      },
+      { isBuiltInToolApproved: vi.fn().mockReturnValue(false) } as never,
+      "session-1",
+      onApprovalRequest,
+      () => sessionImages,
+    );
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(text).error).toContain(
+      "mask_composite requires PNG output",
+    );
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("does not retry after a preview frame from a retryable failure", async () => {

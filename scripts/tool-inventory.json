@@ -189,6 +189,7 @@
         "edit_image_path",
         "image_model",
         "input_fidelity",
+        "mask_composite",
         "mask_image_id",
         "mask_image_path",
         "output_compression",
@@ -938,5 +939,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "613d6216b28416537c54776817e16312605949f6b735ffcde74415cb7ba97876"
+  "revision": "c60a6c5634f2f4c6162e56372f6f6f955a60f76faed0707d5460bb54f59bcd02"
 }

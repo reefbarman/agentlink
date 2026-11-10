@@ -5,6 +5,7 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import { openAiCodexAuthManager } from "../agent/providers/codex/OpenAiCodexAuthManager.js";
 import {
   assertCodexImageGenerationOptionsSupported,
+  assertCodexMaskCompositeSupported,
   codexGeneratedImageMetadata,
   codexImageGenerationErrorMetadata,
   CODEX_IMAGE_GENERATION_ACTIONS,
@@ -58,6 +59,7 @@ type GenerateImageParams = {
   edit_image_id?: unknown;
   mask_image_path?: unknown;
   mask_image_id?: unknown;
+  mask_composite?: unknown;
   count?: unknown;
   timeout_seconds?: unknown;
   reference_image_paths?: unknown;
@@ -150,6 +152,17 @@ function normalizeOutputCompression(value: unknown): number | undefined {
     throw new Error("output_compression must be an integer from 0 to 100");
   }
   return numeric;
+}
+
+function optionalBoolean(
+  value: unknown,
+  fieldName: string,
+): boolean | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "boolean") {
+    throw new Error(`${fieldName} must be a boolean`);
+  }
+  return value;
 }
 
 function optionalString(value: unknown, fieldName: string): string | undefined {
@@ -484,6 +497,9 @@ export async function requestImageGenerationApprovalForTest(params: {
       : undefined,
     params.editImage ? `Edit target: ${params.editImage.label}` : undefined,
     options.maskImage ? `Mask: ${options.maskImage.label}` : undefined,
+    options.maskComposite === false
+      ? "Mask composite: off (raw provider output)"
+      : undefined,
     referenceImages.length > 0
       ? `Reference images (${referenceImages.length}):`
       : undefined,
@@ -683,6 +699,9 @@ function requestedOptionsMetadata(
           },
         }
       : {}),
+    ...(options.maskComposite !== undefined
+      ? { mask_composite: options.maskComposite }
+      : {}),
   };
 }
 
@@ -814,6 +833,10 @@ export async function handleGenerateImage(
       );
     }
     validateCodexMaskedEdit({ editImage, maskImage });
+    const maskComposite = optionalBoolean(
+      params.mask_composite,
+      "mask_composite",
+    );
     const action = editImage || maskImage ? "edit" : requestedAction;
     const referenceImages = await resolveReferenceImagesForTest({
       referenceImagePaths: params.reference_image_paths,
@@ -838,6 +861,11 @@ export async function handleGenerateImage(
     if (outputCompression !== undefined && outputFormat === "png") {
       throw new Error("output_compression requires JPEG or WebP output");
     }
+    assertCodexMaskCompositeSupported({
+      maskImage,
+      maskComposite,
+      outputFormat,
+    });
     const options: CodexImageGenerationOptions = {
       ...(outputSize ? { outputSize } : {}),
       ...(quality ? { quality } : {}),
@@ -850,6 +878,7 @@ export async function handleGenerateImage(
       ...(action ? { action } : {}),
       ...(inputFidelity ? { inputFidelity } : {}),
       ...(maskImage ? { maskImage } : {}),
+      ...(maskComposite !== undefined ? { maskComposite } : {}),
     };
     const targets = outputPath
       ? await resolveOutputTargets(outputPath, count, outputFormat)
@@ -911,6 +940,7 @@ export async function handleGenerateImage(
         size,
         options,
         referenceImages: providerReferenceImages,
+        editImage,
         timeoutMs,
         generatedImages,
         sessionId,
@@ -955,6 +985,7 @@ export async function handleGenerateImage(
             size,
             options,
             referenceImages: providerReferenceImages,
+            editImage,
             timeoutMs,
             generatedImages,
             sessionId,

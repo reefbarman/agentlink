@@ -310,6 +310,12 @@ const ASK_AGENT_GENERATE_IMAGE_SCHEMA = {
     .describe(
       "Prior Browser Ask Agent session PNG image ID to use as the edit mask.",
     ),
+  mask_composite: z
+    .boolean()
+    .optional()
+    .describe(
+      "Masked edits only. By default PNG results are resized to the edit target's dimensions and unmasked pixels are restored from the original. false returns the provider's raw output.",
+    ),
   count: z.coerce.number().int().min(1).max(4).optional(),
   reference_image_ids: z
     .array(z.string())

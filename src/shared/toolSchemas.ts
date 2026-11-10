@@ -905,6 +905,12 @@ export const generateImageSchema = {
     .describe(
       "Prior session PNG image ID to use as the edit mask. Requires an alpha channel, matching target dimensions, and action edit. Mutually exclusive with mask_image_path.",
     ),
+  mask_composite: z
+    .boolean()
+    .optional()
+    .describe(
+      "Masked edits only. By default PNG results are resized to the edit target's exact dimensions and pixels where the mask is opaque are restored from the original, because providers return their own size and re-render the whole image. true requires this (PNG output only); false returns the provider's raw output.",
+    ),
   count: z.coerce
     .number()
     .optional()
