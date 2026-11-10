@@ -1,4 +1,5 @@
 import { readFile } from "fs/promises";
+import * as path from "path";
 import * as vscode from "vscode";
 
 import {
@@ -11,6 +12,7 @@ import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.j
 import { isAgentInstructionReadPath } from "../approvals/protectedPaths.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 import { waitForDocumentToMatchDisk } from "../integrations/editDurability.js";
+import { getGitIgnoredRelativePaths } from "../indexer/IndexableFileDiscovery.js";
 
 import {
   buildFindAndReplacePattern,
@@ -31,6 +33,12 @@ import type { PathAccessProvider } from "../core/capabilities/readSearch.js";
 export { expandReplacement } from "@agentlink/core/find-and-replace";
 
 const MAX_GLOB_FILES = 500;
+/**
+ * Candidates scanned before git-ignored files are dropped. Ignored build
+ * copies can outnumber the tracked files a glob is meant for, so the edit
+ * limit applies after filtering.
+ */
+const MAX_GLOB_SCAN_FILES = 5_000;
 
 interface FileReplacement {
   absolutePath: string;
@@ -59,6 +67,7 @@ export async function handleFindAndReplace(
     regex?: boolean;
     max_replacements?: number;
     save_without_formatting?: boolean;
+    include_ignored?: boolean;
   },
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
@@ -96,6 +105,7 @@ export async function handleFindAndReplace(
 
     // Resolve target files
     let fileUris: vscode.Uri[];
+    let ignoredSkipped = 0;
 
     if (params.path) {
       const { absolutePath, inWorkspace } = resolveAndValidatePath(params.path);
@@ -143,13 +153,42 @@ export async function handleFindAndReplace(
       // workspace search exclusions. Supplying a narrow exclude here overrides
       // those defaults and can unexpectedly propose edits to excluded caches.
       const relGlob = new vscode.RelativePattern(workspaceRoot, params.glob);
-      // Request a sentinel beyond the limit so a truncated scan can never
+      // Request a sentinel beyond each limit so a truncated scan can never
       // produce a partial edit proposal or a misleading no_matches result.
       fileUris = await vscode.workspace.findFiles(
         relGlob,
         undefined,
-        MAX_GLOB_FILES + 1,
+        MAX_GLOB_SCAN_FILES + 1,
       );
+      if (fileUris.length > MAX_GLOB_SCAN_FILES) {
+        return errorResult(
+          `Glob matched more than ${MAX_GLOB_SCAN_FILES} files before git-ignored files were removed. Narrow the glob or use an exact path; no files were edited.`,
+          {
+            reason: "glob_file_limit_exceeded",
+            glob: params.glob,
+            file_limit: MAX_GLOB_SCAN_FILES,
+          },
+        );
+      }
+      // findFiles applies files.exclude and search.exclude but not .gitignore,
+      // so ignored build or snapshot copies would otherwise be edited.
+      if (params.include_ignored !== true && fileUris.length > 0) {
+        const relativePaths = fileUris.map((uri) =>
+          path.relative(workspaceRoot, uri.fsPath).split(path.sep).join("/"),
+        );
+        const ignored = await getGitIgnoredRelativePaths(
+          relativePaths,
+          workspaceRoot,
+          () => {},
+        );
+        if (ignored.size > 0) {
+          const kept = fileUris.filter(
+            (_uri, index) => !ignored.has(relativePaths[index]),
+          );
+          ignoredSkipped = fileUris.length - kept.length;
+          fileUris = kept;
+        }
+      }
       if (fileUris.length > MAX_GLOB_FILES) {
         return errorResult(
           `Glob matched more than ${MAX_GLOB_FILES} files. Narrow the glob or use an exact path; no files were edited.`,
@@ -161,7 +200,16 @@ export async function handleFindAndReplace(
         );
       }
       if (fileUris.length === 0) {
-        return errorResult(`No files matched glob pattern: ${params.glob}`);
+        return ignoredSkipped > 0
+          ? errorResult(
+              `Every file matching glob pattern ${params.glob} is git-ignored. Set include_ignored=true to edit ignored files.`,
+              {
+                reason: "glob_matched_only_ignored_files",
+                glob: params.glob,
+                ignored_files_skipped: ignoredSkipped,
+              },
+            )
+          : errorResult(`No files matched glob pattern: ${params.glob}`);
       }
     } else {
       return errorResult("Either 'path' or 'glob' must be specified");
@@ -236,9 +284,12 @@ export async function handleFindAndReplace(
         content: [
           {
             type: "text",
-            text: JSON.stringify(
-              findAndReplaceNoMatchesResult(findStr, fileUris.length),
-            ),
+            text: JSON.stringify({
+              ...findAndReplaceNoMatchesResult(findStr, fileUris.length),
+              ...(ignoredSkipped > 0
+                ? { ignored_files_skipped: ignoredSkipped }
+                : {}),
+            }),
           },
         ],
       };
@@ -265,28 +316,63 @@ export async function handleFindAndReplace(
       );
     }
 
-    return await providers.multiFileEditReviewProvider.reviewAndApply({
-      find: findStr,
-      replace: replaceStr,
-      isRegex: !!params.regex,
-      files: fileReplacements.map((fr) => ({
-        absolutePath: fr.absolutePath,
-        relativePath: fr.relPath,
-        replacements: fr.replacements,
-        matches: fr.matches,
-      })),
-      totalMatches: totalChanges,
-      sessionId,
-      approvalPanel,
-      onApprovalRequest,
-      prepareOneShotAuthorization: providers.prepareOneShotAuthorization,
-      saveWithoutFormatting: params.save_without_formatting,
-    });
+    const reviewed = await providers.multiFileEditReviewProvider.reviewAndApply(
+      {
+        find: findStr,
+        replace: replaceStr,
+        isRegex: !!params.regex,
+        files: fileReplacements.map((fr) => ({
+          absolutePath: fr.absolutePath,
+          relativePath: fr.relPath,
+          replacements: fr.replacements,
+          matches: fr.matches,
+        })),
+        totalMatches: totalChanges,
+        sessionId,
+        approvalPanel,
+        onApprovalRequest,
+        prepareOneShotAuthorization: providers.prepareOneShotAuthorization,
+        saveWithoutFormatting: params.save_without_formatting,
+      },
+    );
+    return ignoredSkipped > 0
+      ? withIgnoredFilesSkipped(reviewed, ignoredSkipped)
+      : reviewed;
   } catch (err) {
     if (typeof err === "object" && err !== null && "content" in err) {
       return err as ToolResult;
     }
     const message = err instanceof Error ? err.message : String(err);
     return errorResult(message);
+  }
+}
+
+/** Reports how many git-ignored glob matches were left out of the edit. */
+function withIgnoredFilesSkipped(
+  result: ToolResult,
+  ignoredSkipped: number,
+): ToolResult {
+  const [first, ...rest] = result.content;
+  if (first?.type !== "text") return result;
+  try {
+    const payload = JSON.parse(first.text) as unknown;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return result;
+    }
+    return {
+      ...result,
+      content: [
+        {
+          ...first,
+          text: JSON.stringify({
+            ...payload,
+            ignored_files_skipped: ignoredSkipped,
+          }),
+        },
+        ...rest,
+      ],
+    };
+  } catch {
+    return result;
   }
 }

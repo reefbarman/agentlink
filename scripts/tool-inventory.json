@@ -136,6 +136,7 @@
       "parameters": [
         "find",
         "glob",
+        "include_ignored",
         "max_replacements",
         "path",
         "regex",
@@ -937,5 +938,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "f586710b57638529bba9233201dc37f1435d0c7359634b0541c85981e20b6966"
+  "revision": "613d6216b28416537c54776817e16312605949f6b735ffcde74415cb7ba97876"
 }

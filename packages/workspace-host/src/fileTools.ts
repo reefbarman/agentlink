@@ -1908,12 +1908,21 @@ async function planWorkspaceFindAndReplace(
     }
     candidates = [resolved.path];
   } else if (typeof input.glob === "string" && input.glob) {
-    candidates = await findProjectFilesByGlob(
+    const found = await findProjectFilesByGlob(
       files,
       projectRoot,
       input.glob,
       scopes,
     );
+    // A partial walk would propose edits to an arbitrary subset of matches,
+    // or report no matches for files it never reached.
+    if (found.truncated) {
+      return {
+        status: "error",
+        error: `Glob matched more than ${FIND_AND_REPLACE_MAX_GLOB_FILES} files or scanned too many entries. Narrow the glob or use an exact path; no files were edited.`,
+      };
+    }
+    candidates = found.files;
     if (candidates.length === 0) {
       return {
         status: "error",
@@ -1966,7 +1975,7 @@ async function findProjectFilesByGlob(
   projectRoot: string,
   glob: string,
   scopes: readonly ResolvedWorkspaceFileScope[],
-): Promise<string[]> {
+): Promise<{ readonly files: string[]; readonly truncated: boolean }> {
   const matches = createNodeHostGlobMatcher(glob);
   const found: string[] = [];
   const queue = [projectRoot];
@@ -1979,7 +1988,9 @@ async function findProjectFilesByGlob(
       left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
     )) {
       visited += 1;
-      if (visited > FIND_AND_REPLACE_WALK_ENTRY_LIMIT) return found;
+      if (visited > FIND_AND_REPLACE_WALK_ENTRY_LIMIT) {
+        return { files: found, truncated: true };
+      }
       const absolutePath = path.join(directory, entry.name);
       const relativePath = toRelativePath(projectRoot, absolutePath);
       if (
@@ -1996,11 +2007,13 @@ async function findProjectFilesByGlob(
         scopeAllows(scopes, relativePath, "read")
       ) {
         found.push(absolutePath);
-        if (found.length >= FIND_AND_REPLACE_MAX_GLOB_FILES) return found;
+        if (found.length > FIND_AND_REPLACE_MAX_GLOB_FILES) {
+          return { files: found, truncated: true };
+        }
       }
     }
   }
-  return found;
+  return { files: found, truncated: false };
 }
 
 async function readReviewableText(

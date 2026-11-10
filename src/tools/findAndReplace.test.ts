@@ -6,6 +6,7 @@ import * as vscode from "vscode";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MultiFileEditReviewProvider } from "../core/capabilities/editReview.js";
+import { execFileSync } from "child_process";
 
 const mockWorkspace = vi.hoisted(() => ({
   workspaceFolders: [] as Array<{ uri: { fsPath: string } }>,
@@ -209,8 +210,144 @@ describe("handleFindAndReplace", () => {
     expect(mockWorkspace.findFiles).toHaveBeenCalledWith(
       expect.objectContaining({ base: workspaceDir, pattern: "**/*.meta" }),
       undefined,
-      501,
+      5001,
     );
+  });
+
+  describe("git-ignored glob matches", () => {
+    // Reported: a glob edited ignored build snapshots instead of the tracked
+    // sources it was meant for.
+    function setUpRepo() {
+      execFileSync("git", ["init", "-q"], { cwd: workspaceDir });
+      fs.writeFileSync(path.join(workspaceDir, ".gitignore"), "/build/\n");
+      const tracked = path.join(workspaceDir, "src", "gpu.h");
+      const ignored = path.join(workspaceDir, "build", "live-1", "gpu.h");
+      for (const filePath of [tracked, ignored]) {
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, "TRI_GPU", "utf-8");
+      }
+      mockWorkspace.openTextDocument.mockImplementation(async (uri) =>
+        createDocument(uri.fsPath, "TRI_GPU"),
+      );
+      return { tracked, ignored };
+    }
+
+    function reviewProvider() {
+      return vi.fn<MultiFileEditReviewProvider["reviewAndApply"]>(async () => ({
+        content: [
+          { type: "text", text: JSON.stringify({ status: "accepted" }) },
+        ],
+      }));
+    }
+
+    it("skips ignored files by default and reports how many", async () => {
+      const { tracked, ignored } = setUpRepo();
+      mockWorkspace.findFiles.mockResolvedValue([
+        { fsPath: ignored },
+        { fsPath: tracked },
+      ]);
+      const reviewAndApply = reviewProvider();
+      const { handleFindAndReplace } = await import("./findAndReplace.js");
+
+      const result = await handleFindAndReplace(
+        { glob: "**/*.h", find: "TRI_GPU", replace: "AGX_GPU" },
+        { isPathTrusted: vi.fn(() => true) } as never,
+        {} as never,
+        "session-1",
+        {} as never,
+        undefined,
+        { multiFileEditReviewProvider: { reviewAndApply } },
+      );
+
+      expect(reviewAndApply.mock.calls[0][0].files).toEqual([
+        expect.objectContaining({ absolutePath: tracked }),
+      ]);
+      expect(toolJson(result)).toEqual({
+        status: "accepted",
+        ignored_files_skipped: 1,
+      });
+    });
+
+    it("includes ignored files when include_ignored is set", async () => {
+      const { tracked, ignored } = setUpRepo();
+      mockWorkspace.findFiles.mockResolvedValue([
+        { fsPath: ignored },
+        { fsPath: tracked },
+      ]);
+      const reviewAndApply = reviewProvider();
+      const { handleFindAndReplace } = await import("./findAndReplace.js");
+
+      const result = await handleFindAndReplace(
+        {
+          glob: "**/*.h",
+          find: "TRI_GPU",
+          replace: "AGX_GPU",
+          include_ignored: true,
+        },
+        { isPathTrusted: vi.fn(() => true) } as never,
+        {} as never,
+        "session-1",
+        {} as never,
+        undefined,
+        { multiFileEditReviewProvider: { reviewAndApply } },
+      );
+
+      expect(reviewAndApply.mock.calls[0][0].files).toHaveLength(2);
+      expect(toolJson(result)).toEqual({ status: "accepted" });
+    });
+
+    it("explains when every match is ignored", async () => {
+      const { ignored } = setUpRepo();
+      mockWorkspace.findFiles.mockResolvedValue([{ fsPath: ignored }]);
+      const reviewAndApply = reviewProvider();
+      const { handleFindAndReplace } = await import("./findAndReplace.js");
+
+      const result = await handleFindAndReplace(
+        { glob: "build/**/*.h", find: "TRI_GPU", replace: "AGX_GPU" },
+        { isPathTrusted: vi.fn(() => true) } as never,
+        {} as never,
+        "session-1",
+        {} as never,
+        undefined,
+        { multiFileEditReviewProvider: { reviewAndApply } },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(toolJson(result)).toMatchObject({
+        reason: "glob_matched_only_ignored_files",
+        ignored_files_skipped: 1,
+      });
+      expect(mockWorkspace.openTextDocument).not.toHaveBeenCalled();
+      expect(reviewAndApply).not.toHaveBeenCalled();
+    });
+
+    it("applies the 500-file edit limit after dropping ignored files", async () => {
+      const { tracked } = setUpRepo();
+      const ignoredCopies = Array.from({ length: 600 }, (_, index) => ({
+        fsPath: path.join(workspaceDir, "build", `copy-${index}`, "gpu.h"),
+      }));
+      mockWorkspace.findFiles.mockResolvedValue([
+        ...ignoredCopies,
+        { fsPath: tracked },
+      ]);
+      const reviewAndApply = reviewProvider();
+      const { handleFindAndReplace } = await import("./findAndReplace.js");
+
+      const result = await handleFindAndReplace(
+        { glob: "**/*.h", find: "TRI_GPU", replace: "AGX_GPU" },
+        { isPathTrusted: vi.fn(() => true) } as never,
+        {} as never,
+        "session-1",
+        {} as never,
+        undefined,
+        { multiFileEditReviewProvider: { reviewAndApply } },
+      );
+
+      expect(reviewAndApply.mock.calls[0][0].files).toEqual([
+        expect.objectContaining({ absolutePath: tracked }),
+      ]);
+      expect(toolJson(result)).toMatchObject({ ignored_files_skipped: 600 });
+    });
   });
 
   it.each([0, 500])(

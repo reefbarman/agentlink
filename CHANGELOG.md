@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `find_and_replace` globs no longer edit files ignored by `.gitignore`. Before, a glob such as `compiler/**/*.py` could change ignored build or snapshot copies while missing the tracked sources it was meant for. Ignored matches are now skipped and counted in `ignored_files_skipped`, a glob whose matches are all ignored returns `glob_matched_only_ignored_files`, and `include_ignored: true` restores the old behaviour. The 500-file limit now applies after ignored files are removed. In the standalone CLI and Assistant, a glob over the file limit is now refused instead of silently editing only the first 500 files.
+
 ## 1.87.2
 
 - Git commands that write to the repository now get the "run natively" guidance before they start more often, instead of failing in the sandbox on `.git/index.lock`. Any steps after the first Git write are accepted, so chains such as `git add … && git commit -m … && npm run preflight` or `git commit … && git show -s --format=fuller HEAD` are recognised, and `git pull --ff-only`/`--rebase`/`--no-edit` counts as a Git write. Steps before the first write still have to be recognised read-only checks. When a script such as `npm run preflight` is denied a write inside `.git` (for example a Node `EPERM`), the result now includes the same `protected_git_metadata` recovery.

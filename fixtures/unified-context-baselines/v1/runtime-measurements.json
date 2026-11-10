@@ -841,9 +841,9 @@
     {
       "mode": "code",
       "toolCount": 67,
-      "chars": 106625,
-      "estimatedTokens": 26657,
-      "sha256": "e80c37ebcebf032059922a2080b3b0e781078eb90cda1f874625379c45657dee"
+      "chars": 106630,
+      "estimatedTokens": 26658,
+      "sha256": "4c063dfbfca2c821709544c49df01d9ac52e441b7d5c16174f1f94ec0b184bb6"
     },
     {
       "mode": "architect",
@@ -886,9 +886,9 @@
       "mode": "code",
       "toolCount": 27,
       "deferredToolCount": 40,
-      "chars": 65439,
-      "estimatedTokens": 16360,
-      "sha256": "9fcf47a22d6ba9deac4c7958a11079bb26249f911b2a23771774cdd8a8b4eb88"
+      "chars": 65444,
+      "estimatedTokens": 16361,
+      "sha256": "5c4410dfcac7a7a2bf45080c90518a7673d24a8aec3af58780642eb5b5a65dfb"
     },
     {
       "mode": "architect",

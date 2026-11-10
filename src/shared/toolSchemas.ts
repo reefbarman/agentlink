@@ -1190,14 +1190,18 @@ export const findAndReplaceSchema = {
     .string()
     .optional()
     .describe(
-      "Single file path to search in (absolute or relative to workspace root). Mutually exclusive with glob.",
+      "Single file path (absolute or workspace-relative). Mutually exclusive with glob.",
     ),
   glob: z
     .string()
     .optional()
     .describe(
-      "Glob pattern to match files (e.g. 'src/**/*.ts'). Mutually exclusive with path.",
+      "Glob such as 'src/**/*.ts'. Skips git-ignored files. Mutually exclusive with path.",
     ),
+  include_ignored: z
+    .boolean()
+    .optional()
+    .describe("Also match git-ignored files with glob."),
   regex: z
     .boolean()
     .optional()
@@ -1209,7 +1213,7 @@ export const findAndReplaceSchema = {
     .int()
     .optional()
     .describe(
-      "Maximum allowed matches to replace. Must be a positive integer. If total matches exceed this value, no edits are applied and the tool returns a guardrail error payload.",
+      "Positive integer cap on matches. If exceeded, nothing is edited and a guardrail error is returned.",
     ),
   save_without_formatting: z
     .boolean()

@@ -1188,6 +1188,23 @@ describe("workspace file tools", () => {
       }),
     });
 
+    // A glob past the file limit is refused instead of editing a partial set.
+    await fs.mkdir(path.join(test.root, "many"));
+    await Promise.all(
+      Array.from({ length: 501 }, (_, index) =>
+        fs.writeFile(path.join(test.root, "many", `${index}.txt`), "oldName\n"),
+      ),
+    );
+    await expect(
+      tool.execute(
+        { find: "oldName", replace: "x", glob: "many/*.txt" },
+        context(),
+      ),
+    ).resolves.toMatchObject({
+      isError: true,
+      modelContent: expect.stringContaining("no files were edited"),
+    });
+
     await fs.writeFile(path.join(test.root, "AGENTS.md"), "oldName\n");
     await expect(
       authorize("protected", { find: "oldName", replace: "x", glob: "*.md" }),
