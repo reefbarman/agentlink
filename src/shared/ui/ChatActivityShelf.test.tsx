@@ -253,7 +253,7 @@ describe("ChatActivityShelf", () => {
     Object.defineProperty(shelf, "getBoundingClientRect", {
       value: () => ({ bottom: 700, height: 100 }),
     });
-    Object.defineProperty(content, "clientHeight", { value: 90 });
+    Object.defineProperty(separator, "offsetHeight", { value: 10 });
     Object.defineProperty(content, "scrollHeight", {
       configurable: true,
       value: 250,
@@ -324,7 +324,7 @@ describe("ChatActivityShelf", () => {
     Object.defineProperty(shelf, "getBoundingClientRect", {
       value: () => ({ bottom: 700, height: 100 }),
     });
-    Object.defineProperty(content, "clientHeight", { value: 90 });
+    Object.defineProperty(separator, "offsetHeight", { value: 10 });
     Object.defineProperty(content, "scrollHeight", { value: 250 });
 
     rerender(
@@ -369,7 +369,7 @@ describe("ChatActivityShelf", () => {
       Object.defineProperty(shelf, "getBoundingClientRect", {
         value: () => ({ bottom: 700, height: 100 }),
       });
-      Object.defineProperty(content, "clientHeight", { value: 90 });
+      Object.defineProperty(separator, "offsetHeight", { value: 10 });
       Object.defineProperty(content, "scrollHeight", {
         configurable: true,
         value: 250,
@@ -394,6 +394,50 @@ describe("ChatActivityShelf", () => {
     }
   });
 
+  it("does not count empty space below short content as chrome", async () => {
+    window.localStorage.setItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY, "100");
+    const { rerender } = render(
+      <ChatActivityShelf>
+        <div>Activity</div>
+      </ChatActivityShelf>,
+    );
+    const separator = screen.getByRole("separator");
+    const shelf = separator.parentElement as HTMLDivElement;
+    const content = separator.nextElementSibling as HTMLDivElement;
+    let contentHeight = 250;
+    // The rendered shelf follows its style, like a real browser.
+    Object.defineProperty(shelf, "getBoundingClientRect", {
+      value: () => ({
+        bottom: 700,
+        height: Number.parseFloat(shelf.style.height) || 100,
+      }),
+    });
+    Object.defineProperty(separator, "offsetHeight", { value: 10 });
+    // Content is not stretched, so its box is only as tall as what it holds.
+    Object.defineProperty(content, "clientHeight", {
+      get: () => contentHeight,
+    });
+    Object.defineProperty(content, "scrollHeight", {
+      get: () => contentHeight,
+    });
+
+    rerender(
+      <ChatActivityShelf>
+        <div>Activity</div>
+        <div>Approval</div>
+      </ChatActivityShelf>,
+    );
+    await waitFor(() => expect(shelf.style.height).toBe("260px"));
+
+    contentHeight = 40;
+    rerender(
+      <ChatActivityShelf>
+        <div>Activity</div>
+      </ChatActivityShelf>,
+    );
+    await waitFor(() => expect(shelf.style.height).toBe("100px"));
+  });
+
   it("keeps a grown size once the user resizes it", async () => {
     window.localStorage.setItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY, "100");
     const { rerender } = render(
@@ -408,7 +452,7 @@ describe("ChatActivityShelf", () => {
     Object.defineProperty(shelf, "getBoundingClientRect", {
       value: () => ({ bottom: 700, height: renderedHeight }),
     });
-    Object.defineProperty(content, "clientHeight", { value: 90 });
+    Object.defineProperty(separator, "offsetHeight", { value: 10 });
     Object.defineProperty(content, "scrollHeight", {
       configurable: true,
       value: 250,

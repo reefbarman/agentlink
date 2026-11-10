@@ -85,10 +85,29 @@ interface ChatActivityShelfProps {
  * window) and at the space available above the composer.
  */
 function findFitHeight(shelf: HTMLElement, content: HTMLElement): number {
-  const rendered = shelf.getBoundingClientRect().height;
-  const chrome = Math.max(0, rendered - content.clientHeight);
+  const chrome = measureChrome(shelf, content);
   const cap = Math.min(findMaximumHeight(shelf), window.innerHeight / 2);
   return Math.min(chrome + content.scrollHeight, Math.max(cap, MIN_HEIGHT));
+}
+
+/**
+ * Height of everything in the shelf except its content: the handle, padding
+ * and borders. Measured directly rather than as "shelf minus content", which
+ * would count empty space below short content as chrome and stop the shelf
+ * from ever shrinking back.
+ */
+function measureChrome(shelf: HTMLElement, content: HTMLElement): number {
+  const style = window.getComputedStyle(shelf);
+  const px = (value: string) => Number.parseFloat(value) || 0;
+  let chrome =
+    px(style.paddingTop) +
+    px(style.paddingBottom) +
+    px(style.borderTopWidth) +
+    px(style.borderBottomWidth);
+  for (const child of Array.from(shelf.children)) {
+    if (child !== content) chrome += (child as HTMLElement).offsetHeight;
+  }
+  return chrome;
 }
 
 /** Smallest height the composer's question card shrinks to via the handle. */
