@@ -19,6 +19,7 @@ import {
 } from "../../dataPlane/transcriptBlockDetail";
 import { loadRemoteDisplayImage } from "../toolDetailTransport";
 import { withOwnerQueueCapabilities } from "./useRelayGatewayConnection";
+import { pairBackgroundCoordination } from "../../../shared/backgroundCoordination";
 
 const identity = {
   helperGenerationId: "helper-1",
@@ -780,6 +781,80 @@ describe("RelaySnapshotProjector", () => {
       retrySafe: true,
       agentRetryable: false,
     });
+  });
+
+  it("restores agent communication pairing, handoff, and background-agent context", () => {
+    const coordination = {
+      requestId: "request-1",
+      backgroundSessionId: "background-1",
+      task: "Review auth",
+      kind: "question" as const,
+      context: "Needs a decision",
+      questions: [{ id: "path", question: "Which file?", options: ["a.ts"] }],
+    };
+    const request: BrowserGatewayTranscriptMessage = {
+      ...message("coordination", 2),
+      role: "user",
+      blocks: [],
+      coordination,
+      handoff: {
+        sourceSessionId: "session-0",
+        sourceTitle: "Earlier work",
+        handoffId: "handoff-1",
+      },
+    };
+    const reply: BrowserGatewayTranscriptMessage = {
+      ...message("reply", 3),
+      blocks: [
+        {
+          type: "tool_call",
+          blockId: "call-reply",
+          toolCallId: "call-reply",
+          name: "respond_to_background_question",
+          complete: true,
+          coordinationReply: {
+            requestId: "request-1",
+            status: "answered",
+            answers: { path: "a.ts" },
+            notes: { path: "Prefer a.ts" },
+          },
+        },
+        {
+          type: "bg_agent",
+          blockId: "bg-agent-1",
+          sessionId: "background-1",
+          task: "Review auth",
+          message: { kind: "inline", text: "Review the auth module" },
+          routingReason: "taskClass review_code",
+        },
+      ],
+    };
+    const projected = new RelaySnapshotProjector().project(
+      checkpoint({
+        transcript: {
+          messages: [request, reply],
+          earlierCursor: null,
+          hasEarlier: false,
+        },
+      }),
+    ).session.foreground!.projectedMessages;
+
+    expect(projected[0]).toMatchObject({
+      coordination,
+      handoff: { sourceTitle: "Earlier work" },
+    });
+    expect(projected[1].blocks[1]).toMatchObject({
+      type: "bg_agent",
+      message: "Review the auth module",
+      routingReason: "taskClass review_code",
+    });
+    const paired = pairBackgroundCoordination(projected);
+    expect(paired.replies.get("request-1")).toMatchObject({
+      status: "answered",
+      answers: { path: "a.ts" },
+      notes: { path: "Prefer a.ts" },
+    });
+    expect(paired.pairedBlocks.has(projected[1].blocks[0])).toBe(true);
   });
 
   it("maps safe message blocks and omits redacted pairing status", () => {

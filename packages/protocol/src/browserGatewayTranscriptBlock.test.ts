@@ -33,6 +33,12 @@ it("pins the complete browser gateway transcript-block contract", () => {
           imageCount?: number;
           documentCount?: number;
         };
+        coordinationReply?: {
+          requestId: string;
+          status: "responding" | "answered" | "failed";
+          answers: Record<string, string>;
+          notes: Record<string, string>;
+        };
       }
     | {
         type: "skill_load";
@@ -72,6 +78,8 @@ it("pins the complete browser gateway transcript-block contract", () => {
           | "unknown"
           | "external";
         modelGroup?: string;
+        message?: BrowserGatewayTranscriptText;
+        routingReason?: string;
       }
     | {
         type: "bg_agent_result";

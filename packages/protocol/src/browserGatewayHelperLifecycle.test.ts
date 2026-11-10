@@ -20,6 +20,7 @@ describe("browser gateway helper lifecycle", () => {
       "transcript-tool-progress-v1",
       "queue-interjection-v1",
       "mcp-resource-updates-v1",
+      "transcript-agent-context-v1",
     ];
 
     expect(BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION).toBe(2);

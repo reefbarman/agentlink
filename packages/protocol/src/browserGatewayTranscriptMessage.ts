@@ -1,7 +1,11 @@
+import type {
+  BackgroundCoordination,
+  McpResourceUpdateProvenance,
+} from "./chatTranscript.js";
+
 import type { BrowserGatewayTranscriptBlock } from "./browserGatewayTranscriptBlock.js";
 import type { BrowserGatewayTranscriptText } from "./browserGatewayTranscriptText.js";
 import type { ImageAttribution } from "./toolResult.js";
-import type { McpResourceUpdateProvenance } from "./chatTranscript.js";
 
 /** Block id used by `display-image` detail requests for message display media. */
 export const BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID = "display-media";
@@ -42,6 +46,13 @@ export interface BrowserGatewayTranscriptMessage {
   slashCommandLabel?: string;
   origin?: "vscode" | "browser";
   mcpResourceUpdate?: McpResourceUpdateProvenance;
+  /**
+   * Agent-to-agent request rendered as an "Agent communication" card. Sent
+   * only to helpers advertising `transcript-agent-context-v1`.
+   */
+  coordination?: BackgroundCoordination;
+  /** Linked fresh-session handoff chip, negotiated with `transcript-agent-context-v1`. */
+  handoff?: { sourceSessionId: string; sourceTitle: string; handoffId: string };
   checkpointId?: string;
   displayMedia?: BrowserGatewayTranscriptDisplayMedia;
   finalMarker?: {

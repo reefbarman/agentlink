@@ -1,6 +1,7 @@
 import type {
   ChatMessage,
   ContentBlock,
+  RemoteCoordinationReply,
 } from "@agentlink/protocol/chat-transcript";
 
 type ToolCall = Extract<ContentBlock, { type: "tool_call" }>;
@@ -32,9 +33,30 @@ function bareName(name: string): string {
   return name.split(/\.|__/).at(-1) ?? name;
 }
 
+/** Display text for a coordination answer or note value. */
+export function readableCoordinationAnswer(value: unknown): string {
+  if (value === null) return "No answer";
+  if (Array.isArray(value))
+    return value.map(readableCoordinationAnswer).join(", ");
+  if (typeof value === "object") return JSON.stringify(value, null, 2);
+  return String(value);
+}
+
 function parseReply(block: ToolCall): BackgroundCoordinationReply | null {
   const cached = replyCache.get(block);
   if (cached !== undefined) return cached;
+  if (block.remoteCoordinationReply) {
+    const remote = block.remoteCoordinationReply;
+    const reply: BackgroundCoordinationReply = {
+      block,
+      requestId: remote.requestId,
+      status: remote.status,
+      answers: { ...remote.answers },
+      notes: { ...remote.notes },
+    };
+    replyCache.set(block, reply);
+    return reply;
+  }
   let name = bareName(block.name);
   if (
     name !== "respond_to_background_question" &&
@@ -69,6 +91,31 @@ function parseReply(block: ToolCall): BackgroundCoordinationReply | null {
   }
   replyCache.set(block, reply);
   return reply;
+}
+
+/**
+ * Compact display summary of a coordination reply tool call for remote
+ * surfaces, which receive tool input and results only on demand.
+ */
+export function summarizeBackgroundCoordinationReply(
+  block: ToolCall,
+  bound: (text: string) => string = (text) => text,
+): RemoteCoordinationReply | null {
+  const reply = parseReply(block);
+  if (!reply) return null;
+  const render = (values: Record<string, unknown>) =>
+    Object.fromEntries(
+      Object.entries(values).map(([id, value]) => [
+        bound(id),
+        bound(readableCoordinationAnswer(value)),
+      ]),
+    );
+  return {
+    requestId: bound(reply.requestId),
+    status: reply.status,
+    answers: render(reply.answers),
+    notes: render(reply.notes),
+  };
 }
 
 /** Only an explicit accepted result replaces a raw tool call in the transcript. */

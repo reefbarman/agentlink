@@ -199,6 +199,7 @@ export class AskAgentOwnerAdapter {
           "transcript-image-attribution-v1",
           // Same-process helper parser, so no version skew to guard.
           "queue-interjection-v1",
+          "transcript-agent-context-v1",
         ],
       },
     );

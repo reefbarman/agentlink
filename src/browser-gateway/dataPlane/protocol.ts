@@ -1,7 +1,9 @@
 import type { BackgroundResultState } from "@agentlink/protocol/background-result";
 import type {
+  BackgroundCoordination,
   McpResourceWatchView,
   McpResourceUpdateProvenance,
+  RemoteCoordinationReply,
 } from "@agentlink/protocol/chat-transcript";
 import { boundedImageAttribution } from "./imageAttribution.js";
 import type { BrowserGatewayBackgroundSummary } from "@agentlink/protocol/browser-gateway-background-summary";
@@ -1230,6 +1232,142 @@ function parseMcpResourceWatch(
   };
 }
 
+const MAX_COORDINATION_QUESTIONS = 32;
+const MAX_COORDINATION_OPTIONS = 32;
+const MAX_COORDINATION_REPLY_ENTRIES = 64;
+
+function parseCoordination(
+  value: unknown,
+  path: string,
+): BackgroundCoordination {
+  const object = strictRecord(value, path, [
+    "requestId",
+    "backgroundSessionId",
+    "task",
+    "kind",
+    "context",
+    "questions",
+  ]);
+  const questions = arrayValue(object.questions, `${path}.questions`);
+  if (questions.length > MAX_COORDINATION_QUESTIONS) {
+    fail("resource_limit", `${path}.questions`, "too many questions");
+  }
+  return {
+    requestId: nonEmptyString(object.requestId, `${path}.requestId`, 256),
+    backgroundSessionId: boundedString(
+      object.backgroundSessionId,
+      `${path}.backgroundSessionId`,
+      256,
+    ),
+    task: boundedString(object.task, `${path}.task`, 4_000),
+    kind: enumValue(
+      object.kind,
+      `${path}.kind`,
+      new Set(["question", "approval"]),
+    ) as BackgroundCoordination["kind"],
+    context: boundedString(object.context, `${path}.context`, 8_000),
+    questions: questions.map((entry, index) => {
+      const questionPath = `${path}.questions[${index}]`;
+      const question = strictRecord(entry, questionPath, [
+        "id",
+        "question",
+        "context",
+        "options",
+      ]);
+      const context = optionalString(question, "context", questionPath, 8_000);
+      const options =
+        question.options === undefined
+          ? undefined
+          : arrayValue(question.options, `${questionPath}.options`);
+      if (options && options.length > MAX_COORDINATION_OPTIONS) {
+        fail("resource_limit", `${questionPath}.options`, "too many options");
+      }
+      return {
+        id: boundedString(question.id, `${questionPath}.id`, 256),
+        question: boundedString(
+          question.question,
+          `${questionPath}.question`,
+          8_000,
+        ),
+        ...(context ? { context } : {}),
+        ...(options
+          ? {
+              options: options.map((option, optionIndex) =>
+                boundedString(
+                  option,
+                  `${questionPath}.options[${optionIndex}]`,
+                  1_000,
+                ),
+              ),
+            }
+          : {}),
+      };
+    }),
+  };
+}
+
+function parseHandoff(
+  value: unknown,
+  path: string,
+): NonNullable<BrowserGatewayTranscriptMessage["handoff"]> {
+  const object = strictRecord(value, path, [
+    "sourceSessionId",
+    "sourceTitle",
+    "handoffId",
+  ]);
+  return {
+    sourceSessionId: boundedString(
+      object.sourceSessionId,
+      `${path}.sourceSessionId`,
+      256,
+    ),
+    sourceTitle: boundedString(
+      object.sourceTitle,
+      `${path}.sourceTitle`,
+      1_000,
+    ),
+    handoffId: boundedString(object.handoffId, `${path}.handoffId`, 256),
+  };
+}
+
+function parseCoordinationReplyEntries(
+  value: unknown,
+  path: string,
+): Record<string, string> {
+  const entries = Object.entries(recordValue(value, path));
+  if (entries.length > MAX_COORDINATION_REPLY_ENTRIES) {
+    fail("resource_limit", path, "too many entries");
+  }
+  return Object.fromEntries(
+    entries.map(([id, entry]) => [
+      boundedString(id, `${path}.<key>`, 256),
+      boundedString(entry, `${path}.${id.slice(0, 64)}`, 4_000),
+    ]),
+  );
+}
+
+function parseCoordinationReply(
+  value: unknown,
+  path: string,
+): RemoteCoordinationReply {
+  const object = strictRecord(value, path, [
+    "requestId",
+    "status",
+    "answers",
+    "notes",
+  ]);
+  return {
+    requestId: nonEmptyString(object.requestId, `${path}.requestId`, 256),
+    status: enumValue(
+      object.status,
+      `${path}.status`,
+      new Set(["responding", "answered", "failed"]),
+    ) as RemoteCoordinationReply["status"],
+    answers: parseCoordinationReplyEntries(object.answers, `${path}.answers`),
+    notes: parseCoordinationReplyEntries(object.notes, `${path}.notes`),
+  };
+}
+
 function parseMcpResourceUpdate(
   value: unknown,
   path: string,
@@ -1863,7 +2001,16 @@ function parseMessage(
     "warningMessage",
     "warningRetry",
     "mcpResourceUpdate",
+    "coordination",
+    "handoff",
   ]);
+  const coordination = optionalObject(
+    object,
+    "coordination",
+    path,
+    parseCoordination,
+  );
+  const handoff = optionalObject(object, "handoff", path, parseHandoff);
   const badge = optionalEnum(
     object,
     "badge",
@@ -1954,6 +2101,8 @@ function parseMessage(
     ...(origin ? { origin } : {}),
     ...(checkpointId ? { checkpointId } : {}),
     ...(mcpResourceUpdate ? { mcpResourceUpdate } : {}),
+    ...(coordination ? { coordination } : {}),
+    ...(handoff ? { handoff } : {}),
     ...(displayMedia ? { displayMedia } : {}),
     ...(finalMarker ? { finalMarker } : {}),
     ...(surfaceChange ? { surfaceChange } : {}),
@@ -2082,9 +2231,16 @@ function parseTranscriptBlock(
         "startedAt",
         "progress",
         "detail",
+        "coordinationReply",
       ]);
       const durationMs = optionalNonNegativeInteger(object, "durationMs", path);
       const startedAt = optionalNonNegativeInteger(object, "startedAt", path);
+      const coordinationReply = optionalObject(
+        object,
+        "coordinationReply",
+        path,
+        parseCoordinationReply,
+      );
       const progress =
         object.progress === undefined
           ? undefined
@@ -2104,6 +2260,7 @@ function parseTranscriptBlock(
         ...(startedAt !== undefined ? { startedAt } : {}),
         ...(progress ? { progress } : {}),
         ...(detail ? { detail } : {}),
+        ...(coordinationReply ? { coordinationReply } : {}),
       };
     }
     case "skill_load": {
@@ -2151,7 +2308,19 @@ function parseTranscriptBlock(
         "resolvedModelTier",
         "resolvedModelTierSource",
         "modelGroup",
+        "message",
+        "routingReason",
       ]);
+      const message =
+        object.message === undefined
+          ? undefined
+          : parseTranscriptText(object.message, `${path}.message`);
+      const routingReason = optionalString(
+        object,
+        "routingReason",
+        path,
+        4_000,
+      );
       const resolvedModel = optionalString(object, "resolvedModel", path, 256);
       const resolvedProvider = optionalString(
         object,
@@ -2213,6 +2382,8 @@ function parseTranscriptBlock(
         ...(resolvedModelTier ? { resolvedModelTier } : {}),
         ...(resolvedModelTierSource ? { resolvedModelTierSource } : {}),
         ...(modelGroup ? { modelGroup } : {}),
+        ...(message ? { message } : {}),
+        ...(routingReason ? { routingReason } : {}),
       };
     }
     case "bg_agent_result": {

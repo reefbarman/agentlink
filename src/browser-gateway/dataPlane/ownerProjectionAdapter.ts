@@ -7,6 +7,7 @@ import type {
 import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import { boundedImageAttribution } from "./imageAttribution.js";
 import { utf8ByteLength } from "../../shared/streamingBaselineMetrics.js";
+import { summarizeBackgroundCoordinationReply } from "../../shared/backgroundCoordination.js";
 import {
   BROWSER_GATEWAY_COMMAND_IDEMPOTENCY,
   BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
@@ -116,6 +117,11 @@ interface ProjectionContext {
   /** Receiver accepts live progress on running tool-call blocks. */
   readonly toolProgress?: boolean;
   readonly resourceUpdates?: boolean;
+  /**
+   * Receiver accepts agent-communication requests and replies, handoff chips,
+   * and background-agent prompts and routing reasons.
+   */
+  readonly agentContext?: boolean;
 }
 
 interface ProjectedReadSet {
@@ -168,6 +174,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
   private readonly toolProgress: boolean;
   private readonly queueInterjection: boolean;
   private readonly resourceUpdates: boolean;
+  private readonly agentContext: boolean;
   private historySessionId: string | null = null;
   private readonly historyMessages = new Map<string, ChatMessage>();
   private demanded = false;
@@ -225,6 +232,9 @@ export class BrowserGatewayOwnerProjectionAdapter {
       false;
     this.resourceUpdates =
       options.dataPlaneFeatures?.includes("mcp-resource-updates-v1") ?? false;
+    this.agentContext =
+      options.dataPlaneFeatures?.includes("transcript-agent-context-v1") ??
+      false;
     this.queueInterjection =
       options.dataPlaneFeatures?.includes("queue-interjection-v1") ?? false;
     this.sourceSubscription = sources.onDidChange((source) => {
@@ -369,6 +379,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
         finalElapsed: this.finalElapsed,
         toolProgress: this.toolProgress,
         resourceUpdates: this.resourceUpdates,
+        agentContext: this.agentContext,
       }),
     );
     const referencedDetails = detailsForMessages(
@@ -714,6 +725,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       finalElapsed: this.finalElapsed,
       toolProgress: this.toolProgress,
       resourceUpdates: this.resourceUpdates,
+      agentContext: this.agentContext,
     };
     const state = projectReadSet(
       readSet,
@@ -748,6 +760,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       finalElapsed: this.finalElapsed,
       toolProgress: this.toolProgress,
       resourceUpdates: this.resourceUpdates,
+      agentContext: this.agentContext,
     });
     const referencedDetails = detailsForMessages(
       [...details.values()],
@@ -1396,6 +1409,18 @@ function projectMessage(
           },
         }
       : {}),
+    ...(context.agentContext && message.coordination?.requestId.trim()
+      ? { coordination: projectCoordination(message.coordination) }
+      : {}),
+    ...(context.agentContext && message.handoff
+      ? {
+          handoff: {
+            sourceSessionId: bounded(message.handoff.sourceSessionId, 256),
+            sourceTitle: bounded(message.handoff.sourceTitle, 1_000),
+            handoffId: bounded(message.handoff.handoffId, 256),
+          },
+        }
+      : {}),
     ...(message.checkpointId
       ? { checkpointId: bounded(message.checkpointId, 256) }
       : {}),
@@ -1663,6 +1688,63 @@ function projectMessage(
   };
 }
 
+const MAX_COORDINATION_QUESTIONS = 32;
+const MAX_COORDINATION_OPTIONS = 32;
+const MAX_COORDINATION_REPLY_ENTRIES = 64;
+
+function projectCoordination(
+  coordination: NonNullable<ChatMessage["coordination"]>,
+): NonNullable<BrowserGatewayTranscriptMessage["coordination"]> {
+  return {
+    requestId: bounded(coordination.requestId, 256),
+    backgroundSessionId: bounded(coordination.backgroundSessionId, 256),
+    task: bounded(coordination.task, 4_000),
+    kind: coordination.kind,
+    context: bounded(coordination.context, MAX_TEXT_PREVIEW_LENGTH),
+    questions: coordination.questions
+      .slice(0, MAX_COORDINATION_QUESTIONS)
+      .map((question) => ({
+        id: bounded(question.id, 256),
+        question: bounded(question.question, MAX_TEXT_PREVIEW_LENGTH),
+        ...(question.context
+          ? { context: bounded(question.context, MAX_TEXT_PREVIEW_LENGTH) }
+          : {}),
+        ...(question.options
+          ? {
+              options: question.options
+                .slice(0, MAX_COORDINATION_OPTIONS)
+                .map((option) => bounded(option, 1_000)),
+            }
+          : {}),
+      })),
+  };
+}
+
+function projectCoordinationReply(
+  block: Extract<ContentBlock, { type: "tool_call" }>,
+): Extract<
+  BrowserGatewayTranscriptBlock,
+  { type: "tool_call" }
+>["coordinationReply"] {
+  const reply = summarizeBackgroundCoordinationReply(block);
+  if (!reply?.requestId.trim()) return undefined;
+  const limit = (values: Record<string, string>) =>
+    Object.fromEntries(
+      Object.entries(values)
+        .slice(0, MAX_COORDINATION_REPLY_ENTRIES)
+        .map(([id, value]) => [
+          bounded(id, 256),
+          bounded(value, MAX_SUMMARY_LENGTH),
+        ]),
+    );
+  return {
+    requestId: bounded(reply.requestId, 256),
+    status: reply.status,
+    answers: limit(reply.answers),
+    notes: limit(reply.notes),
+  };
+}
+
 function projectBlock(
   block: ContentBlock,
   index: number,
@@ -1706,6 +1788,11 @@ function projectBlock(
         ...(context.toolProgress && block.progress && !block.complete
           ? { progress: boundedToolProgress(block.progress) }
           : {}),
+        ...(() => {
+          if (!context.agentContext) return {};
+          const coordinationReply = projectCoordinationReply(block);
+          return coordinationReply ? { coordinationReply } : {};
+        })(),
       };
     case "skill_load":
       return {
@@ -1756,6 +1843,17 @@ function projectBlock(
           : {}),
         ...(block.modelGroup
           ? { modelGroup: bounded(block.modelGroup, 256) }
+          : {}),
+        ...(context.agentContext && block.message
+          ? {
+              message: context.detail(
+                block.message,
+                `${messageId}:block:${index}:message`,
+              ),
+            }
+          : {}),
+        ...(context.agentContext && block.routingReason
+          ? { routingReason: bounded(block.routingReason, MAX_SUMMARY_LENGTH) }
           : {}),
       };
     case "bg_agent_result":
@@ -1887,6 +1985,8 @@ function detailsForMessages(
       } else if (block.type === "bg_agent_result") {
         if (block.result) visitText(block.result);
         if (block.partialOutput) visitText(block.partialOutput);
+      } else if (block.type === "bg_agent" && block.message) {
+        visitText(block.message);
       }
     }
   }

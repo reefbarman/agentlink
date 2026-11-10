@@ -10,6 +10,18 @@ export interface BrowserGatewayTranscriptBlockDetailSummary {
   documentCount?: number;
 }
 
+/**
+ * Display summary of a `respond_to_background_question` reply, so remote
+ * surfaces can pair it with its agent-communication card without loading the
+ * lazily fetched tool input. Answers are pre-rendered display strings.
+ */
+export interface BrowserGatewayCoordinationReplySummary {
+  requestId: string;
+  status: "responding" | "answered" | "failed";
+  answers: Record<string, string>;
+  notes: Record<string, string>;
+}
+
 export type BrowserGatewayTranscriptBlock =
   | {
       type: "thinking";
@@ -36,6 +48,8 @@ export type BrowserGatewayTranscriptBlock =
        */
       progress?: ToolCallProgress;
       detail?: BrowserGatewayTranscriptBlockDetailSummary;
+      /** Negotiated with `transcript-agent-context-v1`. */
+      coordinationReply?: BrowserGatewayCoordinationReplySummary;
     }
   | {
       type: "skill_load";
@@ -70,6 +84,10 @@ export type BrowserGatewayTranscriptBlock =
         | "unknown"
         | "external";
       modelGroup?: string;
+      /** Prompt sent to the agent. Negotiated with `transcript-agent-context-v1`. */
+      message?: BrowserGatewayTranscriptText;
+      /** Negotiated with `transcript-agent-context-v1`. */
+      routingReason?: string;
     }
   | {
       type: "bg_agent_result";

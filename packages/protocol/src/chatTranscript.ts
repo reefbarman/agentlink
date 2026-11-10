@@ -80,6 +80,11 @@ export type ContentBlock =
       mcpInteractions?: McpElicitationInteraction[];
       progress?: ToolCallProgress;
       remoteDetail?: RemoteTranscriptBlockDetail;
+      /**
+       * Relay summary of a background-coordination reply, used by remote
+       * surfaces whose tool input/result is loaded lazily.
+       */
+      remoteCoordinationReply?: RemoteCoordinationReply;
     }
   | {
       type: "skill_load";
@@ -175,6 +180,14 @@ export type ContentBlock =
       /** Populated when status === "consumed". */
       deviceLabel?: string;
     };
+
+/** Display-only reply summary relayed for an agent-to-agent exchange. */
+export interface RemoteCoordinationReply {
+  requestId: string;
+  status: "responding" | "answered" | "failed";
+  answers: Record<string, string>;
+  notes: Record<string, string>;
+}
 
 /** Display-only identity and request details for an agent-to-agent exchange. */
 export interface BackgroundCoordination {

@@ -18,6 +18,12 @@ it("pins the complete browser gateway transcript-message contract", () => {
     slashCommandLabel?: string;
     origin?: "vscode" | "browser";
     mcpResourceUpdate?: import("./chatTranscript.js").McpResourceUpdateProvenance;
+    coordination?: import("./chatTranscript.js").BackgroundCoordination;
+    handoff?: {
+      sourceSessionId: string;
+      sourceTitle: string;
+      handoffId: string;
+    };
     checkpointId?: string;
     displayMedia?: {
       contentRevision: number;

@@ -1,14 +1,10 @@
 import "./background-coordination.css";
 
 import type { BackgroundCoordination } from "@agentlink/protocol/chat-transcript";
-import type { BackgroundCoordinationReply } from "../../../shared/backgroundCoordination";
-
-function readableAnswer(value: unknown): string {
-  if (value === null) return "No answer";
-  if (Array.isArray(value)) return value.map(readableAnswer).join(", ");
-  if (typeof value === "object") return JSON.stringify(value, null, 2);
-  return String(value);
-}
+import {
+  readableCoordinationAnswer as readableAnswer,
+  type BackgroundCoordinationReply,
+} from "../../../shared/backgroundCoordination";
 
 export function BackgroundCoordinationCard({
   request,

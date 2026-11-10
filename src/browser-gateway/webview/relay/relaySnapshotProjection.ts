@@ -420,6 +420,18 @@ function projectMessage(message: BrowserGatewayTranscriptMessage): ChatMessage {
     ...(message.mcpResourceUpdate
       ? { mcpResourceUpdate: { ...message.mcpResourceUpdate } }
       : {}),
+    ...(message.coordination
+      ? {
+          coordination: {
+            ...message.coordination,
+            questions: message.coordination.questions.map((question) => ({
+              ...question,
+              ...(question.options ? { options: [...question.options] } : {}),
+            })),
+          },
+        }
+      : {}),
+    ...(message.handoff ? { handoff: { ...message.handoff } } : {}),
     ...(message.checkpointId ? { checkpointId: message.checkpointId } : {}),
     ...(message.displayMedia
       ? { displayMedia: projectDisplayMedia(message) }
@@ -536,6 +548,16 @@ function projectBlock(
             ? { startedAt: block.startedAt }
             : {}),
           ...(block.progress ? { progress: block.progress } : {}),
+          ...(block.coordinationReply
+            ? {
+                remoteCoordinationReply: {
+                  requestId: block.coordinationReply.requestId,
+                  status: block.coordinationReply.status,
+                  answers: { ...block.coordinationReply.answers },
+                  notes: { ...block.coordinationReply.notes },
+                },
+              }
+            : {}),
         },
       ];
     case "skill_load":
@@ -589,6 +611,10 @@ function projectBlock(
             ? { resolvedModelTierSource: block.resolvedModelTierSource }
             : {}),
           ...(block.modelGroup ? { modelGroup: block.modelGroup } : {}),
+          ...(block.message ? { message: transcriptText(block.message) } : {}),
+          ...(block.routingReason
+            ? { routingReason: block.routingReason }
+            : {}),
         },
       ];
     case "bg_agent_result":

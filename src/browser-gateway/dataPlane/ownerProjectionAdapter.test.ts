@@ -399,6 +399,94 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     adapter.dispose();
   });
 
+  it("relays agent communication, handoff, and background-agent context when negotiated", () => {
+    const source = readSet();
+    const coordination = {
+      requestId: "request-1",
+      backgroundSessionId: "background-1",
+      task: "Review auth",
+      kind: "question" as const,
+      context: "Needs a decision",
+      questions: [
+        {
+          id: "path",
+          question: "Which file?",
+          options: ["a.ts", "b.ts"],
+        },
+      ],
+    };
+    source.foreground = {
+      ...source.foreground!,
+      messages: [
+        {
+          ...message("handoff", "user", "Continue", 900),
+          handoff: {
+            sourceSessionId: "session-0",
+            sourceTitle: "Earlier work",
+            handoffId: "handoff-1",
+          },
+        },
+        {
+          ...message("coordination", "user", "Agent needs an answer", 910),
+          coordination,
+        },
+        message("reply", "assistant", "", 920, [
+          {
+            type: "tool_call",
+            id: "call-reply",
+            name: "respond_to_background_question",
+            inputJson: JSON.stringify({
+              request_id: "request-1",
+              answers: { path: ["a.ts", "b.ts"] },
+              notes: { path: "Prefer a.ts" },
+            }),
+            result: JSON.stringify({ accepted: true }),
+            complete: true,
+          },
+          {
+            type: "bg_agent",
+            sessionId: "background-1",
+            task: "Review auth",
+            message: "Review the auth module",
+            routingReason: "taskClass review_code",
+          },
+        ]),
+      ],
+    };
+    const sources = new ProjectionSources(source);
+
+    const legacy = makeAdapter(sources).getCheckpoint().transcript.messages;
+    expect(legacy[0]).not.toHaveProperty("handoff");
+    expect(legacy[1]).not.toHaveProperty("coordination");
+    expect(legacy[2].blocks[0]).not.toHaveProperty("coordinationReply");
+    expect(legacy[2].blocks[1]).not.toHaveProperty("message");
+    expect(legacy[2].blocks[1]).not.toHaveProperty("routingReason");
+
+    const messages = makeAdapter(sources, {
+      dataPlaneFeatures: ["transcript-agent-context-v1"],
+    }).getCheckpoint().transcript.messages;
+    expect(messages[0].handoff).toEqual({
+      sourceSessionId: "session-0",
+      sourceTitle: "Earlier work",
+      handoffId: "handoff-1",
+    });
+    expect(messages[1].coordination).toEqual(coordination);
+    expect(messages[2].blocks[0]).toMatchObject({
+      type: "tool_call",
+      coordinationReply: {
+        requestId: "request-1",
+        status: "answered",
+        answers: { path: "a.ts, b.ts" },
+        notes: { path: "Prefer a.ts" },
+      },
+    });
+    expect(messages[2].blocks[1]).toMatchObject({
+      type: "bg_agent",
+      message: { kind: "inline", text: "Review the auth module" },
+      routingReason: "taskClass review_code",
+    });
+  });
+
   it("omits resource fields for existing sources without resource watches", () => {
     const adapter = makeAdapter(new ProjectionSources(readSet()));
     const checkpoint = adapter.getCheckpoint();
