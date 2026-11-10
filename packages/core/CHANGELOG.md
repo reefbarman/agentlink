@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.52.1 — 2026-11-10
+
+- Background agent questions and approvals no longer become resume anchors or pending tasks after condense or resume, so answered questions are not replayed to the coordinator.
+
 ## 0.52.0 — 2026-11-10
 
 - Browser gateway relay now shows agent communication cards, handoff chips, and background agent prompts and routing reasons on remote surfaces, negotiated through a new additive transcript-agent-context-v1 feature.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.89.0
+
 - After a session is condensed or resumed, the reattached **Resume Anchor** and **Pending Tasks** no longer list background agents' questions or approval requests as your latest message or the task to continue. Before, an already-answered question was replayed as pending work, so the agent called `respond_to_background_question` again and got `background_question_not_found_or_already_answered`. Only your own messages are used now. This also applies to sessions saved before the fix. A question that is still waiting stays visible on its **Agent communication** card and in the background agent's status.
 
 ## 1.88.0

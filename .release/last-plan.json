@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "bf5e42809493d873035f85b2e76922e5cfe399f3",
-  "createdAt": "2026-11-10T04:03:36.003Z",
+  "sourceSha": "00b0cebce412b1509abec7f1d3ecc947ebeb9813",
+  "createdAt": "2026-11-10T04:32:08.078Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,247 +10,166 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.87.2",
-      "baselineRef": "v1.87.2",
-      "reserved": "1.87.2",
+      "published": "1.88.0",
+      "baselineRef": "v1.88.0",
+      "reserved": "1.88.0",
       "commits": [
-        "16b6f99277ecf71b4e8779ceba1e85b234987781",
-        "bf5e42809493d873035f85b2e76922e5cfe399f3"
+        "b72e7e8c6d0d13643dd6d542539511170ee896df",
+        "00b0cebce412b1509abec7f1d3ecc947ebeb9813"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.88.0",
+      "version": "1.89.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.88.0",
+      "tag": "v1.89.0",
       "notes": [
         {
-          "sha": "16b6f99277ecf71b4e8779ceba1e85b234987781",
-          "subject": "fix(browser-gateway): relay agent communication cards, handoff chips and background agent context",
-          "summary": "Browser gateway relay now shows agent communication cards, handoff chips, and background agent prompts and routing reasons on remote surfaces, negotiated through a new additive transcript-agent-context-v1 feature.",
+          "sha": "b72e7e8c6d0d13643dd6d542539511170ee896df",
+          "subject": "feat(tools): enable generate_image masks and advanced controls on Codex OAuth",
+          "summary": "generate_image on ChatGPT/Codex OAuth now supports masks, edit action, size, quality, background and output format/compression; only input_fidelity remains API-key only.",
           "breaking": false
         },
         {
-          "sha": "bf5e42809493d873035f85b2e76922e5cfe399f3",
-          "subject": "fix(tools): stop find_and_replace globs editing git-ignored files",
-          "summary": "find_and_replace globs now skip git-ignored files in VS Code (with an include_ignored opt-in and ignored_files_skipped reporting), and the CLI and Assistant glob walk refuses over-limit globs instead of editing a partial set.",
+          "sha": "00b0cebce412b1509abec7f1d3ecc947ebeb9813",
+          "subject": "fix(condense): keep background questions out of resume anchors",
+          "summary": "Background agent questions and approvals no longer become resume anchors or pending tasks after condense or resume, so answered questions are not replayed to the coordinator.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.87.1",
-      "baselineRef": "desktop-v0.87.1",
-      "reserved": "0.87.2",
+      "published": "0.88.0",
+      "baselineRef": "desktop-v0.88.0",
+      "reserved": "0.88.0",
       "commits": [
-        "e44be21b66e43fcb639faf3fc7dd08dd5b7a1263",
-        "16b6f99277ecf71b4e8779ceba1e85b234987781",
-        "bf5e42809493d873035f85b2e76922e5cfe399f3"
+        "b72e7e8c6d0d13643dd6d542539511170ee896df",
+        "00b0cebce412b1509abec7f1d3ecc947ebeb9813"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.88.0",
+      "version": "0.89.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.88.0",
+      "tag": "desktop-v0.89.0",
       "notes": [
         {
-          "sha": "e44be21b66e43fcb639faf3fc7dd08dd5b7a1263",
-          "subject": "fix(tools): give Git chains pre-launch guidance and let scoped research write",
-          "summary": "Compound Git write chains like add, commit and npm run preflight now get pre-launch native-retry guidance, .git write denials from scripts get Git recovery, and scoped background research from Code parents starts in Code mode.",
+          "sha": "b72e7e8c6d0d13643dd6d542539511170ee896df",
+          "subject": "feat(tools): enable generate_image masks and advanced controls on Codex OAuth",
+          "summary": "generate_image on ChatGPT/Codex OAuth now supports masks, edit action, size, quality, background and output format/compression; only input_fidelity remains API-key only.",
           "breaking": false
         },
         {
-          "sha": "16b6f99277ecf71b4e8779ceba1e85b234987781",
-          "subject": "fix(browser-gateway): relay agent communication cards, handoff chips and background agent context",
-          "summary": "Browser gateway relay now shows agent communication cards, handoff chips, and background agent prompts and routing reasons on remote surfaces, negotiated through a new additive transcript-agent-context-v1 feature.",
-          "breaking": false
-        },
-        {
-          "sha": "bf5e42809493d873035f85b2e76922e5cfe399f3",
-          "subject": "fix(tools): stop find_and_replace globs editing git-ignored files",
-          "summary": "find_and_replace globs now skip git-ignored files in VS Code (with an include_ignored opt-in and ignored_files_skipped reporting), and the CLI and Assistant glob walk refuses over-limit globs instead of editing a partial set.",
+          "sha": "00b0cebce412b1509abec7f1d3ecc947ebeb9813",
+          "subject": "fix(condense): keep background questions out of resume anchors",
+          "summary": "Background agent questions and approvals no longer become resume anchors or pending tasks after condense or resume, so answered questions are not replayed to the coordinator.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.61.0",
-      "baselineRef": "cli-v0.61.0",
-      "reserved": "0.61.0",
-      "commits": [
-        "16b6f99277ecf71b4e8779ceba1e85b234987781",
-        "bf5e42809493d873035f85b2e76922e5cfe399f3"
-      ],
+      "published": "0.62.0",
+      "baselineRef": "cli-v0.62.0",
+      "reserved": "0.62.0",
+      "commits": ["00b0cebce412b1509abec7f1d3ecc947ebeb9813"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.62.0",
-      "effectiveBump": "minor",
+      "version": "0.62.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.62.0",
+      "tag": "cli-v0.62.1",
       "notes": [
         {
-          "sha": "16b6f99277ecf71b4e8779ceba1e85b234987781",
-          "subject": "fix(browser-gateway): relay agent communication cards, handoff chips and background agent context",
-          "summary": "Browser gateway relay now shows agent communication cards, handoff chips, and background agent prompts and routing reasons on remote surfaces, negotiated through a new additive transcript-agent-context-v1 feature.",
-          "breaking": false
-        },
-        {
-          "sha": "bf5e42809493d873035f85b2e76922e5cfe399f3",
-          "subject": "fix(tools): stop find_and_replace globs editing git-ignored files",
-          "summary": "find_and_replace globs now skip git-ignored files in VS Code (with an include_ignored opt-in and ignored_files_skipped reporting), and the CLI and Assistant glob walk refuses over-limit globs instead of editing a partial set.",
+          "sha": "00b0cebce412b1509abec7f1d3ecc947ebeb9813",
+          "subject": "fix(condense): keep background questions out of resume anchors",
+          "summary": "Background agent questions and approvals no longer become resume anchors or pending tasks after condense or resume, so answered questions are not replayed to the coordinator.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.51.0",
-      "baselineRef": "sdk-v0.51.0",
-      "reserved": "0.51.0",
-      "commits": [
-        "16b6f99277ecf71b4e8779ceba1e85b234987781",
-        "bf5e42809493d873035f85b2e76922e5cfe399f3"
-      ],
+      "published": "0.52.0",
+      "baselineRef": "sdk-v0.52.0",
+      "reserved": "0.52.0",
+      "commits": ["00b0cebce412b1509abec7f1d3ecc947ebeb9813"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.52.0",
-      "effectiveBump": "minor",
+      "version": "0.52.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.52.0",
+      "tag": "sdk-v0.52.1",
       "notes": [
         {
-          "sha": "16b6f99277ecf71b4e8779ceba1e85b234987781",
-          "subject": "fix(browser-gateway): relay agent communication cards, handoff chips and background agent context",
-          "summary": "Browser gateway relay now shows agent communication cards, handoff chips, and background agent prompts and routing reasons on remote surfaces, negotiated through a new additive transcript-agent-context-v1 feature.",
-          "breaking": false
-        },
-        {
-          "sha": "bf5e42809493d873035f85b2e76922e5cfe399f3",
-          "subject": "fix(tools): stop find_and_replace globs editing git-ignored files",
-          "summary": "find_and_replace globs now skip git-ignored files in VS Code (with an include_ignored opt-in and ignored_files_skipped reporting), and the CLI and Assistant glob walk refuses over-limit globs instead of editing a partial set.",
+          "sha": "00b0cebce412b1509abec7f1d3ecc947ebeb9813",
+          "subject": "fix(condense): keep background questions out of resume anchors",
+          "summary": "Background agent questions and approvals no longer become resume anchors or pending tasks after condense or resume, so answered questions are not replayed to the coordinator.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.59.2",
-      "baselineRef": "assistant-v0.59.2",
-      "reserved": "0.59.2",
+      "published": "0.60.0",
+      "baselineRef": "assistant-v0.60.0",
+      "reserved": "0.60.0",
       "commits": [
-        "16b6f99277ecf71b4e8779ceba1e85b234987781",
-        "bf5e42809493d873035f85b2e76922e5cfe399f3"
+        "b72e7e8c6d0d13643dd6d542539511170ee896df",
+        "00b0cebce412b1509abec7f1d3ecc947ebeb9813"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.60.0",
+      "version": "0.61.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.60.0",
+      "tag": "assistant-v0.61.0",
       "notes": [
         {
-          "sha": "16b6f99277ecf71b4e8779ceba1e85b234987781",
-          "subject": "fix(browser-gateway): relay agent communication cards, handoff chips and background agent context",
-          "summary": "Browser gateway relay now shows agent communication cards, handoff chips, and background agent prompts and routing reasons on remote surfaces, negotiated through a new additive transcript-agent-context-v1 feature.",
+          "sha": "b72e7e8c6d0d13643dd6d542539511170ee896df",
+          "subject": "feat(tools): enable generate_image masks and advanced controls on Codex OAuth",
+          "summary": "generate_image on ChatGPT/Codex OAuth now supports masks, edit action, size, quality, background and output format/compression; only input_fidelity remains API-key only.",
           "breaking": false
         },
         {
-          "sha": "bf5e42809493d873035f85b2e76922e5cfe399f3",
-          "subject": "fix(tools): stop find_and_replace globs editing git-ignored files",
-          "summary": "find_and_replace globs now skip git-ignored files in VS Code (with an include_ignored opt-in and ignored_files_skipped reporting), and the CLI and Assistant glob walk refuses over-limit globs instead of editing a partial set.",
+          "sha": "00b0cebce412b1509abec7f1d3ecc947ebeb9813",
+          "subject": "fix(condense): keep background questions out of resume anchors",
+          "summary": "Background agent questions and approvals no longer become resume anchors or pending tasks after condense or resume, so answered questions are not replayed to the coordinator.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "e44be21b66e43fcb639faf3fc7dd08dd5b7a1263": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Compound Git write chains like add, commit and npm run preflight now get pre-launch native-retry guidance, .git write denials from scripts get Git recovery, and scoped background research from Code parents starts in Code mode.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "0b15aac0c787ec3dd7f67e0b07c0c2b69fc6bec9": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Chat shows original question details beside saved answers, the activity shelf can be resized by touch, browser shelf layout matches VS Code, and cancelled sessions now clear pending inline approvals.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "ad375c29c68021ac93c50bc39a4006e34a3ff5db": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Auto Continue now recovers when a turn ends without a final task status, prompting the agent to resume remaining work or call set_task_status, with the same turn limit and no-progress guard. Manual condense no longer triggers it.}]}</br>",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "db7a5d4ff89a22ef4f3595990bcbb4dc75f2c2f6": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Review-mode PR publication under Approve for Me now keeps scope across clear continuations and multi-PR requests, returns a prerequisite read when PR evidence is missing, and reports publication status diagnostics.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "409f1a9fee76b8887a1727c92cd410fc3e9889d7": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Desktop's VS Code view now lists chat tabs in the Desktop sidebar, grouped by VS Code window, replacing the horizontal tab strip once hosted; older gateway builds keep the strip.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "5937a52c858de81d9a87db704a906252bc2f45d7": {
+    "b72e7e8c6d0d13643dd6d542539511170ee896df": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "Browser remote views of VS Code stay in sync and show approval and question cards in the correct session tab, with a new Resync with VS Code header button and automatic recovery when updates cannot be applied.",
+      "summary": "generate_image on ChatGPT/Codex OAuth now supports masks, edit action, size, quality, background and output format/compression; only input_fidelity remains API-key only.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "71c1a15c9e675291c08c28ea5c577d90feeb5196": {
+    "00b0cebce412b1509abec7f1d3ecc947ebeb9813": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Auto-approved edits no longer raise VS Code's \"file is newer\" save conflict dialog. They wait for VS Code's copy to match disk, or write directly to disk and report commit_path direct_write_stale_editor. Edit-commit decisions are now logged.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "16b6f99277ecf71b4e8779ceba1e85b234987781": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Browser gateway relay now shows agent communication cards, handoff chips, and background agent prompts and routing reasons on remote surfaces, negotiated through a new additive transcript-agent-context-v1 feature.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "bf5e42809493d873035f85b2e76922e5cfe399f3": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "find_and_replace globs now skip git-ignored files in VS Code (with an include_ignored opt-in and ignored_files_skipped reporting), and the CLI and Assistant glob walk refuses over-limit globs instead of editing a partial set.",
+      "summary": "Background agent questions and approvals no longer become resume anchors or pending tasks after condense or resume, so answered questions are not replayed to the coordinator.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
