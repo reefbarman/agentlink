@@ -1121,7 +1121,7 @@ Accepted or rejected review results also include `authorization`: automatic writ
 
 ### generate_image
 
-Generate or edit images through OpenAI/Codex auth and show them inline. GPT-Image-2.5 Flare remains the fast default; use Sunburst when editing precision or final polish matters. Legacy generation and reference-led refinement work with ChatGPT/Codex OAuth quota or OpenAI API-key billing. The advanced controls below currently require an OpenAI API key and fail before approval/provider execution on OAuth until that backend is verified.
+Generate or edit images through OpenAI/Codex auth and show them inline. GPT-Image-2.5 Flare remains the fast default; use Sunburst when editing precision or final polish matters. Generation, reference-led refinement, and the advanced controls below work with ChatGPT/Codex OAuth quota or OpenAI API-key billing. The one exception is `input_fidelity`, which requires an OpenAI API key and fails before approval/provider execution on OAuth.
 
 | Parameter               | Type               | Description                                                                                                                                                                             |
 | ----------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1135,7 +1135,7 @@ Generate or edit images through OpenAI/Codex auth and show them inline. GPT-Imag
 | `output_format`         | enum?              | `png`, `jpeg`, or `webp`. Defaults to PNG unless inferred from `output_path`.                                                                                                           |
 | `output_compression`    | integer?           | 0–100 for JPEG/WebP only.                                                                                                                                                               |
 | `action`                | enum?              | `auto`, `generate`, or `edit`. `edit` requires exactly one explicit edit target; a supplied edit target or mask implies edit.                                                           |
-| `input_fidelity`        | enum?              | `low` or `high`; controls how strongly input-image style and features are preserved.                                                                                                    |
+| `input_fidelity`        | enum?              | `low` or `high`; controls how strongly input-image style and features are preserved. OpenAI API key only.                                                                               |
 | `edit_image_path`       | string?            | VS Code only: workspace-local edit target, mutually exclusive with `edit_image_id`. It is sent first and is not overwritten unless `output_path` separately selects it.                 |
 | `edit_image_id`         | string?            | Prior session image ID to edit, mutually exclusive with `edit_image_path`.                                                                                                              |
 | `mask_image_path`       | string?            | VS Code only: workspace-local PNG mask, mutually exclusive with `mask_image_id`.                                                                                                        |

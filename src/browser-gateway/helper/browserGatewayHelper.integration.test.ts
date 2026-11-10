@@ -8234,7 +8234,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
                 name: "call_native_tool",
                 input: {
                   name: "generate_image",
-                  input: { prompt: "Create an image", quality: "xhigh" },
+                  input: { prompt: "Create an image", input_fidelity: "high" },
                 },
               },
             ],
@@ -8247,7 +8247,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Cookie: harness.cookie },
-      body: JSON.stringify({ text: "Use Image 2.5 quality" }),
+      body: JSON.stringify({ text: "Use Image 2.5 input fidelity" }),
     });
     const body = (await send.json()) as {
       snapshot: { ui: { approval: unknown } };
@@ -8257,7 +8257,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(body.snapshot.ui.approval).toBeNull();
     expect(providerRequests).toEqual([]);
     expect(JSON.stringify(toolResults)).toContain(
-      "Codex OAuth support is not yet verified for image option: quality",
+      "ChatGPT/Codex OAuth does not support the image option input_fidelity",
     );
   });
 

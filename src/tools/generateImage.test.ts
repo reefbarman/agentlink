@@ -430,7 +430,7 @@ describe("handleGenerateImage", () => {
     }
   });
 
-  it("rejects unverified advanced OAuth controls before approval or generation", async () => {
+  it("rejects OAuth-unsupported input_fidelity before approval or generation", async () => {
     vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
       method: "oauth",
       bearerToken: "oauth-token",
@@ -442,7 +442,7 @@ describe("handleGenerateImage", () => {
     const onApprovalRequest = vi.fn<OnApprovalRequest>();
 
     const result = await handleGenerateImage(
-      { prompt: "Create an image", quality: "xhigh" },
+      { prompt: "Create an image", input_fidelity: "high" },
       { isBuiltInToolApproved: vi.fn().mockReturnValue(false) } as never,
       "session-1",
       onApprovalRequest,
@@ -452,7 +452,7 @@ describe("handleGenerateImage", () => {
 
     expect(result.isError).toBe(true);
     expect(JSON.parse(text).error).toContain(
-      "Codex OAuth support is not yet verified for image option: quality",
+      "ChatGPT/Codex OAuth does not support the image option input_fidelity",
     );
     expect(onApprovalRequest).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
@@ -516,6 +516,76 @@ describe("handleGenerateImage", () => {
     );
     expect(body.tools[0]).toMatchObject({
       action: "edit",
+      input_image_mask: {
+        image_url: `data:image/png;base64,${tinyRgbaPngBase64}`,
+      },
+    });
+  });
+
+  it("forwards masked edits and advanced controls on ChatGPT/Codex OAuth", async () => {
+    vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+      method: "oauth",
+      bearerToken: "oauth-token",
+      accountId: "account-1",
+      oauthAccountPoolId: "pool-1",
+      canRefresh: true,
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      sseResponse([
+        {
+          type: "response.image_generation_call.completed",
+          item_id: "ig_oauth_edit",
+          output_index: 0,
+          result: tinyPngBase64,
+          output_format: "png",
+        },
+      ]),
+    );
+    const sessionImages = [
+      {
+        id: "image_1",
+        name: "target.png",
+        mimeType: "image/png",
+        base64: tinyRgbaPngBase64,
+        messageIndex: 0,
+        imageIndex: 0,
+      },
+      {
+        id: "image_2",
+        name: "mask.png",
+        mimeType: "image/png",
+        base64: tinyRgbaPngBase64,
+        messageIndex: 1,
+        imageIndex: 0,
+      },
+    ];
+
+    const result = await handleGenerateImage(
+      {
+        prompt: "Change only the selected area",
+        edit_image_id: "image_1",
+        mask_image_id: "image_2",
+        quality: "low",
+        background: "opaque",
+      },
+      { isBuiltInToolApproved: vi.fn().mockReturnValue(false) } as never,
+      "session-1",
+      vi.fn<OnApprovalRequest>(async () => ({ decision: "accept" })),
+      () => sessionImages,
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(
+      "https://chatgpt.com/backend-api/codex/responses",
+    );
+    const body = JSON.parse(
+      String((fetchMock.mock.calls[0]![1] as RequestInit).body),
+    );
+    expect(body.tools[0]).toMatchObject({
+      action: "edit",
+      quality: "low",
+      background: "opaque",
       input_image_mask: {
         image_url: `data:image/png;base64,${tinyRgbaPngBase64}`,
       },

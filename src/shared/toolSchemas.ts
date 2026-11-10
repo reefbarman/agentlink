@@ -842,25 +842,23 @@ export const generateImageSchema = {
     .string()
     .optional()
     .describe(
-      "Structured output dimensions: auto or WIDTHxHEIGHT. Each edge must be a multiple of 16 and at most 3840 px, aspect ratio 1:3 to 3:1, and total pixels 655360 to 8294400. Public OpenAI API-key route only until Codex OAuth support is verified.",
+      "Structured output dimensions: auto or WIDTHxHEIGHT. Each edge must be a multiple of 16 and at most 3840 px, aspect ratio 1:3 to 3:1, and total pixels 655360 to 8294400.",
     ),
   quality: z
     .enum(["auto", "low", "medium", "high", "xhigh", "max"])
     .optional()
     .describe(
-      "Rendering quality. xhigh and max are Image 2.5 options. Higher settings cost more and take longer. Public OpenAI API-key route only until Codex OAuth support is verified.",
+      "Rendering quality. xhigh and max are Image 2.5 options. Higher settings cost more and take longer.",
     ),
   background: z
     .enum(["auto", "opaque", "transparent"])
     .optional()
-    .describe(
-      "Output background. Transparent output requires PNG or WebP. Public OpenAI API-key route only until Codex OAuth support is verified.",
-    ),
+    .describe("Output background. Transparent output requires PNG or WebP."),
   output_format: z
     .enum(["png", "jpeg", "webp"])
     .optional()
     .describe(
-      "Generated file format. Defaults to PNG, or is inferred from a .png/.jpg/.jpeg/.webp output_path. Public OpenAI API-key route only until Codex OAuth support is verified.",
+      "Generated file format. Defaults to PNG, or is inferred from a .png/.jpg/.jpeg/.webp output_path.",
     ),
   output_compression: z.coerce
     .number()
@@ -869,19 +867,19 @@ export const generateImageSchema = {
     .max(100)
     .optional()
     .describe(
-      "JPEG/WebP compression level from 0 to 100. Requires output_format jpeg or webp. Public OpenAI API-key route only until Codex OAuth support is verified.",
+      "JPEG/WebP compression level from 0 to 100. Requires output_format jpeg or webp.",
     ),
   action: z
     .enum(["auto", "generate", "edit"])
     .optional()
     .describe(
-      "Whether to generate, edit, or let the model choose. edit requires exactly one explicit edit_image_path or edit_image_id. Public OpenAI API-key route only until Codex OAuth support is verified.",
+      "Whether to generate, edit, or let the model choose. edit requires exactly one explicit edit_image_path or edit_image_id.",
     ),
   input_fidelity: z
     .enum(["low", "high"])
     .optional()
     .describe(
-      "How strongly to preserve style and features from input images. Public OpenAI API-key route only until Codex OAuth support is verified.",
+      "How strongly to preserve style and features from input images. Requires an OpenAI API key; ChatGPT/Codex OAuth rejects it.",
     ),
   edit_image_path: z
     .string()

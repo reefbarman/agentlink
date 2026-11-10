@@ -238,24 +238,20 @@ export function getCodexImageGenerationModel(
     : CODEX_DEFAULT_MODEL;
 }
 
+/**
+ * The ChatGPT/Codex OAuth backend honours size, quality, background, output
+ * format/compression, action and input_image_mask on the Responses
+ * image_generation tool (verified live 2026-11). It rejects input_fidelity
+ * with `invalid_input_fidelity_model`, so fail before approval instead.
+ */
 export function assertCodexImageGenerationOptionsSupported(
   auth: CodexImageGenerationAuth,
   options: CodexImageGenerationOptions,
 ): void {
   if (auth.method !== "oauth") return;
-  const unsupported = [
-    options.outputSize ? "output_size" : undefined,
-    options.quality ? "quality" : undefined,
-    options.background ? "background" : undefined,
-    options.outputFormat ? "output_format" : undefined,
-    options.outputCompression !== undefined ? "output_compression" : undefined,
-    options.action ? "action" : undefined,
-    options.inputFidelity ? "input_fidelity" : undefined,
-    options.maskImage ? "mask_image" : undefined,
-  ].filter((value): value is string => Boolean(value));
-  if (unsupported.length > 0) {
+  if (options.inputFidelity) {
     throw new Error(
-      `Codex OAuth support is not yet verified for image option${unsupported.length === 1 ? "" : "s"}: ${unsupported.join(", ")}. Use the existing defaults, or configure an OpenAI API key with model access.`,
+      "ChatGPT/Codex OAuth does not support the image option input_fidelity. Omit it, or configure an OpenAI API key with model access.",
     );
   }
 }

@@ -149,7 +149,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   generate_image: {
     label: "Generate or edit image",
     description:
-      "Generate or edit images with GPT-Image-2.5 Flare or Sunburst and show them inline. Flare remains the fast default; use Sunburst when editing precision or final polish matters. With an OpenAI API key, supports structured dimensions, quality through max, transparent backgrounds, PNG/JPEG/WebP output, compression, explicit edit targets, and masks. These advanced controls fail before generation on ChatGPT/Codex OAuth until that backend is verified; legacy OAuth generation and reference-led refinement remain supported. Every advanced call requires approval. VS Code can save output files and use workspace images; Browser Ask Agent is display-only and uses session image IDs.",
+      "Generate or edit images with GPT-Image-2.5 Flare or Sunburst and show them inline. Flare remains the fast default; use Sunburst when editing precision or final polish matters. Supports structured dimensions, quality through max, transparent backgrounds, PNG/JPEG/WebP output, compression, explicit edit targets, and PNG masks on both ChatGPT/Codex OAuth and OpenAI API keys. input_fidelity requires an OpenAI API key and fails before generation on OAuth. Every advanced call requires approval. VS Code can save output files and use workspace images; Browser Ask Agent is display-only and uses session image IDs.",
   },
   present_images: {
     label: "Present images",

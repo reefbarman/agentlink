@@ -5,6 +5,7 @@
 ## 1.88.0
 
 - `find_and_replace` globs no longer edit files ignored by `.gitignore`. Before, a glob such as `compiler/**/*.py` could change ignored build or snapshot copies while missing the tracked sources it was meant for. Ignored matches are now skipped and counted in `ignored_files_skipped`, a glob whose matches are all ignored returns `glob_matched_only_ignored_files`, and `include_ignored: true` restores the old behaviour. The 500-file limit now applies after ignored files are removed. In the standalone CLI and Assistant, a glob over the file limit is now refused instead of silently editing only the first 500 files.
+- `generate_image` now supports masked edits and the advanced image controls (`output_size`, `quality`, `background`, `output_format`, `output_compression`, `action`, edit targets and `mask_image_*`) when signed in with ChatGPT/Codex OAuth. Before, these failed before generation with "Codex OAuth support is not yet verified". They were checked against the live ChatGPT backend. `input_fidelity` still needs an OpenAI API key because the backend rejects it.
 
 ## 1.87.2
 
