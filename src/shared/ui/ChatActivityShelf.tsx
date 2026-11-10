@@ -72,6 +72,11 @@ interface ChatActivityShelfProps {
   revealKey?: string | number | null;
   /** Minimum usable shelf height while revealing urgent content. */
   revealMinHeight?: number;
+  /**
+   * Identity of the chat whose activity is shown. Changing it (for example
+   * switching tabs) drops temporary growth sized for the previous chat.
+   */
+  contextKey?: string | null;
 }
 
 /**
@@ -152,6 +157,7 @@ export function ChatActivityShelf({
   className,
   revealKey = null,
   revealMinHeight,
+  contextKey = null,
 }: ChatActivityShelfProps) {
   const shelfRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -233,6 +239,27 @@ export function ChatActivityShelf({
     observer.observe(content, { childList: true });
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content || typeof ResizeObserver === "undefined") return;
+    // Content can also get shorter without a card being removed (a shorter
+    // todo list, a collapsed panel), so release growth whenever it shrinks.
+    const observer = new ResizeObserver(() => {
+      const userHeight = maxHeightRef.current;
+      const grown = grownHeightRef.current;
+      const shelf = shelfRef.current;
+      if (userHeight === null || grown === null || !shelf) return;
+      const fit = findFitHeight(shelf, content);
+      if (fit < grown) setGrownHeight(fit > userHeight ? fit : null);
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    setGrownHeight(null);
+  }, [contextKey]);
 
   useEffect(() => {
     if (revealKey === null || revealKey === undefined || !revealMinHeight) {

@@ -311,6 +311,89 @@ describe("ChatActivityShelf", () => {
     await waitFor(() => expect(shelf.style.height).toBe("100px"));
   });
 
+  it("drops growth from another chat when the context changes", async () => {
+    window.localStorage.setItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY, "100");
+    const { rerender } = render(
+      <ChatActivityShelf contextKey="tab-1">
+        <div>Activity</div>
+      </ChatActivityShelf>,
+    );
+    const separator = screen.getByRole("separator");
+    const shelf = separator.parentElement as HTMLDivElement;
+    const content = separator.nextElementSibling as HTMLDivElement;
+    Object.defineProperty(shelf, "getBoundingClientRect", {
+      value: () => ({ bottom: 700, height: 100 }),
+    });
+    Object.defineProperty(content, "clientHeight", { value: 90 });
+    Object.defineProperty(content, "scrollHeight", { value: 250 });
+
+    rerender(
+      <ChatActivityShelf contextKey="tab-1">
+        <div>Activity</div>
+        <div>Approval</div>
+      </ChatActivityShelf>,
+    );
+    await waitFor(() => expect(shelf.style.height).toBe("260px"));
+
+    // Same top-level elements, different chat: no card removal to observe.
+    rerender(
+      <ChatActivityShelf contextKey="tab-2">
+        <div>Other activity</div>
+        <div>Other card</div>
+      </ChatActivityShelf>,
+    );
+    await waitFor(() => expect(shelf.style.height).toBe("100px"));
+  });
+
+  it("shrinks back when content gets shorter inside a card", async () => {
+    let notify: (() => void) | undefined;
+    const OriginalResizeObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(callback: () => void) {
+        notify = callback;
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      window.localStorage.setItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY, "100");
+      const { rerender } = render(
+        <ChatActivityShelf>
+          <div>Activity</div>
+        </ChatActivityShelf>,
+      );
+      const separator = screen.getByRole("separator");
+      const shelf = separator.parentElement as HTMLDivElement;
+      const content = separator.nextElementSibling as HTMLDivElement;
+      Object.defineProperty(shelf, "getBoundingClientRect", {
+        value: () => ({ bottom: 700, height: 100 }),
+      });
+      Object.defineProperty(content, "clientHeight", { value: 90 });
+      Object.defineProperty(content, "scrollHeight", {
+        configurable: true,
+        value: 250,
+      });
+      rerender(
+        <ChatActivityShelf>
+          <div>Activity</div>
+          <div>Todos</div>
+        </ChatActivityShelf>,
+      );
+      await waitFor(() => expect(shelf.style.height).toBe("260px"));
+
+      Object.defineProperty(content, "scrollHeight", { value: 150 });
+      act(() => notify?.());
+      expect(shelf.style.height).toBe("160px");
+
+      Object.defineProperty(content, "scrollHeight", { value: 40 });
+      act(() => notify?.());
+      expect(shelf.style.height).toBe("100px");
+    } finally {
+      globalThis.ResizeObserver = OriginalResizeObserver;
+    }
+  });
+
   it("keeps a grown size once the user resizes it", async () => {
     window.localStorage.setItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY, "100");
     const { rerender } = render(

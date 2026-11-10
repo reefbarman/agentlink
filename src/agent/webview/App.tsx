@@ -4060,6 +4060,7 @@ export function App({
               />
             </MarkdownImageProvider>
             <ChatActivityShelf
+              contextKey={selectedTabKey}
               notification={
                 state.mcpResourceWatches.some((watch) => watch.pending) ? (
                   <McpResourcePendingIndicator

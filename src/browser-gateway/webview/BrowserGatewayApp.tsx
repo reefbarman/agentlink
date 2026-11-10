@@ -11450,6 +11450,7 @@ export function BrowserGatewayApp({
                 )}
               </div>
               <ChatActivityShelf
+                contextKey={`${snapshotOriginRef.current.tabId}:${mcpWatchSessionId}`}
                 notification={
                   !isAskAgentSelected &&
                   !mobileReviewOpen &&
