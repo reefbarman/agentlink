@@ -11,7 +11,7 @@ import { getAgentToolCompletionStrategy } from "./agentToolCompletionStrategies.
 
 export interface TrackerContext {
   toolCallId: string;
-  setTerminalId: (terminalId: string) => void;
+  setTerminalId: (terminalId: string, details?: { commandId?: string }) => void;
 }
 
 export interface TrackedCall {
@@ -25,6 +25,7 @@ export interface TrackedCall {
   forceResolve: (result: ToolResult) => void;
   parentCallId?: string;
   terminalId?: string;
+  commandId?: string;
   backgroundRequested?: boolean;
   revealTerminalRequested?: boolean;
 }
@@ -134,10 +135,27 @@ export class AgentToolCallTracker extends EventEmitter {
     }, COMPLETED_TTL_MS);
   }
 
-  setTerminalId(toolCallId: string, terminalId: string): void {
+  /** Terminal and command currently backing a running terminal tool call. */
+  getActiveCallTerminal(
+    toolCallId: string,
+  ): { terminalId: string; commandId?: string } | undefined {
+    const call = this.activeCalls.get(toolCallId);
+    if (!call?.terminalId) return undefined;
+    return {
+      terminalId: call.terminalId,
+      ...(call.commandId ? { commandId: call.commandId } : {}),
+    };
+  }
+
+  setTerminalId(
+    toolCallId: string,
+    terminalId: string,
+    details?: { commandId?: string },
+  ): void {
     const call = this.activeCalls.get(toolCallId);
     if (call) {
       call.terminalId = terminalId;
+      call.commandId = details?.commandId;
       this.log(
         `TERMINAL_ASSIGNED ${call.toolName} (${toolCallId.slice(0, 8)}), terminalId=${terminalId}`,
       );
@@ -224,7 +242,8 @@ export class AgentToolCallTracker extends EventEmitter {
     this.emit("change");
     return {
       toolCallId,
-      setTerminalId: (terminalId) => this.setTerminalId(toolCallId, terminalId),
+      setTerminalId: (terminalId, details) =>
+        this.setTerminalId(toolCallId, terminalId, details),
     };
   }
 

@@ -501,14 +501,17 @@ class ScopedTabTerminalProvider implements TerminalProvider {
       ? physicalName(this.owner, logicalName)
       : `${physicalName(this.owner, logicalName)} · Pool`;
     this.registry.reservePhysicalName(this.owner, resolvedPhysicalName);
-    const assign = (assignedId: string) => {
+    const assign: NonNullable<typeof options.onTerminalAssigned> = (
+      ...args
+    ) => {
+      const [assignedId] = args;
       this.registry.register(
         assignedId,
         this.owner,
         logicalName,
         resolvedPhysicalName,
       );
-      options.onTerminalAssigned?.(assignedId);
+      options.onTerminalAssigned?.(...args);
     };
 
     return {

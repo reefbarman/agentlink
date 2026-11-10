@@ -462,6 +462,31 @@ describe("ApprovalPanelProvider coordinator preflight", () => {
     provider.dispose();
   });
 
+  it("lists a session's open approvals by stage for status views", async () => {
+    const { provider } = createProvider();
+    provider.onBeforeApproval = () => new Promise(() => {});
+    provider.onForwardApproval = vi.fn();
+
+    const approval = provider.enqueuePathApproval(
+      "/usr/share/man/man2/setrlimit.2",
+      "background-1",
+    );
+    provider.enqueuePathApproval("/other/file.txt", "background-2");
+    await Promise.resolve();
+
+    expect(provider.getPendingApprovalsForSession("background-1")).toEqual([
+      {
+        id: approval.id,
+        kind: "path",
+        stage: "coordinator_review",
+        target: "/usr/share/man/man2/setrlimit.2",
+      },
+    ]);
+    provider.cancelApproval(approval.id);
+    expect(provider.getPendingApprovalsForSession("background-1")).toEqual([]);
+    provider.dispose();
+  });
+
   it("disposes an unresolved coordinator preflight without later showing human attention", async () => {
     const { provider, statusBarManager } = createProvider();
     let finishPreflight!: (result: { action: "escalate" }) => void;

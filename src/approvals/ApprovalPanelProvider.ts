@@ -310,6 +310,53 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     );
   }
 
+  /**
+   * Approvals currently open for one session, for status views. Read-only:
+   * callers must bound and redact `target` before showing it.
+   */
+  getPendingApprovalsForSession(sessionId: string): Array<{
+    id: string;
+    kind: InternalRequest["kind"];
+    stage: "coordinator_review" | "awaiting_user";
+    target?: string;
+  }> {
+    const describe = (
+      request: InternalRequest,
+      stage: "coordinator_review" | "awaiting_user",
+    ) => ({
+      id: request.id,
+      kind: request.kind,
+      stage,
+      target:
+        request.fullCommand ??
+        request.command ??
+        request.filePath ??
+        request.targetPath ??
+        request.memoryTargetPath,
+    });
+    const pending: ReturnType<typeof describe>[] = [];
+    const seen = new Set<string>();
+    const add = (
+      request: InternalRequest | undefined,
+      stage: "coordinator_review" | "awaiting_user",
+    ) => {
+      if (!request || request.sessionId !== sessionId || seen.has(request.id)) {
+        return;
+      }
+      seen.add(request.id);
+      pending.push(describe(request, stage));
+    };
+    for (const entry of this.preflightEntries.values()) {
+      add(entry.request, "coordinator_review");
+    }
+    add(this.currentEntry?.request, "awaiting_user");
+    for (const entry of this.forwardedEntries.values()) {
+      add(entry.request, "awaiting_user");
+    }
+    for (const entry of this.queue) add(entry.request, "awaiting_user");
+    return pending;
+  }
+
   enqueueCommandApproval(
     command: string,
     fullCommand: string,

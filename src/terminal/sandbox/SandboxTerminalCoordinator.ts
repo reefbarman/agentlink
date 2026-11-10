@@ -489,7 +489,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       finalizer?.();
       throw error;
     }
-    options.onTerminalAssigned?.(before.channelId);
+    options.onTerminalAssigned?.(before.channelId, { commandId });
     const completion = process.completion.then(
       (exit) => {
         this.finishActive(channel, commandId);

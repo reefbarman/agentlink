@@ -50,6 +50,27 @@ function createTracker(): AgentToolCallTracker {
   return new AgentToolCallTracker(undefined, () => terminalProvider);
 }
 
+describe("AgentToolCallTracker active call terminal", () => {
+  it("exposes the terminal and command of a running call until it completes", () => {
+    const tracker = createTracker();
+    const context = tracker.registerAgentCall(
+      "call-term",
+      "execute_command",
+      "npm test",
+      "session-1",
+      vi.fn(),
+    );
+    expect(tracker.getActiveCallTerminal("call-term")).toBeUndefined();
+    context.setTerminalId("term_9", { commandId: "cmd_9" });
+    expect(tracker.getActiveCallTerminal("call-term")).toEqual({
+      terminalId: "term_9",
+      commandId: "cmd_9",
+    });
+    tracker.completeAgentCall("call-term");
+    expect(tracker.getActiveCallTerminal("call-term")).toBeUndefined();
+  });
+});
+
 describe("AgentToolCallTracker continueInBackground", () => {
   beforeEach(() => {
     vi.useRealTimers();

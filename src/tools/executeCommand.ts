@@ -2986,7 +2986,7 @@ async function executeCommandWithAudit(
             sha256: file.sha256,
           })),
           onTerminalAssigned: trackerCtx
-            ? (tid) => trackerCtx.setTerminalId(tid)
+            ? (...args) => trackerCtx.setTerminalId(...args)
             : undefined,
           onCommandFinalizationDeferred: inlineRun
             ? () => {

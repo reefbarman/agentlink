@@ -192,6 +192,37 @@ describe("background agent tool contract", () => {
     ]);
   });
 
+  it("carries live progress into a still-running wait result", () => {
+    const payload = buildBackgroundStillRunningPayload("child", {
+      phase: "awaiting_approval",
+      displayStatus: "Awaiting approval",
+      currentTool: "read_file",
+      currentToolInput: "path=/usr/share/man/man2/setrlimit.2",
+      pendingApprovals: [{ kind: "path", stage: "awaiting_user" }],
+      streamingPreview: "Fixed two findings; checking the third.",
+    });
+    expect(payload).toMatchObject({
+      status: "still_running",
+      currentToolInput: "path=/usr/share/man/man2/setrlimit.2",
+      pendingApprovals: [{ kind: "path", stage: "awaiting_user" }],
+      streamingPreview: "Fixed two findings; checking the third.",
+    });
+  });
+
+  it("lets a coordinator take over a technical blocker but not a refusal", () => {
+    const technical = buildBackgroundFailurePayload({
+      status: "interrupted",
+      terminalReason: "technical_blocker",
+      retrySafe: true,
+      agentRetryable: false,
+    });
+    expect(technical.recovery).toContain("no permission denial");
+    expect(technical.recovery).toContain("continue the work yourself");
+    expect(technical.recovery).not.toContain(
+      "No agent-side recovery is available",
+    );
+  });
+
   it("explains recovery when the runtime will not retry a failure", () => {
     const blocked = buildBackgroundFailurePayload({
       status: "interrupted",

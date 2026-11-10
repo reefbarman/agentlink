@@ -111,6 +111,7 @@ import {
   createReadOnlyCommandReviewer,
   type ReadOnlyCommandReviewer,
 } from "../approvals/readOnlyCommandReview.js";
+import { redactSensitiveText } from "../approvals/typeSafeGuardianShadow.js";
 
 import { AgentSession } from "./AgentSession.js";
 import type { WorkspaceFolderInfo } from "./systemPrompt.js";
@@ -376,6 +377,34 @@ const BACKGROUND_TOOL_INPUT_FIELDS = [
   "name",
 ] as const;
 const BACKGROUND_TOOL_INPUT_MAX_FIELD_CHARS = 160;
+/** Commands get more room than paths but are always secret-redacted. */
+const BACKGROUND_TOOL_COMMAND_MAX_CHARS = 240;
+const BACKGROUND_TOOL_COMMAND_TOOLS = new Set(["execute_command"]);
+const MAX_BACKGROUND_PENDING_APPROVALS = 5;
+
+/** Collapse to one line and cap, marking truncation with an ellipsis. */
+function boundStatusText(text: string, maxChars: number): string {
+  const singleLine = text.replace(/\s+/g, " ").trim();
+  return singleLine.length > maxChars
+    ? `${singleLine.slice(0, maxChars - 1)}…`
+    : singleLine;
+}
+
+/** A command for status display: secrets redacted, one bounded line. */
+function redactStatusCommand(command: string): string {
+  return boundStatusText(
+    redactSensitiveText(command).text,
+    BACKGROUND_TOOL_COMMAND_MAX_CHARS,
+  );
+}
+
+/**
+ * Tool results that record a user rejection or a permission/policy denial.
+ * Matched against result text, so it covers every tool's JSON envelope.
+ */
+const AUTHORIZATION_STOP_RESULT_PATTERN =
+  /rejected_by_user|permission_denied|"status"\s*:\s*"(?:rejected|denied|forbidden)"/;
+const ASK_USER_TOOL_NAME = "ask_user";
 /**
  * Terminal results get a larger budget than streaming partials: they are
  * written once per session, and tail-truncating a finished review at 40 KB
@@ -1054,10 +1083,19 @@ export class AgentSessionManager {
       phaseStartedAt?: number;
       requestStartedAt?: number;
       retryAt?: number;
-      /** Bounded identifying-input summary of the running top-level tool. */
-      currentToolInput?: string;
-      currentToolStartedAt?: number;
-      currentToolCallId?: string;
+      /**
+       * Top-level tool calls still running, in start order. Read-only tools
+       * run in parallel, so one finishing must not hide the others.
+       */
+      runningTools?: Map<
+        string,
+        { name: string; input?: string; startedAt: number }
+      >;
+      /** Inline approval and human-question waits opened by this agent. */
+      pendingInteractions?: Map<
+        string,
+        { kind: string; target?: string; requestedAt: number }
+      >;
       /** When the oldest still-queued accepted steering message arrived. */
       steeringQueuedAt?: number;
     }
@@ -4476,8 +4514,13 @@ export class AgentSessionManager {
       this.emitAcpToolStart(session, toolCall);
       this.emitAcpToolResult(session, args.output, toolCall);
       if (toolCall.status === "completed" || toolCall.status === "failed") {
-        session.currentTool = undefined;
-        this.noteBackgroundProgress(session.id, "waiting_for_provider");
+        // Another parallel ACP call may still be running.
+        const activeTool = this.latestActiveAcpTool(args.output);
+        session.currentTool = activeTool?.title;
+        this.noteBackgroundProgress(
+          session.id,
+          activeTool ? "executing_tool" : "waiting_for_provider",
+        );
       }
       this.enforceBackgroundBudget(session);
       return;
@@ -4510,19 +4553,7 @@ export class AgentSessionManager {
         terminal ? "waiting_for_provider" : "executing_tool",
       );
       if (terminal) {
-        const toolCalls = Array.from(args.output.toolCalls.values());
-        let activeTool: AcpToolCallState | undefined;
-        for (let index = toolCalls.length - 1; index >= 0; index--) {
-          const candidate = toolCalls[index];
-          if (
-            candidate.status !== "completed" &&
-            candidate.status !== "failed"
-          ) {
-            activeTool = candidate;
-            break;
-          }
-        }
-        session.currentTool = activeTool?.title;
+        session.currentTool = this.latestActiveAcpTool(args.output)?.title;
       } else {
         session.currentTool = toolCall.title;
         this.bgStatusDetail.set(session.id, toolCall.title);
@@ -4541,6 +4572,20 @@ export class AgentSessionManager {
       session.lastInputTokens = update.used;
       this.enforceBackgroundBudget(session);
     }
+  }
+
+  /** The most recently started ACP tool call that has not finished. */
+  private latestActiveAcpTool(
+    output: AcpOutputState,
+  ): AcpToolCallState | undefined {
+    const toolCalls = Array.from(output.toolCalls.values());
+    for (let index = toolCalls.length - 1; index >= 0; index--) {
+      const candidate = toolCalls[index];
+      if (candidate.status !== "completed" && candidate.status !== "failed") {
+        return candidate;
+      }
+    }
+    return undefined;
   }
 
   private async persistPendingToolTurn(
@@ -11035,9 +11080,20 @@ export class AgentSessionManager {
           request.title || "Approval required",
         );
       }
-      return baseCtx.onApprovalRequest!(
-        { ...request, backgroundTask: task },
-        ownerSessionId,
+      return this.trackBackgroundInteraction(
+        session.id,
+        {
+          kind: request.kind,
+          target:
+            request.kind === "command"
+              ? request.detail
+              : (request.targetPath ?? request.title),
+        },
+        () =>
+          baseCtx.onApprovalRequest!(
+            { ...request, backgroundTask: task },
+            ownerSessionId,
+          ),
       );
     };
     const onQuestion: NonNullable<ToolDispatchContext["onQuestion"]> = (
@@ -11056,13 +11112,18 @@ export class AgentSessionManager {
           "question",
           questions[0]?.question || "Answer required",
         );
-        return baseCtx.onQuestion!(
-          context,
-          questions,
-          backgroundSessionId,
-          task,
-          pendingQuestionRecovery,
-          toolCallId,
+        return this.trackBackgroundInteraction(
+          session.id,
+          { kind: "question", target: questions[0]?.question },
+          () =>
+            baseCtx.onQuestion!(
+              context,
+              questions,
+              backgroundSessionId,
+              task,
+              pendingQuestionRecovery,
+              toolCallId,
+            ),
         );
       }
 
@@ -11092,6 +11153,97 @@ export class AgentSessionManager {
         : undefined,
       onQuestion: baseCtx.onQuestion ? onQuestion : undefined,
     };
+  }
+
+  /**
+   * Record an inline approval or human question for status views while it is
+   * open. Purely observational: the decision path is unchanged.
+   */
+  private async trackBackgroundInteraction<T>(
+    sessionId: string,
+    interaction: { kind: string; target?: string },
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const meta = this.bgMeta.get(sessionId);
+    if (!meta) return run();
+    const id = crypto.randomUUID();
+    meta.pendingInteractions ??= new Map();
+    meta.pendingInteractions.set(id, {
+      ...interaction,
+      requestedAt: Date.now(),
+    });
+    try {
+      return await run();
+    } finally {
+      meta.pendingInteractions.delete(id);
+      if (meta.phase === "awaiting_approval") {
+        this.noteBackgroundProgress(sessionId, "executing_tool");
+      }
+    }
+  }
+
+  /**
+   * Approvals and human answers blocking a background agent: inline cards it
+   * opened plus any approval-panel requests attributed to its session.
+   */
+  private getBackgroundPendingApprovals(
+    sessionId: string,
+  ): NonNullable<BgStatusResult["pendingApprovals"]> {
+    const pending: NonNullable<BgStatusResult["pendingApprovals"]> = [];
+    // Targets can carry model-written text (questions) or commands, so every
+    // kind is secret-redacted before it is bounded for display.
+    const formatTarget = (kind: string, target: string | undefined) => {
+      if (!target?.trim()) return undefined;
+      return kind === "command" || kind === "network"
+        ? redactStatusCommand(target)
+        : boundStatusText(
+            redactSensitiveText(target).text,
+            BACKGROUND_TOOL_INPUT_MAX_FIELD_CHARS,
+          );
+    };
+    for (const interaction of this.bgMeta
+      .get(sessionId)
+      ?.pendingInteractions?.values() ?? []) {
+      const target = formatTarget(interaction.kind, interaction.target);
+      pending.push({
+        kind: interaction.kind,
+        stage: "awaiting_user",
+        ...(target ? { target } : {}),
+        requestedAt: interaction.requestedAt,
+      });
+    }
+    const panel = this.toolCtx?.approvalPanel as
+      | Partial<
+          Pick<
+            import("../approvals/ApprovalPanelProvider.js").ApprovalPanelProvider,
+            "getPendingApprovalsForSession"
+          >
+        >
+      | undefined;
+    if (typeof panel?.getPendingApprovalsForSession === "function") {
+      for (const approval of panel.getPendingApprovalsForSession(sessionId)) {
+        const target = formatTarget(approval.kind, approval.target);
+        pending.push({
+          kind: approval.kind,
+          stage: approval.stage,
+          ...(target ? { target } : {}),
+        });
+      }
+    }
+    return pending.slice(0, MAX_BACKGROUND_PENDING_APPROVALS);
+  }
+
+  /** The longest-running top-level tool, which is the likeliest to be stuck. */
+  private getOldestRunningBackgroundTool(
+    sessionId: string,
+  ):
+    | { toolCallId: string; name: string; input?: string; startedAt: number }
+    | undefined {
+    const first = this.bgMeta
+      .get(sessionId)
+      ?.runningTools?.entries()
+      .next().value;
+    return first ? { toolCallId: first[0], ...first[1] } : undefined;
   }
 
   private getInlineApprovalOneShotDecision(
@@ -12509,14 +12661,18 @@ export class AgentSessionManager {
             this.bgStatusDetail.delete(session.id);
           }
           if (event.type === "tool_result") {
-            const detail = this.extractToolStatusDetail(
-              event.toolName,
-              event.input,
+            // Parallel calls may still be running after this one finishes;
+            // keep describing those rather than the finished call.
+            const stillRunning = this.getOldestRunningBackgroundTool(
+              session.id,
             );
+            const detail = stillRunning
+              ? ""
+              : this.extractToolStatusDetail(event.toolName, event.input);
             if (detail) {
               this.bgStatusDetail.set(session.id, detail);
             }
-            session.currentTool = undefined;
+            session.currentTool = stillRunning?.name;
           }
           if (event.type === "error") {
             terminalEngineError = event;
@@ -12566,6 +12722,7 @@ export class AgentSessionManager {
         }
       } catch (err: unknown) {
         const error = err instanceof Error ? err.message : String(err);
+
         session.status = "error";
         this.setBgError(session.id, error, false);
         this.recordAndEmitEvent(session.id, {
@@ -12808,14 +12965,24 @@ export class AgentSessionManager {
 
   /**
    * Bounded single-line summary of a tool call's identifying inputs for the
-   * coordinator's status view. Allowlisted fields only: file contents, shell
-   * commands, and environment values are never included.
+   * coordinator's status view. Allowlisted fields only: file contents and
+   * environment values are never included. A terminal tool's command is
+   * included with likely secrets redacted.
    */
-  private summarizeBackgroundToolInput(input: unknown): string | undefined {
+  private summarizeBackgroundToolInput(
+    toolName: string,
+    input: unknown,
+  ): string | undefined {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       return undefined;
     }
     const record = input as Record<string, unknown>;
+    const command =
+      BACKGROUND_TOOL_COMMAND_TOOLS.has(toolName) &&
+      typeof record.command === "string" &&
+      record.command.trim()
+        ? [`command=${redactStatusCommand(record.command)}`]
+        : [];
     const fields = BACKGROUND_TOOL_INPUT_FIELDS.flatMap((field) => {
       const value = record[field];
       if (value === undefined || value === null) return [];
@@ -12832,15 +12999,12 @@ export class AgentSessionManager {
           : singleLine;
       return [`${field}=${bounded}`];
     });
-    return fields.length ? fields.join(" ") : undefined;
+    const all = [...command, ...fields];
+    return all.length ? all.join(" ") : undefined;
   }
 
   private clearBackgroundToolTracking(sessionId: string): void {
-    const meta = this.bgMeta.get(sessionId);
-    if (!meta) return;
-    meta.currentToolCallId = undefined;
-    meta.currentToolInput = undefined;
-    meta.currentToolStartedAt = undefined;
+    this.bgMeta.get(sessionId)?.runningTools?.clear();
   }
 
   private noteBackgroundAgentEvent(sessionId: string, event: AgentEvent): void {
@@ -12851,25 +13015,22 @@ export class AgentSessionManager {
         // one the coordinator sees as `currentTool`.
         const meta = this.bgMeta.get(sessionId);
         if (meta && !event.parentCallId) {
-          meta.currentToolCallId = event.toolCallId;
-          meta.currentToolInput = this.summarizeBackgroundToolInput(
-            event.input,
-          );
-          meta.currentToolStartedAt = Date.now();
+          meta.runningTools ??= new Map();
+          meta.runningTools.set(event.toolCallId, {
+            name: event.toolName,
+            input: this.summarizeBackgroundToolInput(
+              event.toolName,
+              event.input,
+            ),
+            startedAt: Date.now(),
+          });
         }
         phase = "executing_tool";
         break;
       }
       case "tool_result": {
-        const meta = this.bgMeta.get(sessionId);
-        if (
-          meta &&
-          !event.parentCallId &&
-          meta.currentToolCallId === event.toolCallId
-        ) {
-          meta.currentToolCallId = undefined;
-          meta.currentToolInput = undefined;
-          meta.currentToolStartedAt = undefined;
+        if (!event.parentCallId) {
+          this.bgMeta.get(sessionId)?.runningTools?.delete(event.toolCallId);
         }
         break;
       }
@@ -12980,7 +13141,9 @@ export class AgentSessionManager {
               : status === "tool_executing"
                 ? meta?.phase === "awaiting_coordinator"
                   ? "awaiting_coordinator"
-                  : "executing_tool"
+                  : this.getBackgroundPendingApprovals(session.id).length
+                    ? "awaiting_approval"
+                    : "executing_tool"
                 : (meta?.phase ?? "waiting_for_provider");
 
     return {
@@ -13025,9 +13188,25 @@ export class AgentSessionManager {
     }
     const { status, done } = this.getProjectedBgStatus(session);
     const streamingText = this.bgStreamingText.get(sessionId);
+    const runningTool = done
+      ? undefined
+      : this.getOldestRunningBackgroundTool(sessionId);
+    const currentTool = runningTool?.name ?? session.currentTool;
+    const pendingApprovals = done
+      ? []
+      : this.getBackgroundPendingApprovals(sessionId);
+    const runningTerminal = runningTool
+      ? this.toolCtx?.toolCallTracker?.getActiveCallTerminal?.(
+          runningTool.toolCallId,
+        )
+      : undefined;
+    const runningToolCount =
+      this.bgMeta.get(sessionId)?.runningTools?.size ?? 0;
     const heuristicStatus = inferBackgroundDisplayStatus({
       status: status as BgSessionInfo["status"],
-      currentTool: session.currentTool,
+      currentTool,
+      currentToolInput: runningTool?.input,
+      awaitingApproval: pendingApprovals.length > 0,
       streamingText,
       resultText: done
         ? (session.getLastAssistantText() ??
@@ -13047,18 +13226,21 @@ export class AgentSessionManager {
         session.getLastAssistantText())
       : undefined;
 
-    const runningToolStartedAt = done ? undefined : meta?.currentToolStartedAt;
+    const runningToolStartedAt = runningTool?.startedAt;
     const pendingSteering = !done && session.hasPendingInterjections === true;
     return {
       status,
-      currentTool: session.currentTool,
-      currentToolInput:
-        runningToolStartedAt !== undefined ? meta?.currentToolInput : undefined,
+      currentTool,
+      currentToolInput: runningTool?.input,
       currentToolStartedAt: runningToolStartedAt,
       currentToolElapsedMs:
         runningToolStartedAt !== undefined
           ? Math.max(0, Date.now() - runningToolStartedAt)
           : undefined,
+      currentToolTerminalId: runningTerminal?.terminalId,
+      currentToolCommandId: runningTerminal?.commandId,
+      runningToolCount: runningToolCount > 1 ? runningToolCount : undefined,
+      pendingApprovals: pendingApprovals.length ? pendingApprovals : undefined,
       pendingSteering: done ? undefined : pendingSteering,
       steeringQueuedAt: pendingSteering ? meta?.steeringQueuedAt : undefined,
       done,
@@ -14568,7 +14750,9 @@ ${instruction}`
 
     const markerTerminalReason =
       marker?.status === "blocked"
-        ? "blocked"
+        ? this.hasAuthorizationStopEvidence(session)
+          ? "blocked"
+          : "technical_blocker"
         : marker?.status === "waiting_for_user"
           ? "waiting_for_user"
           : marker?.status === "cancelled"
@@ -14624,6 +14808,52 @@ ${instruction}`
       retrySafe,
       agentRetryable,
     };
+  }
+
+  /**
+   * Whether this run may have hit an authorization stop: a denied
+   * policy-audit entry, a tool result recording a user rejection or
+   * permission/policy denial, or any `ask_user` exchange (a "No" answer is
+   * a refusal the result text does not mark). A worker that reports
+   * `blocked` without any of these has a technical blocker, which a
+   * coordinator may take over without new authority.
+   */
+  private hasAuthorizationStopEvidence(session: AgentSession): boolean {
+    if (
+      session.fleetMetadata?.policyAudit?.some(
+        (entry) => entry.decision === "denied",
+      )
+    ) {
+      return true;
+    }
+    const messages =
+      typeof session.getMessages === "function" ? session.getMessages() : [];
+    return messages.some(
+      (message) =>
+        Array.isArray(message.content) &&
+        message.content.some((block) => {
+          if (
+            message.role === "assistant" &&
+            block.type === "tool_use" &&
+            block.name === ASK_USER_TOOL_NAME
+          ) {
+            return true;
+          }
+          if (message.role !== "user") return false;
+          if (block.type !== "tool_result") return false;
+          const text =
+            typeof block.content === "string"
+              ? block.content
+              : Array.isArray(block.content)
+                ? block.content
+                    .map((part) =>
+                      part.type === "text" ? (part.text ?? "") : "",
+                    )
+                    .join("\n")
+                : "";
+          return AUTHORIZATION_STOP_RESULT_PATTERN.test(text);
+        }),
+    );
   }
 
   private enforceBackgroundBudget(session: AgentSession): boolean {

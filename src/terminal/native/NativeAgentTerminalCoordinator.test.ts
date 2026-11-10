@@ -319,7 +319,9 @@ describe("NativeAgentTerminalCoordinator", () => {
       onShellCommandEnd: expect.any(Function),
     });
     expect(test.starts[0]).toHaveBeenCalledOnce();
-    expect(assigned).toHaveBeenCalledWith("native-agent-1");
+    expect(assigned).toHaveBeenCalledWith("native-agent-1", {
+      commandId: expect.any(String),
+    });
 
     await finish(test.processes[0], "native\r\n", 0);
     await expect(completion).resolves.toMatchObject({

@@ -310,7 +310,14 @@ export interface TerminalExecuteOptions {
     request: ManagedNetworkRequest,
     signal: AbortSignal,
   ) => Promise<ManagedNetworkDecision>;
-  onTerminalAssigned?: (terminalId: string) => void;
+  /**
+   * Called once the command has a terminal. Providers that allocate a
+   * retained command identity before launch include it as `commandId`.
+   */
+  onTerminalAssigned?: (
+    terminalId: string,
+    details?: { commandId?: string },
+  ) => void;
   /** Called when cleanup ownership transfers to a background terminal lifecycle. */
   onCommandFinalizationDeferred?: () => void;
   /** Called exactly once when a deferred command ends or its terminal closes. */

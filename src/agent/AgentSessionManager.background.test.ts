@@ -791,6 +791,167 @@ describe("AgentSessionManager background agents", () => {
     expect(finished.currentToolInput).toBeUndefined();
   });
 
+  it("keeps parallel tools, redacted commands, terminal ids, and approval waits visible", async () => {
+    const getActiveCallTerminal = vi.fn((toolCallId: string) =>
+      toolCallId === "exec-1"
+        ? { terminalId: "term_7", commandId: "cmd_42" }
+        : undefined,
+    );
+    let panelApprovals: Array<{
+      id: string;
+      kind: string;
+      stage: "coordinator_review" | "awaiting_user";
+      target?: string;
+    }> = [];
+    const getPendingApprovalsForSession = vi.fn(() => panelApprovals);
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 1 },
+    );
+    mgr.setToolContext({
+      ...toolCtx,
+      toolCallTracker: { getActiveCallTerminal } as any,
+      approvalPanel: { getPendingApprovalsForSession } as any,
+    });
+    await mgr.createSession("code");
+    let releaseExec!: () => void;
+    const execReleased = new Promise<void>((resolve) => {
+      releaseExec = resolve;
+    });
+    let readFinished!: () => void;
+    const readDone = new Promise<void>((resolve) => {
+      readFinished = resolve;
+    });
+    mocks.runBehavior.mockImplementation(() =>
+      (async function* () {
+        const [session] = mocks.runArgs.mock.calls.at(-1) as [any];
+        yield {
+          type: "text_delta",
+          text: "Fixed two review findings; running the focused tests now.",
+        };
+        session.status = "tool_executing";
+        yield {
+          type: "tool_start",
+          toolCallId: "exec-1",
+          toolName: "execute_command",
+          input: {
+            command:
+              "API_TOKEN=sk-abcdefghijklmnopqrstuvwxyz0123 npm test -- src/a.test.ts",
+            env: { OTHER: "ENV-SECRET-VALUE" },
+          },
+        };
+        session.currentTool = "execute_command";
+        yield {
+          type: "tool_start",
+          toolCallId: "read-1",
+          toolName: "read_file",
+          input: { path: "/usr/share/man/man2/setrlimit.2" },
+        };
+        session.currentTool = "read_file";
+        yield {
+          type: "tool_result",
+          toolCallId: "read-1",
+          toolName: "read_file",
+          input: { path: "/usr/share/man/man2/setrlimit.2" },
+          result: [{ type: "text", text: "ok" }],
+          durationMs: 1,
+        };
+        readFinished();
+        await execReleased;
+        yield {
+          type: "tool_result",
+          toolCallId: "exec-1",
+          toolName: "execute_command",
+          input: { command: "npm test" },
+          result: [{ type: "text", text: "ok" }],
+          durationMs: 1,
+        };
+        yield { type: "done" };
+      })(),
+    );
+
+    const spawned = await mgr.spawnBackground({
+      task: "parallel tools",
+      message: "run",
+    });
+    await readDone;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const running = mgr.getBackgroundStatus(spawned.sessionId);
+    // The read finished first; the still-running command stays visible.
+    expect(running.currentTool).toBe("execute_command");
+    expect(running.currentToolInput).toContain("command=");
+    expect(running.currentToolInput).toContain("npm test -- src/a.test.ts");
+    expect(running.currentToolInput).not.toContain("sk-abcdefghijklmnop");
+    expect(running.currentToolInput).not.toContain("ENV-SECRET-VALUE");
+    expect(running.currentToolTerminalId).toBe("term_7");
+    expect(running.currentToolCommandId).toBe("cmd_42");
+    expect(running.runningToolCount).toBeUndefined();
+    expect(running.phase).toBe("executing_tool");
+    expect(running.displayStatus).toBe("Running tests");
+    expect(running.pendingApprovals).toBeUndefined();
+
+    panelApprovals = [
+      {
+        id: "a1",
+        kind: "command",
+        stage: "awaiting_user",
+        target: "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz' x",
+      },
+      {
+        id: "a2",
+        kind: "path",
+        stage: "coordinator_review",
+        target: "/tmp/config api_key=SUPERSECRETVALUE123",
+      },
+    ];
+    const waiting = mgr.getBackgroundStatus(spawned.sessionId);
+    expect(getPendingApprovalsForSession).toHaveBeenCalledWith(
+      spawned.sessionId,
+    );
+    expect(waiting.phase).toBe("awaiting_approval");
+    expect(waiting.displayStatus).toBe("Awaiting approval");
+    expect(waiting.pendingApprovals).toEqual([
+      expect.objectContaining({ kind: "command", stage: "awaiting_user" }),
+      expect.objectContaining({ kind: "path", stage: "coordinator_review" }),
+    ]);
+    expect(waiting.pendingApprovals![0].target).not.toContain(
+      "abcdefghijklmnopqrstuvwxyz",
+    );
+    expect(waiting.pendingApprovals![1].target).toContain("/tmp/config");
+    expect(waiting.pendingApprovals![1].target).not.toContain(
+      "SUPERSECRETVALUE123",
+    );
+
+    const stillRunning = JSON.parse(
+      (mgr as any).buildBackgroundStillRunningResult(spawned.sessionId),
+    );
+    expect(stillRunning).toMatchObject({
+      status: "still_running",
+      currentTool: "execute_command",
+      pendingApprovals: [
+        expect.objectContaining({ kind: "command" }),
+        expect.objectContaining({ kind: "path" }),
+      ],
+    });
+    expect(stillRunning.streamingPreview).toContain(
+      "Fixed two review findings",
+    );
+
+    panelApprovals = [];
+    releaseExec();
+    await mgr.waitForBackground(spawned.sessionId);
+    const finished = mgr.getBackgroundStatus(spawned.sessionId);
+    expect(finished.currentTool).toBeUndefined();
+    expect(finished.currentToolTerminalId).toBeUndefined();
+    expect(finished.pendingApprovals).toBeUndefined();
+  });
+
   it("inherits and live-syncs the parent's full approval mode for a shared child", async () => {
     const mgr = new AgentSessionManager(
       config,
@@ -2261,6 +2422,86 @@ describe("AgentSessionManager background agents", () => {
     expect(mgr.getBackgroundStatus(spawned.sessionId).partialOutput).toContain(
       "Substantive ACP answer",
     );
+  });
+
+  it("keeps a still-running parallel ACP tool visible when another completes", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    let releaseRunner!: () => void;
+    const runnerBlocked = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    let readCompleted!: () => void;
+    const completed = new Promise<void>((resolve) => {
+      readCompleted = resolve;
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "bash-1",
+            title: "Bash",
+            status: "in_progress",
+            rawInput: { command: "npm test" },
+          },
+        });
+        // A second call that arrives already finished.
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "read-1",
+            title: "Read",
+            status: "completed",
+            rawInput: { file_path: "a.ts" },
+            rawOutput: "ok",
+          },
+        });
+        readCompleted();
+        await runnerBlocked;
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "bash-1",
+            status: "completed",
+            rawOutput: "done",
+          },
+        });
+        request.onEvent({
+          type: "stop",
+          response: { stopReason: "end_turn" },
+        });
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    mgr.setToolContext(toolCtx);
+    const spawned = await mgr.spawnBackground({
+      task: "run tests",
+      message: "run tests",
+      provider: "acp:claude",
+    });
+    await completed;
+
+    expect(mgr.getBackgroundStatus(spawned.sessionId)).toMatchObject({
+      currentTool: "Bash",
+      phase: "executing_tool",
+    });
+    releaseRunner();
+    await mgr.waitForBackground(spawned.sessionId);
+    expect(mgr.getBackgroundStatus(spawned.sessionId).done).toBe(true);
   });
 
   it("projects and persists ACP tool lifecycle updates without renaming tools", async () => {
@@ -7558,7 +7799,8 @@ describe("AgentSessionManager background agents", () => {
 
   it.each([
     ["cancelled", "cancelled", "cancelled_by_user"],
-    ["blocked", "interrupted", "blocked"],
+    // No denial or rejection was recorded, so this is a technical stop.
+    ["blocked", "interrupted", "technical_blocker"],
     ["waiting_for_user", "interrupted", "waiting_for_user"],
   ] as const)(
     "does not promote a %s final marker result to completed",
@@ -7601,7 +7843,7 @@ describe("AgentSessionManager background agents", () => {
 
   it.each([
     ["cancelled", "cancelled", "cancelled_by_user"],
-    ["blocked", "interrupted", "blocked"],
+    ["blocked", "interrupted", "technical_blocker"],
     ["waiting_for_user", "interrupted", "waiting_for_user"],
   ] as const)(
     "preserves summary evidence for a %s final marker without a result",
@@ -7627,6 +7869,116 @@ describe("AgentSessionManager background agents", () => {
       });
     },
   );
+
+  it.each([
+    [
+      "a user-rejected tool result",
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "t1",
+                content: JSON.stringify({ status: "rejected_by_user" }),
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    [
+      "an ask_user exchange",
+      {
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "q1",
+                name: "ask_user",
+                input: { questions: [] },
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "q1",
+                content: JSON.stringify({ responses: { go: "No" } }),
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    [
+      "a denied policy audit entry",
+      {
+        policyAudit: [
+          { decision: "denied", operation: "path", reason: "outside" },
+        ],
+      },
+    ],
+  ] as const)("keeps a blocked marker strict after %s", (_label, evidence) => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const session = {
+      id: "bg-blocked-denied",
+      status: "idle",
+      getLastFinalMarker: () => ({
+        status: "blocked",
+        summary: "Access was refused.",
+      }),
+      getLastAssistantText: () => undefined,
+      getMessages: () => ("messages" in evidence ? evidence.messages : []),
+      fleetMetadata:
+        "policyAudit" in evidence ? { policyAudit: evidence.policyAudit } : {},
+    };
+    const resolved = (mgr as any).resolveBackgroundResult(session, "fallback");
+    expect(resolved.terminalReason).toBe("blocked");
+    expect(JSON.parse(resolved.resultText).recovery).toContain(
+      "No agent-side recovery is available",
+    );
+  });
+
+  it("lets a coordinator take over a technical blocker", () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const session = {
+      id: "bg-technical-blocker",
+      status: "idle",
+      getLastFinalMarker: () => ({
+        status: "blocked",
+        summary: "Have not inspected the target IR yet.",
+      }),
+      getLastAssistantText: () => undefined,
+      getMessages: () => [
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "t1",
+              content: JSON.stringify({ status: "success" }),
+            },
+          ],
+        },
+      ],
+      fleetMetadata: {},
+    };
+    const resolved = (mgr as any).resolveBackgroundResult(session, "fallback");
+    expect(resolved).toMatchObject({
+      resultState: "interrupted",
+      terminalReason: "technical_blocker",
+      agentRetryable: false,
+    });
+    const recovery = JSON.parse(resolved.resultText).recovery;
+    expect(recovery).toContain("no permission denial");
+    expect(recovery).not.toContain("No agent-side recovery is available");
+  });
 
   it("preserves a parsed expected envelope across a later provider failure", () => {
     const mgr = new AgentSessionManager(config, "/tmp");

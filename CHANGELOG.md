@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Background agent status is easier to act on when a worker seems stuck. `get_background_status` now shows:
+  - The real running tool when several run in parallel. Before, the first one to finish cleared the name and input, so a stuck tool showed as `Running…` with nothing to inspect.
+  - The command an `execute_command` is running, with likely secrets redacted, plus `currentToolTerminalId` and `currentToolCommandId` for `get_terminal_output`.
+  - Approval waits. A tool waiting on an approval card or a human answer now shows `phase: "awaiting_approval"` and a `pendingApprovals` list instead of `executing_tool`.
+  - Neutral labels such as `Running watch_mcp_resource` instead of "Running tests" guessed from earlier narration.
+
+  `get_background_result` waits that expire now include `streamingPreview`, `currentToolInput` and `pendingApprovals`. A worker that stops with `blocked` but hit no permission denial, policy block or user rejection, and asked the user nothing, now ends with `terminalReason: "technical_blocker"`, so the coordinator can take over the work instead of being told to stop and ask the user.
+
 ## 1.90.0
 
 - **Generate for Session** is back on `generate_image` approval cards for edits, masks and most image options. Before, setting any option such as quality, size, format, an edit image or a mask hid the button, which became common once ChatGPT/Codex login supported those options. A session approval now covers those calls too. Calls using `xhigh`/`max` quality or output sizes above 2560x1440 still ask each time, because they cost much more. This applies in VS Code and Browser Ask Agent.

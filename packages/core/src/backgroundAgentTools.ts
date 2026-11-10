@@ -120,6 +120,19 @@ export interface SpawnBackgroundResult {
   writeScopeWarnings?: string[];
 }
 
+/**
+ * An approval or human answer a background agent's tool is waiting on.
+ * `coordinator_review` means the root coordinator has first refusal;
+ * `awaiting_user` means a standard approval card or question is open.
+ */
+export interface BackgroundAgentPendingApproval {
+  kind: string;
+  stage: "coordinator_review" | "awaiting_user";
+  /** Bounded, redacted path, command, server, or question being decided. */
+  target?: string;
+  requestedAt?: number;
+}
+
 export interface BackgroundAgentStatusResult {
   status:
     | "queued"
@@ -133,13 +146,24 @@ export interface BackgroundAgentStatusResult {
   /**
    * Bounded single-line summary of the running top-level tool's identifying
    * inputs (for example `path=src/a.ts regex=foo`). Never includes file
-   * contents, commands, or environment values.
+   * contents or environment values; execute_command shows its command with
+   * likely secrets redacted.
    */
   currentToolInput?: string;
   /** Timestamp when the current top-level tool call started. */
   currentToolStartedAt?: number;
   /** Wall time the current top-level tool call has been running. */
   currentToolElapsedMs?: number;
+  /**
+   * Terminal and command running the current execute_command, once assigned.
+   * Pass both to get_terminal_output to inspect the live output.
+   */
+  currentToolTerminalId?: string;
+  currentToolCommandId?: string;
+  /** Number of top-level tool calls still running, when more than one. */
+  runningToolCount?: number;
+  /** Approvals or human answers currently blocking this agent's tools. */
+  pendingApprovals?: BackgroundAgentPendingApproval[];
   /** An accepted steering message is queued and not yet delivered to the agent. */
   pendingSteering?: boolean;
   /** Timestamp when the oldest still-queued steering message was accepted. */
@@ -634,7 +658,7 @@ export function appendOwnershipHandoff(
 export const GET_BACKGROUND_STATUS_TOOL: ToolDefinition = {
   name: "get_background_status",
   description:
-    "Non-blocking health and progress snapshot for a background agent. Returns phase/runtime telemetry, durable resultState/terminalReason/retry guidance when terminal, resource usage, canSteer/canKill controls, streamingPreview, and preserved output. There is no automatic deadline: judge useful progress, not elapsed time or tokens. Use it while continuing independent work; do not poll tightly or infer a hang from elapsed time alone because a provider request or long tool can be quiet. If status cannot show whether it is progressing, steer it with a progress question. If it is unproductive or the partial result is sufficient, steer it to stop using tools and return now. If steering cannot be delivered at a safe boundary, the idle time keeps growing, and the result is no longer worth waiting for, kill it. Call get_background_result only when ready to block for integration.",
+    "Non-blocking health and progress snapshot for a background agent. Returns phase/runtime telemetry, the running tool and pendingApprovals, durable resultState/terminalReason/retry guidance when terminal, resource usage, canSteer/canKill controls, streamingPreview, and preserved output. There is no automatic deadline: judge useful progress, not elapsed time or tokens. Use it while continuing independent work; do not poll tightly or infer a hang from elapsed time alone because a provider request or long tool can be quiet. If status cannot show whether it is progressing, steer it with a progress question. If it is unproductive or the partial result is sufficient, steer it to stop using tools and return now. If steering cannot be delivered at a safe boundary, the idle time keeps growing, and the result is no longer worth waiting for, kill it. Call get_background_result only when ready to block for integration.",
   input_schema: {
     type: "object",
     properties: {
@@ -785,6 +809,9 @@ export function buildBackgroundStillRunningPayload(
     | "phase"
     | "displayStatus"
     | "currentTool"
+    | "currentToolInput"
+    | "pendingApprovals"
+    | "streamingPreview"
     | "elapsedMs"
     | "idleMs"
     | "partialOutput"
@@ -797,8 +824,13 @@ export function buildBackgroundStillRunningPayload(
     phase: status.phase,
     displayStatus: status.displayStatus,
     currentTool: status.currentTool,
+    currentToolInput: status.currentToolInput,
+    ...(status.pendingApprovals?.length
+      ? { pendingApprovals: status.pendingApprovals }
+      : {}),
     elapsedMs: status.elapsedMs,
     idleMs: status.idleMs,
+    streamingPreview: status.streamingPreview,
     partialOutput: status.partialOutput,
     retryAfterMs: BACKGROUND_RETRY_AFTER_MS,
     retrySafe: true,
@@ -933,6 +965,9 @@ function backgroundFailureRecovery(failure: {
   ) {
     return `No agent-side recovery is available. ${RETRY_FLAGS_NOTE} Do not retry, rephrase, or route around this stop. Tell the user this agent's sessionId and terminalReason "${reason}"; partialOutput, when present, holds the agent's own explanation, and the user can review the agent's session transcript and decide how to proceed.`;
   }
+  if (reason === "technical_blocker") {
+    return `The agent stopped on a technical blocker or unfinished investigation; the run recorded no permission denial, policy block, or user rejection. ${RETRY_FLAGS_NOTE} Read partialOutput first. If it describes a permission, policy, or user decision, treat this as a refusal and tell the user instead. Otherwise your existing authority is unchanged: you may continue the work yourself or start a replacement run with the missing context as a deliberate decision; do not repeat an identical run.`;
+  }
   return `${RETRY_FLAGS_NOTE} Report the sessionId and terminalReason to the user, or start a new run only as a deliberate decision when the cause is understood; do not repeat an identical failing run.`;
 }
 
@@ -960,8 +995,11 @@ export interface BackgroundResultsPendingEntry {
   readonly phase?: BackgroundAgentRuntimePhase;
   readonly displayStatus?: string;
   readonly currentTool?: string;
+  readonly currentToolInput?: string;
+  readonly pendingApprovals?: BackgroundAgentPendingApproval[];
   readonly elapsedMs?: number;
   readonly idleMs?: number;
+  readonly streamingPreview?: string;
   readonly partialOutput?: string;
 }
 
@@ -975,8 +1013,11 @@ export function backgroundResultsPendingEntry(
     phase: progress.phase,
     displayStatus: progress.displayStatus,
     currentTool: progress.currentTool,
+    currentToolInput: progress.currentToolInput,
+    pendingApprovals: progress.pendingApprovals,
     elapsedMs: progress.elapsedMs,
     idleMs: progress.idleMs,
+    streamingPreview: progress.streamingPreview,
     partialOutput: progress.partialOutput,
   };
 }
@@ -1007,8 +1048,13 @@ export function buildBackgroundResultsPayload(results: {
       phase: entry.phase,
       displayStatus: entry.displayStatus,
       currentTool: entry.currentTool,
+      currentToolInput: entry.currentToolInput,
+      ...(entry.pendingApprovals?.length
+        ? { pendingApprovals: entry.pendingApprovals }
+        : {}),
       elapsedMs: entry.elapsedMs,
       idleMs: entry.idleMs,
+      streamingPreview: entry.streamingPreview,
       partialOutput: entry.partialOutput,
     })),
     ...(status === "still_running"

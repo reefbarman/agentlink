@@ -65,7 +65,7 @@ function createProvider() {
         output: `output:${id}`,
         output_captured: true,
       });
-      options.onTerminalAssigned?.(id);
+      options.onTerminalAssigned?.(id, { commandId: `cmd-${id}` });
       return {
         exit_code: 0,
         output: `output:${id}`,
@@ -221,6 +221,24 @@ describe("TabTerminalProviderRegistry", () => {
     });
     expect(base.provider.interruptTerminal).toHaveBeenCalledWith(expected);
   });
+
+  it("forwards the assigned command identity to the caller's terminal callback", async () => {
+    const base = createProvider();
+    const provider = new TabTerminalProviderRegistry(base.provider).forOwner(
+      t1,
+    );
+    const onTerminalAssigned = vi.fn();
+    const terminal = await provider.executeCommand({
+      owner: undefined,
+      command: "npm test",
+      cwd: "/workspace",
+      onTerminalAssigned,
+    });
+    expect(onTerminalAssigned).toHaveBeenCalledWith(terminal.terminal_id, {
+      commandId: `cmd-${terminal.terminal_id}`,
+    });
+  });
+
   it("titles terminals by stable tab label and reuses only within the owner generation", async () => {
     const base = createProvider();
     const registry = new TabTerminalProviderRegistry(base.provider);

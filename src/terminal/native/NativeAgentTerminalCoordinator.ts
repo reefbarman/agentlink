@@ -688,7 +688,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       finalizer?.();
       throw error;
     }
-    options.onTerminalAssigned?.(before.channelId);
+    options.onTerminalAssigned?.(before.channelId, { commandId });
     preparedCommand.start();
     const completion = process.completion.then(
       () => this.finishActive(channel, commandId),

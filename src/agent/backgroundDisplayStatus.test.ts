@@ -95,7 +95,8 @@ describe("inferBackgroundDisplayStatus", () => {
   );
 
   it.each([
-    ["rerun the test", "Running tests"],
+    // Narration describes plans, not the running tool.
+    ["rerun the test", "Running…"],
     ["updating the patch", "Updating code"],
     ["I found the root cause", "Issue found"],
     ["tool produced output", "Running…"],
@@ -106,6 +107,45 @@ describe("inferBackgroundDisplayStatus", () => {
         streamingText,
       }),
     ).toBe(expected);
+  });
+
+  it("names a running non-test tool instead of inferring tests from narration", () => {
+    expect(
+      inferBackgroundDisplayStatus({
+        status: "tool_executing",
+        currentTool: "watch_mcp_resource",
+        streamingText:
+          "I’ll smoke-test the installed edit/read tools, then verify the remaining feedback.",
+      }),
+    ).toBe("Running watch_mcp_resource");
+  });
+
+  it("judges execute_command test runs from the command, not narration", () => {
+    expect(
+      inferBackgroundDisplayStatus({
+        status: "tool_executing",
+        currentTool: "execute_command",
+        currentToolInput: "command=git status --short",
+        streamingText: "Next I'll run npm test once the status is clean.",
+      }),
+    ).toBe("Running command");
+    expect(
+      inferBackgroundDisplayStatus({
+        status: "tool_executing",
+        currentTool: "execute_command",
+        currentToolInput: "command=npm run test -- src/a.test.ts",
+      }),
+    ).toBe("Running tests");
+  });
+
+  it("reports an approval wait even while the tool is executing", () => {
+    expect(
+      inferBackgroundDisplayStatus({
+        status: "tool_executing",
+        currentTool: "read_file",
+        awaitingApproval: true,
+      }),
+    ).toBe("Awaiting approval");
   });
 
   it.each([

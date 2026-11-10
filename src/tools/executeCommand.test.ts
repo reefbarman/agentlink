@@ -7755,7 +7755,9 @@ describe("handleExecuteCommand", () => {
     const trackerCtx = { setTerminalId: vi.fn() };
     vi.mocked(terminalProvider.executeCommand).mockImplementationOnce(
       async (options) => {
-        options.onTerminalAssigned?.("term_tracker");
+        options.onTerminalAssigned?.("term_tracker", {
+          commandId: "cmd_tracker",
+        });
         return {
           exit_code: 0,
           output: "ok",
@@ -7775,7 +7777,9 @@ describe("handleExecuteCommand", () => {
       { terminalProvider },
     );
 
-    expect(trackerCtx.setTerminalId).toHaveBeenCalledWith("term_tracker");
+    expect(trackerCtx.setTerminalId).toHaveBeenCalledWith("term_tracker", {
+      commandId: "cmd_tracker",
+    });
   });
 
   it("materializes inline files, substitutes temp paths, and cleans up", async () => {

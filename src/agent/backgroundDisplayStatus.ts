@@ -5,6 +5,10 @@ type BackgroundStatus = BgSessionInfo["status"];
 export interface BackgroundDisplayStatusInput {
   status: BackgroundStatus;
   currentTool?: string;
+  /** Bounded redacted input summary, e.g. `command=npm test` for execute_command. */
+  currentToolInput?: string;
+  /** A tool of this agent is waiting on an approval or human answer. */
+  awaitingApproval?: boolean;
   streamingText?: string;
   resultText?: string;
   errorMessage?: string;
@@ -37,7 +41,9 @@ export function inferBackgroundDisplayStatus(
     .slice(-700);
 
   if (args.status === "queued") return "Queued";
-  if (args.status === "awaiting_approval") return "Awaiting approval";
+  if (args.status === "awaiting_approval" || args.awaitingApproval) {
+    return "Awaiting approval";
+  }
   if (args.status === "idle") return "Done";
   if (args.status === "cancelled") return "Cancelled";
   if (args.status === "error") return "Error";
@@ -49,10 +55,15 @@ export function inferBackgroundDisplayStatus(
       : statusDetail;
   }
 
+  // Prefer the running command itself; narration can be stale or mention
+  // tests the agent has not started yet.
+  const commandEvidence = args.currentToolInput?.includes("command=")
+    ? args.currentToolInput
+    : textWindow;
   const isTestCommand =
     tool.includes("execute_command") &&
-    /(\bnpm\s+test\b|\bpnpm\s+test\b|\byarn\s+test\b|\bvitest\b|\bjest\b|\blint\b|\btsc\b|\bbuild\b)/i.test(
-      textWindow,
+    /(\bnpm\s+(?:run\s+)?test\b|\bpnpm\s+(?:run\s+)?test\b|\byarn\s+test\b|\bvitest\b|\bjest\b|\blint\b|\btsc\b|\bbuild\b)/i.test(
+      commandEvidence,
     );
 
   if (
@@ -103,8 +114,11 @@ export function inferBackgroundDisplayStatus(
   if (tool.includes("ask_user")) return "Waiting input";
 
   if (args.status === "tool_executing") {
-    if (/\bre-ran tests\b|\brerun\b|\btest\b/.test(textWindow)) {
-      return "Running tests";
+    // A named tool is better evidence than narration, which may describe
+    // plans (for example "smoke-test") that have not started.
+    if (args.currentTool?.trim()) {
+      const name = args.currentTool.trim();
+      return `Running ${name.length > 60 ? `${name.slice(0, 59)}…` : name}`;
     }
     if (/\bapplied patch\b|\bupdating\b|\bpatching\b/.test(textWindow)) {
       return "Updating code";
