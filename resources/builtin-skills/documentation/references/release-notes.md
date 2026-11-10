@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.91.0
+
 - Background agent status is easier to act on when a worker seems stuck. `get_background_status` now shows:
   - The real running tool when several run in parallel. Before, the first one to finish cleared the name and input, so a stuck tool showed as `Running…` with nothing to inspect.
   - The command an `execute_command` is running, with likely secrets redacted, plus `currentToolTerminalId` and `currentToolCommandId` for `get_terminal_output`.

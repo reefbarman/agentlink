@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.53.0 — 2026-11-10
+
+- Background agent status now shows every running tool (longest-running first), redacted execute_command commands and terminal IDs, pending approvals, and a technical_blocker reason when a worker stops without a recorded denial.
+
 ## 0.52.1 — 2026-11-10
 
 - Background agent questions and approvals no longer become resume anchors or pending tasks after condense or resume, so answered questions are not replayed to the coordinator.
