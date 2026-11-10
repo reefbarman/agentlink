@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "71c1a15c9e675291c08c28ea5c577d90feeb5196",
-  "createdAt": "2026-11-10T00:20:40.441Z",
+  "sourceSha": "e44be21b66e43fcb639faf3fc7dd08dd5b7a1263",
+  "createdAt": "2026-11-10T01:43:35.613Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.87.0",
-      "baselineRef": "v1.87.0",
-      "reserved": "1.87.0",
-      "commits": ["71c1a15c9e675291c08c28ea5c577d90feeb5196"],
+      "published": "1.87.1",
+      "baselineRef": "v1.87.1",
+      "reserved": "1.87.1",
+      "commits": ["e44be21b66e43fcb639faf3fc7dd08dd5b7a1263"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.87.1",
+      "version": "1.87.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.87.1",
+      "tag": "v1.87.2",
       "notes": [
         {
-          "sha": "71c1a15c9e675291c08c28ea5c577d90feeb5196",
-          "subject": "fix(edits): stop auto-approved saves raising VS Code save conflicts",
-          "summary": "Auto-approved edits no longer raise VS Code's \"file is newer\" save conflict dialog. They wait for VS Code's copy to match disk, or write directly to disk and report commit_path direct_write_stale_editor. Edit-commit decisions are now logged.",
+          "sha": "e44be21b66e43fcb639faf3fc7dd08dd5b7a1263",
+          "subject": "fix(tools): give Git chains pre-launch guidance and let scoped research write",
+          "summary": "Compound Git write chains like add, commit and npm run preflight now get pre-launch native-retry guidance, .git write denials from scripts get Git recovery, and scoped background research from Code parents starts in Code mode.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.87.0",
-      "baselineRef": "desktop-v0.87.0",
-      "reserved": "0.87.0",
-      "commits": ["71c1a15c9e675291c08c28ea5c577d90feeb5196"],
+      "published": "0.87.1",
+      "baselineRef": "desktop-v0.87.1",
+      "reserved": "0.87.1",
+      "commits": ["e44be21b66e43fcb639faf3fc7dd08dd5b7a1263"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.87.1",
+      "version": "0.87.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.87.1",
+      "tag": "desktop-v0.87.2",
       "notes": [
         {
-          "sha": "71c1a15c9e675291c08c28ea5c577d90feeb5196",
-          "subject": "fix(edits): stop auto-approved saves raising VS Code save conflicts",
-          "summary": "Auto-approved edits no longer raise VS Code's \"file is newer\" save conflict dialog. They wait for VS Code's copy to match disk, or write directly to disk and report commit_path direct_write_stale_editor. Edit-commit decisions are now logged.",
+          "sha": "e44be21b66e43fcb639faf3fc7dd08dd5b7a1263",
+          "subject": "fix(tools): give Git chains pre-launch guidance and let scoped research write",
+          "summary": "Compound Git write chains like add, commit and npm run preflight now get pre-launch native-retry guidance, .git write denials from scripts get Git recovery, and scoped background research from Code parents starts in Code mode.",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.59.0",
-      "baselineRef": "assistant-v0.59.0",
-      "reserved": "0.59.0",
-      "commits": ["71c1a15c9e675291c08c28ea5c577d90feeb5196"],
+      "published": "0.59.1",
+      "baselineRef": "assistant-v0.59.1",
+      "reserved": "0.59.1",
+      "commits": ["e44be21b66e43fcb639faf3fc7dd08dd5b7a1263"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.59.1",
+      "version": "0.59.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.59.1",
+      "tag": "assistant-v0.59.2",
       "notes": [
         {
-          "sha": "71c1a15c9e675291c08c28ea5c577d90feeb5196",
-          "subject": "fix(edits): stop auto-approved saves raising VS Code save conflicts",
-          "summary": "Auto-approved edits no longer raise VS Code's \"file is newer\" save conflict dialog. They wait for VS Code's copy to match disk, or write directly to disk and report commit_path direct_write_stale_editor. Edit-commit decisions are now logged.",
+          "sha": "e44be21b66e43fcb639faf3fc7dd08dd5b7a1263",
+          "subject": "fix(tools): give Git chains pre-launch guidance and let scoped research write",
+          "summary": "Compound Git write chains like add, commit and npm run preflight now get pre-launch native-retry guidance, .git write denials from scripts get Git recovery, and scoped background research from Code parents starts in Code mode.",
           "breaking": false
         }
       ]
@@ -151,6 +151,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Auto-approved edits no longer raise VS Code's \"file is newer\" save conflict dialog. They wait for VS Code's copy to match disk, or write directly to disk and report commit_path direct_write_stale_editor. Edit-commit decisions are now logged.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "e44be21b66e43fcb639faf3fc7dd08dd5b7a1263": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Compound Git write chains like add, commit and npm run preflight now get pre-launch native-retry guidance, .git write denials from scripts get Git recovery, and scoped background research from Code parents starts in Code mode.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

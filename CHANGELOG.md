@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.87.2
+
 - Git commands that write to the repository now get the "run natively" guidance before they start more often, instead of failing in the sandbox on `.git/index.lock`. Any steps after the first Git write are accepted, so chains such as `git add … && git commit -m … && npm run preflight` or `git commit … && git show -s --format=fuller HEAD` are recognised, and `git pull --ff-only`/`--rebase`/`--no-edit` counts as a Git write. Steps before the first write still have to be recognised read-only checks. When a script such as `npm run preflight` is denied a write inside `.git` (for example a Node `EPERM`), the result now includes the same `protected_git_metadata` recovery.
 - Background `research` tasks spawned from Code mode with non-empty `ownedPaths` now start in Code mode instead of Ask, so they can save results to the paths they were given. This matches the existing `debug` behaviour. An explicit `mode` or `permissionProfile: "review-only"` still wins, research without `ownedPaths` stays in Ask, and `readonly-research` is unchanged.
 
