@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "00b0cebce412b1509abec7f1d3ecc947ebeb9813",
-  "createdAt": "2026-11-10T04:32:08.078Z",
+  "sourceSha": "bd3dd3772168f06b508df7231730e6f291af56f6",
+  "createdAt": "2026-11-10T05:13:51.873Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,166 +10,142 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.88.0",
-      "baselineRef": "v1.88.0",
-      "reserved": "1.88.0",
+      "published": "1.89.0",
+      "baselineRef": "v1.89.0",
+      "reserved": "1.89.0",
       "commits": [
-        "b72e7e8c6d0d13643dd6d542539511170ee896df",
-        "00b0cebce412b1509abec7f1d3ecc947ebeb9813"
+        "dd180b4d026f89379ede0a4b6f5fc397b5e761ad",
+        "bd3dd3772168f06b508df7231730e6f291af56f6"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.89.0",
+      "version": "1.90.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.89.0",
+      "tag": "v1.90.0",
       "notes": [
         {
-          "sha": "b72e7e8c6d0d13643dd6d542539511170ee896df",
-          "subject": "feat(tools): enable generate_image masks and advanced controls on Codex OAuth",
-          "summary": "generate_image on ChatGPT/Codex OAuth now supports masks, edit action, size, quality, background and output format/compression; only input_fidelity remains API-key only.",
+          "sha": "dd180b4d026f89379ede0a4b6f5fc397b5e761ad",
+          "subject": "feat(tools): fit masked image edits to the target size and keep unmasked pixels",
+          "summary": "Masked image edits from generate_image are now resized to the edit target and keep original pixels outside the mask, with a new mask_composite option and provider_size reporting.",
           "breaking": false
         },
         {
-          "sha": "00b0cebce412b1509abec7f1d3ecc947ebeb9813",
-          "subject": "fix(condense): keep background questions out of resume anchors",
-          "summary": "Background agent questions and approvals no longer become resume anchors or pending tasks after condense or resume, so answered questions are not replayed to the coordinator.",
+          "sha": "bd3dd3772168f06b508df7231730e6f291af56f6",
+          "subject": "fix(tools): let Generate for Session cover image edits and masks",
+          "summary": "Generate for Session approval now also covers image edits, masks and ordinary quality/size options, while xhigh/max quality and sizes above 2560x1440 still need per-call approval.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.88.0",
-      "baselineRef": "desktop-v0.88.0",
-      "reserved": "0.88.0",
+      "published": "0.89.0",
+      "baselineRef": "desktop-v0.89.0",
+      "reserved": "0.89.0",
       "commits": [
-        "b72e7e8c6d0d13643dd6d542539511170ee896df",
-        "00b0cebce412b1509abec7f1d3ecc947ebeb9813"
+        "dd180b4d026f89379ede0a4b6f5fc397b5e761ad",
+        "bd3dd3772168f06b508df7231730e6f291af56f6"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.89.0",
+      "version": "0.90.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.89.0",
+      "tag": "desktop-v0.90.0",
       "notes": [
         {
-          "sha": "b72e7e8c6d0d13643dd6d542539511170ee896df",
-          "subject": "feat(tools): enable generate_image masks and advanced controls on Codex OAuth",
-          "summary": "generate_image on ChatGPT/Codex OAuth now supports masks, edit action, size, quality, background and output format/compression; only input_fidelity remains API-key only.",
+          "sha": "dd180b4d026f89379ede0a4b6f5fc397b5e761ad",
+          "subject": "feat(tools): fit masked image edits to the target size and keep unmasked pixels",
+          "summary": "Masked image edits from generate_image are now resized to the edit target and keep original pixels outside the mask, with a new mask_composite option and provider_size reporting.",
           "breaking": false
         },
         {
-          "sha": "00b0cebce412b1509abec7f1d3ecc947ebeb9813",
-          "subject": "fix(condense): keep background questions out of resume anchors",
-          "summary": "Background agent questions and approvals no longer become resume anchors or pending tasks after condense or resume, so answered questions are not replayed to the coordinator.",
+          "sha": "bd3dd3772168f06b508df7231730e6f291af56f6",
+          "subject": "fix(tools): let Generate for Session cover image edits and masks",
+          "summary": "Generate for Session approval now also covers image edits, masks and ordinary quality/size options, while xhigh/max quality and sizes above 2560x1440 still need per-call approval.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.62.0",
-      "baselineRef": "cli-v0.62.0",
-      "reserved": "0.62.0",
-      "commits": ["00b0cebce412b1509abec7f1d3ecc947ebeb9813"],
+      "published": "0.62.1",
+      "baselineRef": "cli-v0.62.1",
+      "reserved": "0.62.1",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.62.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.62.1",
-      "notes": [
-        {
-          "sha": "00b0cebce412b1509abec7f1d3ecc947ebeb9813",
-          "subject": "fix(condense): keep background questions out of resume anchors",
-          "summary": "Background agent questions and approvals no longer become resume anchors or pending tasks after condense or resume, so answered questions are not replayed to the coordinator.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.52.0",
-      "baselineRef": "sdk-v0.52.0",
-      "reserved": "0.52.0",
-      "commits": ["00b0cebce412b1509abec7f1d3ecc947ebeb9813"],
+      "published": "0.52.1",
+      "baselineRef": "sdk-v0.52.1",
+      "reserved": "0.52.1",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.52.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.52.1",
-      "notes": [
-        {
-          "sha": "00b0cebce412b1509abec7f1d3ecc947ebeb9813",
-          "subject": "fix(condense): keep background questions out of resume anchors",
-          "summary": "Background agent questions and approvals no longer become resume anchors or pending tasks after condense or resume, so answered questions are not replayed to the coordinator.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.60.0",
-      "baselineRef": "assistant-v0.60.0",
-      "reserved": "0.60.0",
+      "published": "0.61.0",
+      "baselineRef": "assistant-v0.61.0",
+      "reserved": "0.61.0",
       "commits": [
-        "b72e7e8c6d0d13643dd6d542539511170ee896df",
-        "00b0cebce412b1509abec7f1d3ecc947ebeb9813"
+        "dd180b4d026f89379ede0a4b6f5fc397b5e761ad",
+        "bd3dd3772168f06b508df7231730e6f291af56f6"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.61.0",
+      "version": "0.62.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.61.0",
+      "tag": "assistant-v0.62.0",
       "notes": [
         {
-          "sha": "b72e7e8c6d0d13643dd6d542539511170ee896df",
-          "subject": "feat(tools): enable generate_image masks and advanced controls on Codex OAuth",
-          "summary": "generate_image on ChatGPT/Codex OAuth now supports masks, edit action, size, quality, background and output format/compression; only input_fidelity remains API-key only.",
+          "sha": "dd180b4d026f89379ede0a4b6f5fc397b5e761ad",
+          "subject": "feat(tools): fit masked image edits to the target size and keep unmasked pixels",
+          "summary": "Masked image edits from generate_image are now resized to the edit target and keep original pixels outside the mask, with a new mask_composite option and provider_size reporting.",
           "breaking": false
         },
         {
-          "sha": "00b0cebce412b1509abec7f1d3ecc947ebeb9813",
-          "subject": "fix(condense): keep background questions out of resume anchors",
-          "summary": "Background agent questions and approvals no longer become resume anchors or pending tasks after condense or resume, so answered questions are not replayed to the coordinator.",
+          "sha": "bd3dd3772168f06b508df7231730e6f291af56f6",
+          "subject": "fix(tools): let Generate for Session cover image edits and masks",
+          "summary": "Generate for Session approval now also covers image edits, masks and ordinary quality/size options, while xhigh/max quality and sizes above 2560x1440 still need per-call approval.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "b72e7e8c6d0d13643dd6d542539511170ee896df": {
+    "dd180b4d026f89379ede0a4b6f5fc397b5e761ad": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "generate_image on ChatGPT/Codex OAuth now supports masks, edit action, size, quality, background and output format/compression; only input_fidelity remains API-key only.",
+      "summary": "Masked image edits from generate_image are now resized to the edit target and keep original pixels outside the mask, with a new mask_composite option and provider_size reporting.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "00b0cebce412b1509abec7f1d3ecc947ebeb9813": {
+    "bd3dd3772168f06b508df7231730e6f291af56f6": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Background agent questions and approvals no longer become resume anchors or pending tasks after condense or resume, so answered questions are not replayed to the coordinator.",
+      "summary": "Generate for Session approval now also covers image edits, masks and ordinary quality/size options, while xhigh/max quality and sizes above 2560x1440 still need per-call approval.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
