@@ -938,6 +938,40 @@ User wants to fix the condense resume bug for Codex after summarization.
     );
   });
 
+  it("keeps background coordination questions out of the reattached resume anchor", () => {
+    // Regression: answered background questions were replayed after resume as
+    // the latest pending task, prompting respond_to_background_question calls
+    // that failed with background_question_not_found_or_already_answered.
+    const question =
+      '<background_agent_question request_id="request-1">\nA background agent is blocked on a structured question.\n5. Answers cannot change the ownedPaths fixed at spawn.\n6. After responding, resume any still-active foreground work.\n</background_agent_question>';
+    const messages: AgentMessage[] = [
+      { role: "user", content: "Implement the fake ICD stubs." },
+      { role: "assistant", content: [{ type: "text", text: "Delegating." }] },
+      { role: "user", content: question, hostCoordination: true },
+      { role: "assistant", content: [{ type: "text", text: "Answered." }] },
+      {
+        role: "user",
+        isSummary: true,
+        condenseId: "condense-1",
+        content: [{ type: "text", text: "## Conversation Summary\n\nDone." }],
+      } as AgentMessage,
+    ];
+
+    const effective = getEffectiveHistory(messages);
+    const resume = effective.find((message) => message.isResumeContext);
+    const blocks = (resume?.content ?? []) as Array<{ text?: string }>;
+    const text = blocks[0]?.text ?? "";
+    expect(resume).toBeDefined();
+    expect(text).toContain(
+      'Latest user message: "Implement the fake ICD stubs."',
+    );
+    expect(text).toContain(
+      'Continue from this task: "Implement the fake ICD stubs."',
+    );
+    expect(text).not.toContain("background_agent_question");
+    expect(text).not.toContain("request-1");
+  });
+
   it("prefers the cheap Codex condense model when the request safely fits", async () => {
     const { provider, complete } = makeCodexProvider();
 

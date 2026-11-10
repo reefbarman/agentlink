@@ -1652,6 +1652,47 @@ describe("AgentSession", () => {
       expect(session.lastInputTokens).toBe(0);
       expect(session.lastCacheReadTokens).toBe(0);
     });
+
+    it("marks background coordination messages so resume anchors skip them", async () => {
+      const coordination = {
+        requestId: "request-1",
+        backgroundSessionId: "child-1",
+        task: "Stubs",
+        kind: "question" as const,
+        context: "",
+        questions: [],
+      };
+      const live = await makeSession();
+      live.addUserMessage("question prompt", { coordination });
+      live.addUserMessage("typed", { origin: "vscode" });
+      expect(live.getAllMessages().map((m) => m.hostCoordination)).toEqual([
+        true,
+        undefined,
+      ]);
+
+      // Sessions saved before the flag existed only carry the UI hint.
+      const restored = await makeSession();
+      restored.restoreFromStore({
+        id: "session-3",
+        title: "Restored",
+        createdAt: 1,
+        lastActiveAt: 2,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        messages: [
+          { role: "user", content: "hello" },
+          {
+            role: "user",
+            content: "question prompt",
+            uiHint: { userMessage: { coordination } },
+          },
+        ],
+      });
+      expect(restored.getAllMessages().map((m) => m.hostCoordination)).toEqual([
+        undefined,
+        true,
+      ]);
+    });
   });
 
   describe("mode switching", () => {

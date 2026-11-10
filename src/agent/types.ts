@@ -87,6 +87,11 @@ export type AgentMessage = MessageParam & {
   humanInputId?: string;
   /** Host-admitted external data, never canonical user instructions. */
   externalData?: true;
+  /**
+   * Background-agent question/approval interjection for the coordinator.
+   * Never a canonical user request or resume-anchor pending task.
+   */
+  hostCoordination?: true;
   /** Host-only decision evidence tied to tool results in this source message. */
   humanQuestionAnswers?: import("@agentlink/protocol/structured-question").HumanQuestionAnswer[];
   isSummary?: boolean;

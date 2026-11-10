@@ -1110,6 +1110,7 @@ export class AgentSession {
       role: "user",
       content: text,
       ...(humanInputId ? { humanInputId } : {}),
+      ...(opts?.coordination ? { hostCoordination: true } : {}),
       ...(opts?.skillContext?.length
         ? { skillContext: opts.skillContext }
         : {}),
@@ -1592,6 +1593,12 @@ export class AgentSession {
       data.initialArchitectReviewPending ?? false;
     this.messagesRevision++;
     this.messages = data.messages;
+    // Sessions saved before `hostCoordination` existed only carry the UI hint.
+    for (const message of this.messages) {
+      if (message.uiHint?.userMessage?.coordination) {
+        message.hostCoordination = true;
+      }
+    }
     this.humanDecisionRecord = HumanDecisionRecord.restore(
       data.id,
       data.humanDecisionRecord,

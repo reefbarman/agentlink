@@ -77,6 +77,13 @@ export interface CondenseMessage extends MessageParam {
   isResumeContext?: boolean;
   /** Host-labelled external data must not become a canonical user request. */
   externalData?: true;
+  /**
+   * Host-generated coordination prompt delivered as a user-role message (for
+   * example, a background agent's question to its coordinator). It is not a
+   * human request, so it must never become a canonical user message, pending
+   * task or resume anchor: once answered it would be replayed as stale work.
+   */
+  hostCoordination?: true;
   condenseId?: string;
   condenseParent?: string;
   preservedContext?: PreservedRuntimeContext;
@@ -610,7 +617,8 @@ function extractCanonicalUserMessages(messages: AgentMessage[]): string[] {
         m.role === "user" &&
         !m.isSummary &&
         !m.isResumeContext &&
-        !m.externalData,
+        !m.externalData &&
+        !m.hostCoordination,
     )
     .map((m) => {
       if (typeof m.content === "string") {
