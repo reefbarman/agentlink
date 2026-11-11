@@ -47,6 +47,121 @@ function responsesSse(
 }
 
 describe("standalone Responses provider factories", () => {
+  it("translates media only once in the initial provider-replay request", async () => {
+    const readImageData = vi.fn(() => "abc123");
+    let wireBody: Record<string, unknown> | undefined;
+    const fetch = vi.fn<CodexFetch>(async (input, init) => {
+      wireBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return responsesSse("seen");
+    });
+    const provider = createOpenAIProvider({
+      apiKey: "test-key",
+      modelIds: ["gpt-5.4-mini"],
+      fetch,
+    });
+
+    for await (const _event of provider.stream(
+      {
+        model: "gpt-5.4-mini",
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "inspect" },
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/png",
+                  get data() {
+                    return readImageData();
+                  },
+                },
+              },
+            ],
+          },
+        ],
+        maxTokens: 64,
+      },
+      { principal, authContext: undefined },
+    )) {
+      /* drain */
+    }
+
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(readImageData).toHaveBeenCalledOnce();
+    expect(wireBody?.input).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: "inspect" },
+          {
+            type: "input_image",
+            image_url: "data:image/png;base64,abc123",
+            detail: "auto",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps a separate full-history replay for a stateful continuation", async () => {
+    let socketBody: Record<string, unknown> | undefined;
+    const provider = createCodexProvider({
+      modelIds: ["gpt-5.5"],
+      credentialProvider: {
+        resolveAuth: async () => ({
+          method: "oauth",
+          bearerToken: "test",
+          canRefresh: true,
+        }),
+      },
+      transport: {
+        connector: {
+          connect: async () => ({
+            headers: new Headers(),
+            isOpen: true,
+            close: vi.fn(),
+            async *dispatch(request) {
+              socketBody = request.body as Record<string, unknown>;
+              yield { type: "response.output_text.delta", delta: "seen" };
+              yield {
+                type: "response.completed",
+                response: { id: "ws-full-history", output: [], usage: {} },
+              };
+            },
+          }),
+        },
+      },
+    });
+
+    for await (const _event of provider.stream(
+      {
+        model: "gpt-5.5",
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "complete history" }],
+        maxTokens: 64,
+        state: { previousResponseId: "resp-prior", store: true },
+        providerHints: { codex: { fullHistory: true } },
+      },
+      { principal, authContext: undefined },
+    )) {
+      /* drain */
+    }
+
+    expect(socketBody).toMatchObject({
+      type: "response.create",
+      input: [
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "complete history" }],
+        },
+      ],
+    });
+    expect(socketBody).not.toHaveProperty("previous_response_id");
+  });
+
   it("defaults a collected completion to sockets and forwards live rollback", async () => {
     let enabled: boolean | undefined;
     const close = vi.fn();

@@ -1892,6 +1892,290 @@ describe("restored session pagination", () => {
   });
 });
 
+describe("lazy background transcript media delivery", () => {
+  async function setup() {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const foreground = { id: "fg-media", background: false };
+    const background = { id: "bg-media", background: true, title: "Images" };
+    const image = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: "full-image-data",
+    };
+    const document = {
+      type: "document" as const,
+      mimeType: "application/pdf",
+      name: "proof.pdf",
+      data: "full-document-data",
+    };
+    const messages: AgentMessage[] = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "image-call",
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/png",
+                  data: image.data,
+                },
+              },
+              {
+                type: "document",
+                source: {
+                  type: "base64",
+                  media_type: "application/pdf",
+                  data: document.data,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    const manager = {
+      getForegroundSession: () => foreground,
+      getSession: (id: string) =>
+        id === background.id ? background : foreground,
+      getBackgroundTranscriptMessages: vi.fn(() => messages),
+      getBgSessionInfos: () => [],
+      onEvent: undefined as ((id: string, event: unknown) => void) | undefined,
+    };
+    provider.setSessionManager(manager as never);
+    const posted: Array<Record<string, unknown>> = [];
+    const internals = provider as unknown as {
+      view: unknown;
+      webviewReady: boolean;
+      handleWebviewMessage(
+        message: Record<string, unknown>,
+        context?: unknown,
+      ): Promise<void>;
+    };
+    internals.view = {
+      webview: {
+        postMessage: (msg: Record<string, unknown>) => {
+          posted.push(msg);
+          return Promise.resolve(true);
+        },
+      },
+    };
+    internals.webviewReady = true;
+    const event = Object.freeze({
+      type: "tool_result",
+      toolCallId: "image-call",
+      toolName: "generate_image",
+      result: Object.freeze([image, document]),
+      durationMs: 10,
+    });
+    return {
+      provider,
+      manager,
+      internals,
+      posted,
+      event,
+      image,
+      document,
+      messages,
+    };
+  }
+
+  it("omits collapsed media, hydrates on every open, streams visible media, and preserves foreground and source events", async () => {
+    const test = await setup();
+    try {
+      test.manager.onEvent!("bg-media", test.event);
+      expect(test.posted.at(-1)).toMatchObject({
+        type: "agentBgToolComplete",
+        result: "[image]\n[document]",
+      });
+      expect(JSON.stringify(test.posted)).not.toContain("full-image-data");
+      expect(JSON.stringify(test.posted)).not.toContain("full-document-data");
+      await test.internals.handleWebviewMessage({
+        command: "openBgTranscript",
+        sessionId: "bg-media",
+      });
+      expect(test.posted.at(-1)).toMatchObject({
+        type: "showBgTranscript",
+        messages: test.messages,
+      });
+      test.manager.onEvent!("bg-media", test.event);
+      expect(test.posted.at(-1)).toMatchObject({
+        resultImages: [{ data: test.image.data }],
+        resultDocuments: [{ data: test.document.data }],
+      });
+      await test.internals.handleWebviewMessage({
+        command: "closeBgTranscript",
+      });
+      test.manager.onEvent!("bg-media", test.event);
+      expect(test.posted.at(-1)).not.toHaveProperty("resultImages");
+      expect(test.posted.at(-1)).not.toHaveProperty("resultDocuments");
+      await test.internals.handleWebviewMessage({
+        command: "openBgTranscript",
+        sessionId: "bg-media",
+      });
+      expect(
+        test.manager.getBackgroundTranscriptMessages,
+      ).toHaveBeenCalledTimes(2);
+      expect(test.posted.at(-1)).toMatchObject({
+        type: "showBgTranscript",
+        messages: test.messages,
+      });
+      test.manager.onEvent!("fg-media", test.event);
+      expect(
+        test.posted.filter((msg) => msg.type === "agentToolComplete").at(-1),
+      ).toMatchObject({
+        resultImages: [{ data: test.image.data }],
+        resultDocuments: [{ data: test.document.data }],
+      });
+      expect(test.event.result).toEqual([test.image, test.document]);
+      expect(test.provider.getBrowserBgTranscript("bg-media")).toMatchObject({
+        ok: true,
+        transcript: { messages: test.messages },
+      });
+    } finally {
+      test.provider.dispose();
+    }
+  });
+
+  it("keeps live sidebar transcript media when the host changes the foreground session", async () => {
+    const test = await setup();
+    try {
+      await test.internals.handleWebviewMessage({
+        command: "openBgTranscript",
+        sessionId: "bg-media",
+      });
+      test.manager.getForegroundSession = () => ({
+        id: "another-foreground",
+        background: false,
+      });
+      test.manager.onEvent!("bg-media", test.event);
+      expect(test.posted.at(-1)).toMatchObject({
+        resultImages: [{ data: test.image.data }],
+        resultDocuments: [{ data: test.document.data }],
+      });
+    } finally {
+      test.provider.dispose();
+    }
+  });
+
+  it("omits subscribed media while the sidebar is hidden or unavailable and drops queued hydration on close", async () => {
+    const test = await setup();
+    try {
+      await test.internals.handleWebviewMessage({
+        command: "openBgTranscript",
+        sessionId: "bg-media",
+      });
+      const view = test.internals.view as { visible?: boolean };
+      view.visible = false;
+      test.manager.onEvent!("bg-media", test.event);
+      expect(test.posted.at(-1)).not.toHaveProperty("resultImages");
+      view.visible = true;
+      test.manager.onEvent!("bg-media", test.event);
+      expect(test.posted.at(-1)).toHaveProperty("resultImages");
+      test.internals.webviewReady = false;
+      await test.internals.handleWebviewMessage({
+        command: "openBgTranscript",
+        sessionId: "bg-media",
+      });
+      test.manager.onEvent!("bg-media", test.event);
+      await test.internals.handleWebviewMessage({
+        command: "closeBgTranscript",
+      });
+      const pending = (
+        test.provider as unknown as { pendingMessages: unknown[] }
+      ).pendingMessages;
+      expect(JSON.stringify(pending)).not.toContain("full-image-data");
+      expect(JSON.stringify(pending)).not.toContain("full-document-data");
+      expect(JSON.stringify(pending)).not.toContain("showBgTranscript");
+    } finally {
+      test.provider.dispose();
+    }
+  });
+
+  it("keeps editor subscriptions isolated from the sidebar and other pane generations", async () => {
+    const test = await setup();
+    const { createChatPaneAddress } = await import("./chatPaneProtocol.js");
+    const address = (tabId: string, paneEpoch = 1) =>
+      createChatPaneAddress("controller", "fg-media", {
+        tabId,
+        surface: "editor",
+        epoch: paneEpoch,
+      });
+    const firstPosted: unknown[] = [];
+    const secondPosted: unknown[] = [];
+    const first = {
+      getAddress: () => address("first"),
+      postMessage: (msg: unknown) => firstPosted.push(msg),
+    };
+    const second = {
+      getAddress: () => address("second"),
+      postMessage: (msg: unknown) => secondPosted.push(msg),
+    };
+    const panes = new Map([
+      ["first", first],
+      ["second", second],
+    ]);
+    test.provider.setChatTabPanelHost({
+      isAuthoritativeAddress: () => true,
+      getEditorConnection: (id: string) => panes.get(id),
+      postMessage: (
+        msg: unknown,
+        accepts: (candidate: ReturnType<typeof address>) => boolean = () =>
+          true,
+      ) => {
+        for (const pane of panes.values())
+          if (accepts(pane.getAddress())) pane.postMessage(msg);
+      },
+    } as never);
+    try {
+      await test.provider.handleEditorPaneMessage(
+        { command: "openBgTranscript", sessionId: "bg-media" },
+        first as never,
+      );
+      expect(firstPosted.at(-1)).toMatchObject({
+        type: "showBgTranscript",
+        messages: test.messages,
+      });
+      expect(secondPosted).toEqual([]);
+      expect(test.posted).toEqual([]);
+      test.manager.onEvent!("bg-media", test.event);
+      expect(firstPosted.at(-1)).toMatchObject({
+        type: "agentBgToolComplete",
+        resultImages: [{ data: test.image.data }],
+      });
+      expect(secondPosted).toEqual([]);
+      expect(test.posted.at(-1)).not.toHaveProperty("resultImages");
+      await test.provider.handleEditorPaneMessage(
+        { command: "closeBgTranscript" },
+        first as never,
+      );
+      const before = firstPosted.length;
+      test.manager.onEvent!("bg-media", test.event);
+      expect(firstPosted).toHaveLength(before);
+      await test.provider.handleEditorPaneMessage(
+        { command: "openBgTranscript", sessionId: "bg-media" },
+        first as never,
+      );
+      const replacementPosted: unknown[] = [];
+      panes.set("first", {
+        getAddress: () => address("first", 2),
+        postMessage: (msg: unknown) => replacementPosted.push(msg),
+      });
+      test.manager.onEvent!("bg-media", test.event);
+      expect(replacementPosted).toEqual([]);
+    } finally {
+      test.provider.dispose();
+    }
+  });
+});
+
 describe("ChatViewProvider session state sync", () => {
   beforeEach(() => {
     vi.resetModules();

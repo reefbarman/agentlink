@@ -157,6 +157,8 @@ Accepted write results identify whether authority came from master bypass, the a
 
 ## Background agents and orchestration
 
+In VS Code, background-agent images and documents are loaded into a chat pane when you open **View Full Transcript**, rather than being sent with every background tool completion to panes that are not viewing that transcript. Closing the transcript releases its UI copy; reopening loads the latest history again. The agent's own image context and saved originals are unchanged. Collapsing a background card alone does not discard the agent's model context.
+
 When native background work fails or is interrupted, its result preserves bounded visible assistant findings and references to completed tool work, not just the final error. This is partial evidence, not a successful result or permission to retry. Hidden reasoning is not recovered into the result.
 
 Native coordinator steering explicitly reminds the agent that a progress question is part of its ongoing assignment: answer in commentary and continue rather than finalising only the update. Explicit stop, wrap-up and redirection still take precedence. This guidance does not automatically restart a completed task or infer completion from TODOs.

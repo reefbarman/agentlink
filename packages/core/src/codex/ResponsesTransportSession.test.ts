@@ -76,6 +76,112 @@ describe("ResponsesTransportSession continuation", () => {
     session.dispose();
   });
 
+  it("rejects oversized replay before serializing or cloning its image payload", () => {
+    const session = new ResponsesTransportSession();
+    const oversized = "x".repeat(5 * 1024 * 1024 + 1);
+    completed(session);
+    const stringify = vi.spyOn(JSON, "stringify");
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      session.captureCompletion(
+        { ...body, input: [{ type: "input_image", image_url: oversized }] },
+        {
+          type: "response.completed",
+          response: {
+            id: "response-large",
+            status: "completed",
+            output: [],
+          },
+        },
+      );
+      expect(stringify).not.toHaveBeenCalled();
+      expect(clone).not.toHaveBeenCalled();
+      expect(
+        session.prepareBody({
+          ...body,
+          input: [{ type: "input_image", image_url: oversized }],
+        }).incremental,
+      ).toBe(false);
+    } finally {
+      stringify.mockRestore();
+      clone.mockRestore();
+      session.dispose();
+    }
+  });
+
+  it("keeps the exact replay limit for JSON escaping overhead", () => {
+    const session = new ResponsesTransportSession();
+    const escapedInput = [{ content: '"'.repeat(3 * 1024 * 1024) }];
+    session.captureCompletion(
+      { ...body, input: escapedInput },
+      {
+        type: "response.completed",
+        response: { id: "escaped", status: "completed", output: [] },
+      },
+    );
+    expect(
+      session.prepareBody({ ...body, input: escapedInput }).incremental,
+    ).toBe(false);
+    session.dispose();
+  });
+
+  it("does not count object properties omitted by JSON", () => {
+    const session = new ResponsesTransportSession();
+    const omittedInput = [{ ["x".repeat(5 * 1024 * 1024)]: undefined }];
+    session.captureCompletion(
+      { ...body, input: omittedInput },
+      {
+        type: "response.completed",
+        response: { id: "omitted", status: "completed", output: [] },
+      },
+    );
+    expect(
+      session.prepareBody({ ...body, input: omittedInput }).incremental,
+    ).toBe(true);
+    session.dispose();
+  });
+
+  it("measures the replay limit in JSON characters rather than UTF-8 bytes", () => {
+    const session = new ResponsesTransportSession();
+    const unicodeInput = [{ content: "😀".repeat(1_400_000) }];
+    session.captureCompletion(
+      { ...body, input: unicodeInput },
+      {
+        type: "response.completed",
+        response: { id: "unicode", status: "completed", output: [] },
+      },
+    );
+    expect(
+      session.prepareBody({ ...body, input: unicodeInput }).incremental,
+    ).toBe(true);
+    session.dispose();
+  });
+
+  it("rejects oversized output without serializing it or retaining the previous chain", () => {
+    const session = new ResponsesTransportSession();
+    completed(session);
+    const largeOutput = [{ text: "x".repeat(5 * 1024 * 1024 + 1) }];
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      session.captureCompletion(body, {
+        type: "response.completed",
+        response: {
+          id: "large-output",
+          status: "completed",
+          output: largeOutput,
+        },
+      });
+      expect(stringify).not.toHaveBeenCalled();
+      expect(
+        session.prepareBody({ ...body, input: [...input, ...output] })
+          .incremental,
+      ).toBe(false);
+    } finally {
+      stringify.mockRestore();
+      session.dispose();
+    }
+  });
+
   it("invalidates history on reconnect and incomplete response", () => {
     const session = new ResponsesTransportSession();
     completed(session);

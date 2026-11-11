@@ -1466,6 +1466,59 @@ describe("AgentSession", () => {
       expect(session.omittedToolResultContextAttributions).toBe(0);
     });
 
+    it("counts large media attribution without materialising a character array", async () => {
+      const session = await makeSession();
+      session.addUsage(0, 0);
+      const retainedContent = "a".repeat(8 * 1024 * 1024) + "é😀\ud800x\udc00";
+      const iterator = vi
+        .spyOn(String.prototype, Symbol.iterator)
+        .mockImplementation(() => {
+          throw new Error("Media attribution must not iterate into an array");
+        });
+      try {
+        session.addToolResultContextAttribution(
+          "call-large-image",
+          "generate_image",
+          retainedContent,
+        );
+      } finally {
+        iterator.mockRestore();
+      }
+
+      const chars = 8 * 1024 * 1024 + 5;
+      const estimatedTokens = Math.ceil(chars / 4);
+      expect(session.toolResultContextAttributions).toEqual([
+        {
+          toolCallId: "call-large-image",
+          toolName: "generate_image",
+          chars,
+          bytes: Buffer.byteLength(retainedContent, "utf8"),
+          estimatedTokens,
+        },
+      ]);
+      expect(session.estimatedAccumulationBySource).toEqual({
+        "tool:generate_image": estimatedTokens,
+      });
+      expect(retainedContent.endsWith("é😀\ud800x\udc00")).toBe(true);
+    });
+
+    it("preserves explicit media token estimates while counting Unicode attribution", async () => {
+      const session = await makeSession();
+      session.addUsage(0, 0);
+      session.addToolResultContextAttribution(
+        "call-media",
+        "read_file",
+        "é😀",
+        262,
+      );
+      expect(session.toolResultContextAttributions[0]).toMatchObject({
+        chars: 2,
+        bytes: 6,
+        estimatedTokens: 262,
+      });
+      expect(session.estimatedAccumulationBySource["tool:read_file"]).toBe(262);
+    });
+
     it("attributes user messages and attachments to the accumulator", async () => {
       const session = await makeSession();
       session.addUserMessage("x".repeat(400), {

@@ -166,13 +166,13 @@ interface OpenTranscriptState {
   visible: boolean;
 }
 
-function reduceOpenTranscript(
+export function reduceOpenTranscript(
   current: OpenTranscriptState | null,
   sessionId: string,
   action: AppAction,
   overrides?: Partial<OpenTranscriptState>,
 ): OpenTranscriptState | null {
-  if (current?.sessionId !== sessionId) return current;
+  if (!current?.visible || current.sessionId !== sessionId) return current;
   const next = reducer(
     {
       ...initialState,
@@ -204,8 +204,9 @@ function reduceOpenTranscript(
 export function shouldReuseBackgroundTranscript(
   currentSessionId: string | undefined,
   requestedSessionId: string,
+  visible: boolean,
 ): boolean {
-  return currentSessionId === requestedSessionId;
+  return visible && currentSessionId === requestedSessionId;
 }
 
 export function bgTranscriptStreamingOverride(
@@ -692,6 +693,7 @@ export function App({
   const [showFleetRequest, setShowFleetRequest] = useState(0);
   const [transcriptView, setTranscriptView] =
     useState<OpenTranscriptState | null>(null);
+
   const [btwStates, setBtwStates] = useState<Record<string, BtwState>>({});
   const [worktreeSetupState, setWorktreeSetupState] =
     useState<WorktreeSetupState | null>(null);
@@ -2820,7 +2822,11 @@ export function App({
   const handleOpenBgTranscript = useCallback(
     (sessionId: string) => {
       if (
-        shouldReuseBackgroundTranscript(transcriptView?.sessionId, sessionId)
+        shouldReuseBackgroundTranscript(
+          transcriptView?.sessionId,
+          sessionId,
+          transcriptView?.visible === true,
+        )
       ) {
         setTranscriptView((current) =>
           current ? { ...current, visible: true } : current,
@@ -2838,7 +2844,7 @@ export function App({
       }
       vscodeApi.postMessage({ command: "openBgTranscript", sessionId });
     },
-    [transcriptView?.sessionId, vscodeApi],
+    [transcriptView?.sessionId, transcriptView?.visible, vscodeApi],
   );
 
   const handleLoadEarlierSessionMessages = useCallback(() => {
@@ -2898,6 +2904,7 @@ export function App({
     (projectId?: string) => {
       startupRestorePendingRef.current = false;
       dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
+      vscodeApi.postMessage({ command: "closeBgTranscript" });
       setTranscriptView(null);
       // Optimistically clear to an empty chat: the host may still be busy
       // parsing a large restored transcript, and the New Chat click must not
@@ -2954,6 +2961,7 @@ export function App({
           toVsCodeSelectionMessage({ type: "mode", mode: slug }),
         );
       } else {
+        vscodeApi.postMessage({ command: "closeBgTranscript" });
         setTranscriptView(null);
         const pending = pendingSessionSelectionsRef.current;
         if (
@@ -3109,6 +3117,7 @@ export function App({
         case "new":
           startupRestorePendingRef.current = false;
           dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
+          vscodeApi.postMessage({ command: "closeBgTranscript" });
           setTranscriptView(null);
           vscodeApi.postMessage({
             command: "chatTabNewChat",
@@ -3619,6 +3628,7 @@ export function App({
     (tabId: string) => {
       const tab = findWorkspaceTab(tabId);
       if (!tab) return;
+      vscodeApi.postMessage({ command: "closeBgTranscript" });
       setTranscriptView(null);
       setShowHistory(false);
       setChatTabFailure(null);
@@ -3631,6 +3641,7 @@ export function App({
     [findWorkspaceTab, vscodeApi],
   );
   const handleNewChatTab = useCallback(() => {
+    vscodeApi.postMessage({ command: "closeBgTranscript" });
     setTranscriptView(null);
     setShowHistory(false);
     setChatTabFailure(null);
@@ -3937,11 +3948,10 @@ export function App({
                   bgSessions={bgSessions}
                   onStopBackground={handleStopBackground}
                   onOpenTranscript={handleOpenBgTranscript}
-                  onClose={() =>
-                    setTranscriptView((current) =>
-                      current ? { ...current, visible: false } : current,
-                    )
-                  }
+                  onClose={() => {
+                    vscodeApi.postMessage({ command: "closeBgTranscript" });
+                    setTranscriptView(null);
+                  }}
                 />
               </MarkdownImageProvider>
             )}

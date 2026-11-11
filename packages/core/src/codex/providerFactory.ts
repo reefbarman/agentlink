@@ -320,25 +320,27 @@ class ResponsesModelBackend<
         const messagesAreFull =
           routingHint?.fullHistory === true ||
           !request.state?.previousResponseId;
-        const fullBody = messagesAreFull
-          ? buildCodexResolvedRequestBody({
-              authMethod: auth.method,
-              model: request.model,
-              instructions: request.systemPrompt,
-              input: translateCodexMessages(request.messages),
-              maxTokens: request.maxTokens,
-              state: { ...request.state, previousResponseId: undefined },
-              cache: request.cache,
-              reasoningEffort: request.reasoningEffort,
-              reasoningMode: request.reasoningMode,
-              serviceTier: request.serviceTier,
-              outputFormat: request.outputFormat,
-              tools: request.tools
-                ? translateCodexTools(request.tools)
-                : undefined,
-              hostedTools: request.hostedTools,
-            }).body
-          : undefined;
+        const fullBody = !request.state?.previousResponseId
+          ? resolved.body
+          : routingHint?.fullHistory === true
+            ? buildCodexResolvedRequestBody({
+                authMethod: auth.method,
+                model: request.model,
+                instructions: request.systemPrompt,
+                input: translateCodexMessages(request.messages),
+                maxTokens: request.maxTokens,
+                state: { ...request.state, previousResponseId: undefined },
+                cache: request.cache,
+                reasoningEffort: request.reasoningEffort,
+                reasoningMode: request.reasoningMode,
+                serviceTier: request.serviceTier,
+                outputFormat: request.outputFormat,
+                tools: request.tools
+                  ? translateCodexTools(request.tools)
+                  : undefined,
+                hostedTools: request.hostedTools,
+              }).body
+            : undefined;
         yield* executeCodexResponsesStream({
           client: createOpenAiResponsesClient(auth, endpoint, {
             fetch: this.fetch,

@@ -2,6 +2,7 @@ import {
   bgTranscriptStreamingOverride,
   initialState,
   queuedMessagesReadyToDrain,
+  reduceOpenTranscript,
   reducer,
   shouldAcceptSessionChunk,
   shouldDropSessionScopedEvent,
@@ -2957,10 +2958,45 @@ describe("webview App reducer background agent launch blocks", () => {
 });
 
 describe("background transcript retention", () => {
-  it("reuses only the cached transcript for the requested background session", () => {
-    expect(shouldReuseBackgroundTranscript("bg-1", "bg-1")).toBe(true);
-    expect(shouldReuseBackgroundTranscript("bg-1", "bg-2")).toBe(false);
-    expect(shouldReuseBackgroundTranscript(undefined, "bg-1")).toBe(false);
+  it("reuses only a visible transcript, so reopening hydrates authoritative media", () => {
+    expect(shouldReuseBackgroundTranscript("bg-1", "bg-1", true)).toBe(true);
+    expect(shouldReuseBackgroundTranscript("bg-1", "bg-1", false)).toBe(false);
+    expect(shouldReuseBackgroundTranscript("bg-1", "bg-2", true)).toBe(false);
+    expect(shouldReuseBackgroundTranscript(undefined, "bg-1", false)).toBe(
+      false,
+    );
+  });
+
+  it("does not accumulate live images in a hidden transcript", () => {
+    const hidden = {
+      sessionId: "bg-1",
+      task: "Images",
+      messages: reducer(initialState, {
+        type: "TOOL_START",
+        toolCallId: "image-call",
+        toolName: "generate_image",
+      }).messages,
+      streaming: false,
+      todos: [],
+      statusOverride: null,
+      visible: false,
+    };
+    const action = {
+      type: "TOOL_COMPLETE" as const,
+      toolCallId: "image-call",
+      toolName: "generate_image",
+      result: "[image]",
+      durationMs: 1,
+      resultImages: [{ mimeType: "image/png", data: "live-image" }],
+    };
+    expect(reduceOpenTranscript(hidden, "bg-1", action)).toBe(hidden);
+    expect(reduceOpenTranscript(null, "bg-1", action)).toBeNull();
+    const visible = reduceOpenTranscript(
+      { ...hidden, visible: true },
+      "bg-1",
+      action,
+    );
+    expect(JSON.stringify(visible)).toContain("live-image");
   });
 });
 

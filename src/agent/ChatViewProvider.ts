@@ -1297,6 +1297,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private releaseInstallState: ReleaseInstallState = { phase: "idle" };
   private webviewReady = false;
   private pendingMessages: ExtensionToWebview[] = [];
+  private sidebarBgTranscript?: { sessionId: string; sourceSessionId?: string };
+  private readonly editorBgTranscripts = new WeakMap<
+    ChatPaneConnection,
+    { sessionId: string; sourceSessionId?: string }
+  >();
   private chatTabStartupRestore: Promise<unknown> = Promise.resolve();
   /**
    * True once the current startup restore promise has settled. Gates the
@@ -8837,6 +8842,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.updateBrowserGatewayThemeState(() => {
       this.view = webviewView;
       this.webviewReady = false;
+      this.sidebarBgTranscript = undefined;
       this.browserGatewayThemeSnapshot = null;
     });
 
@@ -8852,6 +8858,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.updateBrowserGatewayThemeState(() => {
         this.view = undefined;
         this.webviewReady = false;
+        this.sidebarBgTranscript = undefined;
         this.browserGatewayThemeSnapshot = null;
       });
     });
@@ -8859,6 +8866,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     webviewView.onDidChangeVisibility(() => {
       if (webviewView.visible) {
         this.sendInitialState();
+        // Hidden panes miss live media deliberately. Refresh the open view
+        // from authoritative history when the sidebar becomes visible again.
+        const subscription = this.sidebarBgTranscript;
+        if (subscription) {
+          void this.handleWebviewMessage({
+            command: "openBgTranscript",
+            sessionId: subscription.sessionId,
+          });
+        }
       }
     });
 
@@ -9029,6 +9045,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
 
       case "webviewReady":
+        if (!context?.connection) {
+          this.sidebarBgTranscript = undefined;
+          this.pendingMessages = this.pendingMessages
+            .filter((message) => message.type !== "showBgTranscript")
+            .map((message) => this.withoutBackgroundResultMedia(message));
+        }
         await this.hydrateReadyWebview();
         break;
 
@@ -10768,6 +10790,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "closeBgTranscript": {
+        if (context?.connection) {
+          this.editorBgTranscripts.delete(context.connection);
+        } else {
+          this.sidebarBgTranscript = undefined;
+          this.pendingMessages = this.pendingMessages
+            .filter((message) => message.type !== "showBgTranscript")
+            .map((message) => this.withoutBackgroundResultMedia(message));
+        }
+        break;
+      }
+
       case "openBgTranscript": {
         const sessionId = msg.sessionId as string;
         if (sessionId) {
@@ -10775,13 +10809,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           const messages =
             this.sessionManager?.getBackgroundTranscriptMessages(sessionId);
           if (session && messages) {
-            this.postMessage({
+            const subscription = { sessionId, sourceSessionId };
+            const response: ExtensionToWebview = {
               type: "showBgTranscript",
               sessionId,
               task: session.title ?? "Background Agent",
               messages: stripMediaForTransport(messages),
               todos: getLatestTodoState(messages),
-            });
+            };
+            // Hydration and live media belong only to the requesting pane.
+            if (context?.connection) {
+              this.editorBgTranscripts.set(context.connection, subscription);
+              context.connection.postMessage(response);
+            } else {
+              this.sidebarBgTranscript = subscription;
+              this.sendOrQueueWebviewMessage(response);
+            }
           } else {
             vscode.window.showWarningMessage(
               "Background agent session not found — it may have been cleaned up.",
@@ -15273,6 +15316,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private postMessageToEditorPanes(msg: ExtensionToWebview): void {
     const host = this.chatTabPanelHost;
     if (!host) return;
+    if (msg.type.startsWith("agentBg") && "sessionId" in msg) {
+      // Background transcripts can be viewed from a parent session's pane.
+      host.postMessage(msg, (address) => {
+        const connection = host.getEditorConnection(address.tabId);
+        const subscription = connection
+          ? this.editorBgTranscripts.get(connection)
+          : undefined;
+        return (
+          subscription?.sessionId === msg.sessionId &&
+          subscription?.sourceSessionId === address.sessionId
+        );
+      });
+      // Keep the existing route for a pane bound directly to this session,
+      // but do not send media unless it explicitly opened the transcript.
+      const collapsedMessage = this.withoutBackgroundResultMedia(msg);
+      host.postMessage(collapsedMessage, (address) => {
+        const connection = host.getEditorConnection(address.tabId);
+        const subscription = connection
+          ? this.editorBgTranscripts.get(connection)
+          : undefined;
+        return (
+          address.sessionId === msg.sessionId &&
+          !(
+            subscription?.sessionId === msg.sessionId &&
+            subscription?.sourceSessionId === address.sessionId
+          )
+        );
+      });
+      return;
+    }
     const sessionId =
       msg.type === "stateUpdate"
         ? msg.state.sessionId
@@ -15297,7 +15370,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private withoutBackgroundResultMedia(
+    msg: ExtensionToWebview,
+  ): ExtensionToWebview {
+    if (msg.type !== "agentBgToolComplete") return msg;
+    const { resultImages: _images, resultDocuments: _documents, ...rest } = msg;
+    return rest;
+  }
+
   private sendOrQueueWebviewMessage(msg: ExtensionToWebview): void {
+    // Filter at the pane delivery boundary, never mutate the source event or
+    // history used by model execution and browser remote publication.
+    if (
+      msg.type === "agentBgToolComplete" &&
+      !(
+        this.webviewReady &&
+        this.view &&
+        this.view.visible !== false &&
+        this.sidebarBgTranscript?.sessionId === msg.sessionId
+      )
+    ) {
+      msg = this.withoutBackgroundResultMedia(msg);
+    }
     if (!this.webviewReady || !this.view) {
       this.pendingMessages.push(msg);
       return;

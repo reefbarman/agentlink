@@ -8,6 +8,7 @@ import {
 const SOCKET_IDLE_MS = 60_000;
 const SOCKET_MAX_AGE_MS = 55 * 60_000;
 const SUPPRESSION_MS = 5 * 60_000;
+const MAX_REPLAY_CHARS = 5 * 1024 * 1024;
 
 /** Host-owned, in-memory only. Do not share across windows or principals. */
 export class ResponsesTransportPolicy {
@@ -173,8 +174,7 @@ export class ResponsesTransportSession {
       return;
     }
     const { input, previous_response_id: _previous, ...properties } = body;
-    const replayBytes = stableJson([input, output]).length;
-    if (replayBytes > 5 * 1024 * 1024) {
+    if (replayExceedsLimit(input, output, MAX_REPLAY_CHARS)) {
       this.#continuation = undefined;
       return;
     }
@@ -215,6 +215,51 @@ export class ResponsesTransportSession {
     this.#disposed = true;
     this.invalidate();
   }
+}
+
+function replayExceedsLimit(
+  input: unknown[],
+  output: unknown[],
+  maxChars: number,
+): boolean {
+  let lowerBound = 0;
+  const pending: unknown[] = [input, output];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value === "string") {
+      lowerBound += value.length;
+    } else if (
+      value === null ||
+      typeof value === "boolean" ||
+      typeof value === "number"
+    ) {
+      lowerBound++;
+    } else if (Array.isArray(value)) {
+      lowerBound += 2 + Math.max(0, value.length - 1);
+      if (lowerBound > maxChars) return true;
+      for (const item of value) pending.push(item);
+    } else if (typeof value === "object") {
+      lowerBound += 2;
+      for (const key of Object.keys(value)) {
+        const nested = (value as Record<string, unknown>)[key];
+        // JSON omits these object properties, including their key names.
+        if (
+          nested === undefined ||
+          typeof nested === "function" ||
+          typeof nested === "symbol"
+        ) {
+          continue;
+        }
+        lowerBound += key.length + 2;
+        if (lowerBound > maxChars) return true;
+        pending.push(nested);
+      }
+    }
+    if (lowerBound > maxChars) return true;
+  }
+  // Escaping and scalar values can make the exact JSON larger than the lower
+  // bound. Only serialize after ruling out the large raw image histories.
+  return stableJson([input, output]).length > maxChars;
 }
 
 function stableJson(value: unknown): string {

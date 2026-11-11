@@ -124,6 +124,8 @@ For other workspaces, run **AgentLink: Manage Index Storage** from the Command P
 
 ## The extension host keeps crashing out of memory
 
+Image-heavy chats, including background agents, can retain large image histories even when their previews are collapsed. Collapsing a preview does not remove images from the model's context. AgentLink avoids duplicate full-history Codex translation, rejects oversized WebSocket continuation snapshots before serializing their image data, and measures tool-result characters without allocating a per-character array. These reduce memory spikes without deleting saved images or removing model-visible history, but do not impose a total image-history memory limit. If crashes persist, stop the image-heavy chats and start a fresh chat with only the images needed for the next task.
+
 If a window's extension host restarts repeatedly (VS Code logs "crashed with code 5", or a JavaScript heap out-of-memory error), turn on `agentlink.diagnostics.heapProfiling` and reload the window. AgentLink then samples heap allocations and, each time heap use first passes 35%, 60% and 85% of the limit, writes a `.heapprofile` (open it in Chrome DevTools' Memory tab) plus a `.txt` summary of the top allocating functions to `~/.agentlink/diagnostics`. Reproduce the crash once, then share those files. Turn the setting off afterwards. Session history files are not changed by a crash, but chats created and not yet saved before it can be lost.
 
 ## A sandbox helper failed during a command

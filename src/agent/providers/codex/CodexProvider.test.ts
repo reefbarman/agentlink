@@ -195,6 +195,51 @@ describe("CodexProvider.complete", () => {
     },
   );
 
+  it("translates image data only once for a collected completion", async () => {
+    const readImageData = vi.fn(() => "abc123");
+    createMock.mockImplementationOnce(async () =>
+      (async function* () {
+        yield { type: "response.done", response: { usage: {} } };
+      })(),
+    );
+    const provider = new CodexProvider(makeAuthManager() as never);
+    await provider.complete({
+      model: "gpt-5.5",
+      systemPrompt: "system",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/png",
+                get data() {
+                  return readImageData();
+                },
+              },
+            },
+          ],
+        },
+      ],
+      maxTokens: 64,
+    });
+    expect(readImageData).toHaveBeenCalledOnce();
+    expect(createMock.mock.calls[0][0].input).toEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_image",
+            image_url: "data:image/png;base64,abc123",
+            detail: "auto",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("uses streaming mode and omits unsupported temperature", async () => {
     let requestBody: Record<string, unknown> | undefined;
     createMock.mockImplementationOnce(
@@ -957,6 +1002,59 @@ describe("CodexProvider.complete", () => {
 });
 
 describe("CodexProvider.stream", () => {
+  it("translates media only once in the initial provider-replay request", async () => {
+    const readImageData = vi.fn(() => "abc123");
+    let requestBody: Record<string, unknown> | undefined;
+    createMock.mockImplementationOnce(async (body: Record<string, unknown>) => {
+      requestBody = body;
+      return (async function* () {
+        yield { type: "response.done", response: { usage: {} } };
+      })();
+    });
+    const provider = new CodexProvider(makeAuthManager() as never);
+
+    for await (const _event of provider.stream({
+      model: "gpt-5.5",
+      systemPrompt: "system",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "inspect" },
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/png",
+                get data() {
+                  return readImageData();
+                },
+              },
+            },
+          ],
+        },
+      ],
+      maxTokens: 64,
+    })) {
+      /* drain */
+    }
+
+    expect(readImageData).toHaveBeenCalledOnce();
+    expect(requestBody?.input).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: "inspect" },
+          {
+            type: "input_image",
+            image_url: "data:image/png;base64,abc123",
+            detail: "auto",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("keeps previousResponseId requests on HTTP without canonical replay", async () => {
     createMock.mockImplementationOnce(async () =>
       (async function* () {

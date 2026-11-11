@@ -1864,10 +1864,18 @@ export class AgentSession {
     toolCallId: string,
     toolName: string,
     retainedContent: string,
-    estimatedTokens = estimateTokensFromChars([...retainedContent].length),
+    estimatedTokens?: number,
   ): void {
-    const chars = [...retainedContent].length;
-    const bytes = Buffer.byteLength(retainedContent, "utf8");
+    // Count Unicode code points without spreading potentially multi-megabyte
+    // image results into a much larger array of individual characters.
+    let chars = retainedContent.length;
+    for (let index = 0; index < retainedContent.length; index += 1) {
+      if (retainedContent.codePointAt(index)! > 0xffff) {
+        chars -= 1;
+        index += 1;
+      }
+    }
+    estimatedTokens ??= estimateTokensFromChars(chars);
     this.addKnownTokens(estimatedTokens, `tool:${toolName}`);
     if (this.toolResultContextAttributions.length >= 64) {
       this.omittedToolResultContextAttributions += 1;
@@ -1877,7 +1885,7 @@ export class AgentSession {
       toolCallId,
       toolName,
       chars,
-      bytes,
+      bytes: Buffer.byteLength(retainedContent, "utf8"),
       estimatedTokens,
     });
   }

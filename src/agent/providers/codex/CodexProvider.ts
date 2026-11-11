@@ -462,8 +462,9 @@ export class CodexProvider implements ModelProvider {
           useResponsesLite: usesCodexResponsesLite(effectiveModel, auth.method),
         };
         const requestBody = buildCodexEndpointRequestBody(requestOptions);
-        const fullBody =
-          routingHint?.fullHistory || !state?.previousResponseId
+        const fullBody = !state?.previousResponseId
+          ? requestBody
+          : routingHint?.fullHistory
             ? buildCodexEndpointRequestBody({
                 ...requestOptions,
                 input: translateCodexMessages(messages),
@@ -685,8 +686,9 @@ export class CodexProvider implements ModelProvider {
         useResponsesLite: usesCodexResponsesLite(effectiveModel, auth.method),
       };
       const requestBody = buildCodexEndpointRequestBody(requestOptions);
-      const fullBody =
-        request.providerHints?.codex?.fullHistory || !state?.previousResponseId
+      const fullBody = !state?.previousResponseId
+        ? requestBody
+        : request.providerHints?.codex?.fullHistory
           ? buildCodexEndpointRequestBody({
               ...requestOptions,
               input: translateCodexMessages(messages),
