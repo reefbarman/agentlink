@@ -90,7 +90,9 @@ import {
   EXPECTED_RESULT_PROPERTY,
   FORBIDDEN_PATHS_PROPERTY,
   OWNED_PATHS_PROPERTY,
+  REASONING_EFFORT_PROPERTY,
   REVIEW_SCOPE_PROPERTY,
+  parseBackgroundReasoningEffortInput,
   parseAgentBudgetInput,
   parseExpectedResultInput,
   parseModelTierInput,
@@ -670,6 +672,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
           description:
             'Optional routing tier override. Research defaults to the foreground tier; other ordinary work defaults below it. Use "foreground" only when complexity or useful parallelization justifies the same model; use "deep_reasoning" only when the actual risk justifies the higher-cost model.',
         },
+        reasoningEffort: REASONING_EFFORT_PROPERTY,
         ownedPaths: OWNED_PATHS_PROPERTY,
         forbiddenPaths: FORBIDDEN_PATHS_PROPERTY,
         permissionProfile: {
@@ -5118,6 +5121,9 @@ async function dispatchToolCallWithTrackedApprovals(
           params.taskClass !== undefined && params.taskClass !== null
             ? String(params.taskClass)
             : undefined,
+        reasoningEffort: parseBackgroundReasoningEffortInput(
+          params.reasoningEffort,
+        ),
         modelTier: parseModelTierInput(params.modelTier),
         ownedPaths: Array.isArray(params.ownedPaths)
           ? params.ownedPaths.map(String)

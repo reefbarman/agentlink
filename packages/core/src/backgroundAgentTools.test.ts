@@ -1,5 +1,6 @@
 import {
   GET_BACKGROUND_RESULT_TOOL,
+  REASONING_EFFORT_PROPERTY,
   appendOwnershipHandoff,
   buildBackgroundDenialPayload,
   buildBackgroundFailurePayload,
@@ -13,10 +14,13 @@ import {
   isResearchTaskClass,
   isReviewTaskClass,
   parseAgentBudgetInput,
+  parseBackgroundReasoningEffortInput,
   parseModelTierInput,
   resolveBackgroundBudget,
 } from "./backgroundAgentTools.js";
 import { describe, expect, it } from "vitest";
+
+import { CORE_REASONING_EFFORTS } from "@agentlink/protocol/model-catalog";
 
 describe("background task classes and budgets", () => {
   it("classifies VS Code's task classes", () => {
@@ -68,6 +72,25 @@ describe("background task classes and budgets", () => {
     expect(parseModelTierInput("huge")).toBeUndefined();
     expect(parseModelTierInput(null)).toBeUndefined();
   });
+});
+
+describe("background reasoning effort", () => {
+  it("advertises the canonical reasoning levels and preserves omission", () => {
+    expect(REASONING_EFFORT_PROPERTY.enum).toEqual(CORE_REASONING_EFFORTS);
+    expect(parseBackgroundReasoningEffortInput(undefined)).toBeUndefined();
+    for (const effort of CORE_REASONING_EFFORTS) {
+      expect(parseBackgroundReasoningEffortInput(effort)).toBe(effort);
+    }
+  });
+
+  it.each([null, "balanced", "HIGH", "", 3])(
+    "rejects invalid effort %s",
+    (effort) => {
+      expect(() => parseBackgroundReasoningEffortInput(effort)).toThrow(
+        /Invalid reasoningEffort/,
+      );
+    },
+  );
 });
 
 describe("background agent tool contract", () => {

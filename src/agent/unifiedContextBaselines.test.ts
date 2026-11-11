@@ -806,10 +806,10 @@ describe("unified context Stage 0 baselines", () => {
       (measurement) => measurement.mode === "code",
     )?.estimatedTokens;
     expect(codeProjectedToolTokens).toBeDefined();
-    // Includes search_workspace_sessions, advertised inline (not deferred).
+    // Includes inline search_workspace_sessions and explicit background reasoningEffort selection.
     expect(
       codeReasoningPromptTokens + codeProjectedToolTokens!,
-    ).toBeLessThanOrEqual(18_900);
+    ).toBeLessThanOrEqual(19_000);
     if (process.env.UPDATE_UNIFIED_CONTEXT_BASELINE === "1") {
       fs.writeFileSync(
         path.join(fixtureRoot, "runtime-measurements.json"),

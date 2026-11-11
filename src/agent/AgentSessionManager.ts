@@ -28,6 +28,7 @@ import {
   getBudgetHardLimitRatio,
   getEngineHardLimit,
   resolveBackgroundBudget,
+  parseBackgroundReasoningEffortInput,
 } from "@agentlink/core/background-agent-tools";
 import { workHistoryRegistry } from "./WorkHistoryRegistry.js";
 import * as nodePath from "path";
@@ -2409,15 +2410,15 @@ export class AgentSessionManager {
   }
 
   /**
-   * Validate an effort pinned by agentlink.background.reviewTarget against the
-   * model the review will actually run on. A pinned effort that the model
+   * Validate a pinned background effort against the model it will run on.
+   * A pinned effort that the model
    * cannot honor fails loudly instead of being silently clamped.
    */
-  private resolveConfiguredReviewEffort(
+  private resolvePinnedBackgroundEffort(
     modelId: string,
     effort: ReasoningEffort,
+    setting = "agentlink.background.reviewTarget",
   ): ReasoningEffort {
-    const setting = "agentlink.background.reviewTarget";
     const capabilities = this.host.providers
       .listAllModels()
       .find((model) => model.id === modelId)?.capabilities;
@@ -11939,6 +11940,9 @@ export class AgentSessionManager {
         "spawn_background_agent cannot create worktrees; use the explicit /worktree command instead",
       );
     }
+    const requestedEffort = parseBackgroundReasoningEffortInput(
+      request.reasoningEffort,
+    );
     const task = request.task?.trim();
     const message = request.message?.trim();
     if (!task || !message) {
@@ -12027,6 +12031,11 @@ export class AgentSessionManager {
     );
 
     if (backendRoute.backend === "acp") {
+      if (requestedEffort !== undefined) {
+        throw new Error(
+          "reasoningEffort is not supported by ACP background agents because the external agent controls its own reasoning. Use a native background agent or omit reasoningEffort.",
+        );
+      }
       if (inheritedSkillAuthoritySnapshot?.allowedTools) {
         throw new Error(
           "ACP background agents cannot inherit active skill tool restrictions; use a native background agent",
@@ -12466,12 +12475,21 @@ export class AgentSessionManager {
         unavailableProviders: this.getCoolingBackgroundProviders(),
       },
     );
-    const configuredReviewEffort = backendRoute.configuredReviewEffort
-      ? this.resolveConfiguredReviewEffort(
-          route.resolvedModel,
-          backendRoute.configuredReviewEffort,
-        )
-      : undefined;
+    const configuredReviewEffort =
+      requestedEffort === undefined && backendRoute.configuredReviewEffort
+        ? this.resolvePinnedBackgroundEffort(
+            route.resolvedModel,
+            backendRoute.configuredReviewEffort,
+          )
+        : undefined;
+    const explicitEffort =
+      requestedEffort !== undefined
+        ? this.resolvePinnedBackgroundEffort(
+            route.resolvedModel,
+            requestedEffort,
+            "spawn_background_agent reasoningEffort",
+          )
+        : undefined;
     const configuredReviewDetail = configuredReviewEffort
       ? `${configuredReviewModel ?? route.resolvedModel}, effort=${configuredReviewEffort}`
       : configuredReviewModel;
@@ -12569,8 +12587,11 @@ export class AgentSessionManager {
     if (route.thinkingBudget === 0) {
       this.applyReasoningEffortToSession(session, "none");
     }
-    if (configuredReviewEffort) {
-      this.applyReasoningEffortToSession(session, configuredReviewEffort);
+    if (explicitEffort !== undefined || configuredReviewEffort !== undefined) {
+      this.applyReasoningEffortToSession(
+        session,
+        explicitEffort ?? configuredReviewEffort!,
+      );
     }
 
     session.title = task.slice(0, 80);
@@ -12631,6 +12652,9 @@ export class AgentSessionManager {
         forbiddenPaths: request.forbiddenPaths,
         permissionProfile: effectivePermissionProfile,
         expectedResult: effectiveExpectedResult,
+        ...(requestedEffort !== undefined
+          ? { reasoningEffort: requestedEffort }
+          : {}),
         reviewScopeSummary:
           reviewTarget?.summary ??
           (isReviewTask ? reviewMessageScopeSummary : undefined),
@@ -14148,6 +14172,7 @@ ${instruction}`
         mode: fleet.resolvedMode,
         ...retryRouting,
         taskClass: fleet.taskClass,
+        reasoningEffort: fleet.delegation?.reasoningEffort,
         modelTier: fleet.requestedModelTier ?? fleet.modelTier,
         ownedPaths: fleet.delegation?.ownedPaths,
         forbiddenPaths: fleet.delegation?.forbiddenPaths,

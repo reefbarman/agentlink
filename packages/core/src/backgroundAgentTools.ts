@@ -4,7 +4,11 @@ import type {
   BackgroundResultState,
 } from "@agentlink/protocol/background-result";
 
-import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
+import {
+  CORE_REASONING_EFFORTS,
+  isCoreReasoningEffort,
+  type CoreReasoningEffort,
+} from "@agentlink/protocol/model-catalog";
 import type { CoreModelToolDefinition as ToolDefinition } from "./modelRuntime.js";
 
 /**
@@ -83,6 +87,8 @@ export interface SpawnBackgroundRequest {
   mode?: string;
   model?: string;
   provider?: string;
+  /** Explicit effort for the selected native model; omission preserves host defaults. */
+  reasoningEffort?: CoreReasoningEffort;
   taskClass?: string;
   modelTier?: BackgroundModelTierRequest;
   ownedPaths?: string[];
@@ -255,6 +261,26 @@ export interface BackgroundAgentProvider {
 }
 
 // --- Delegated file ownership -----------------------------------------------
+
+/** Shared native background reasoning selection, independent of model routing tiers. */
+export const REASONING_EFFORT_PROPERTY = {
+  type: "string",
+  enum: [...CORE_REASONING_EFFORTS],
+  description:
+    "Optional native model reasoning effort, independent of modelTier. Check supported values with list_models. Overrides review/task defaults; omit to keep them. Unsupported values fail. ACP is unsupported. Results report effective effort.",
+} as const;
+
+export function parseBackgroundReasoningEffortInput(
+  value: unknown,
+): CoreReasoningEffort | undefined {
+  if (value === undefined) return undefined;
+  if (!isCoreReasoningEffort(value)) {
+    throw new Error(
+      `Invalid reasoningEffort; expected one of: ${CORE_REASONING_EFFORTS.join(", ")}`,
+    );
+  }
+  return value;
+}
 
 /** VS Code's `ownedPaths` property of `spawn_background_agent`. */
 export const OWNED_PATHS_PROPERTY = {

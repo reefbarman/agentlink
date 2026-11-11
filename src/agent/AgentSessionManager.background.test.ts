@@ -3144,6 +3144,163 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it.each(["medium", "none"] as const)(
+    "forwards explicit %s effort through the production tool runtime into the child session",
+    async (reasoningEffort) => {
+      mocks.resolveBackgroundRoute.mockImplementationOnce(async () => ({
+        resolvedMode: "review",
+        resolvedModel: config.model,
+        resolvedProvider: "anthropic",
+        taskClass: "review_code",
+        thinkingBudget: 0,
+        routingReason: "test route",
+        fallbackUsed: false,
+      }));
+      const providers = new ProviderRegistry();
+      providers.register(
+        makeReviewProvider("anthropic", [{ id: config.model }]),
+      );
+      configHost.getBackgroundAgentSettings.mockReturnValue({
+        reviewTarget: {
+          default: { target: `model:${config.model}`, effort: "max" },
+        },
+      });
+      const mgr = new AgentSessionManager(
+        { ...config, thinkingBudget: 4096 },
+        "/tmp",
+        undefined,
+        false,
+        undefined,
+        undefined,
+        { maxConcurrent: 3 },
+        { host: { config: configHost, providers } },
+      );
+      mgr.setToolContext({
+        ...toolCtx,
+        onSpawnBackground: (...args) =>
+          mgr.spawnBackground(args[1], args[0], args[2]),
+      });
+      const parent = await mgr.createSession("code");
+      const context = (mgr as any).captureSessionToolContext(
+        parent,
+      ) as ToolDispatchContext;
+      const runtime = createAgentToolRuntime(context);
+      const result = await runtime.executeTool({
+        name: "spawn_background_agent",
+        input: {
+          task: "explicit effort review",
+          message: "review this",
+          taskClass: "review_code",
+          reasoningEffort,
+        },
+        context: { sessionId: parent.id },
+      });
+      const spawned = JSON.parse((result.content[0] as { text: string }).text);
+      expect(spawned.reasoningEffort).toBe(reasoningEffort);
+      const child = mgr.getSession(spawned.sessionId)!;
+      expect(child.reasoningEffort).toBe(reasoningEffort);
+      expect(child.desiredReasoningEffort).toBe(reasoningEffort);
+      expect(child.thinkingBudget).toBe(reasoningEffort === "none" ? 0 : 4096);
+      expect(mgr.getBackgroundStatus(spawned.sessionId).reasoningEffort).toBe(
+        reasoningEffort,
+      );
+      expect(child.fleetMetadata?.delegation?.reasoningEffort).toBe(
+        reasoningEffort,
+      );
+      mgr.killBackground(spawned.sessionId);
+      const retried = await mgr.retryBackground(spawned.sessionId);
+      expect(retried.reasoningEffort).toBe(reasoningEffort);
+      mgr.killBackground(retried.sessionId);
+    },
+  );
+
+  it.each(["xhigh", "invalid", null])(
+    "rejects unsupported or invalid explicit effort %s before creating a child",
+    async (reasoningEffort) => {
+      const providers = new ProviderRegistry();
+      providers.register(
+        makeReviewProvider("anthropic", [{ id: config.model }]),
+      );
+      const mgr = new AgentSessionManager(
+        config,
+        "/tmp",
+        undefined,
+        false,
+        undefined,
+        undefined,
+        { maxConcurrent: 3 },
+        { host: { providers } },
+      );
+      mgr.setToolContext(toolCtx);
+      await expect(
+        mgr.spawnBackground({
+          task: "review",
+          message: "review this",
+          model: config.model,
+          reasoningEffort: reasoningEffort as any,
+        }),
+      ).rejects.toThrow(/reasoningEffort/);
+      expect(mocks.createSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects explicit effort for a model without thinking support", async () => {
+    const providers = new ProviderRegistry();
+    providers.register(
+      makeReviewProvider("anthropic", [
+        { id: config.model, supportsThinking: false },
+      ]),
+    );
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { providers } },
+    );
+    mgr.setToolContext(toolCtx);
+    await expect(
+      mgr.spawnBackground({
+        task: "review",
+        message: "review this",
+        model: config.model,
+        reasoningEffort: "medium",
+      }),
+    ).rejects.toThrow(/does not declare thinking support/);
+    expect(mocks.createSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects explicit reasoning effort on ACP before starting an external agent", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [
+        { id: "claude", provider: "anthropic", command: "claude-agent-acp" },
+      ],
+    });
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost } },
+    );
+    mgr.setToolContext(toolCtx);
+    await expect(
+      mgr.spawnBackground({
+        task: "review",
+        message: "review this",
+        provider: "acp:claude",
+        reasoningEffort: "medium",
+      }),
+    ).rejects.toThrow(/reasoningEffort is not supported by ACP/);
+    expect(mocks.createSession).not.toHaveBeenCalled();
+  });
+
   it("forwards a provider-mapped review model target to native background routing", async () => {
     const providers = new ProviderRegistry();
     providers.register(makeReviewProvider("codex", [{ id: "gpt-5.6-sol" }]));

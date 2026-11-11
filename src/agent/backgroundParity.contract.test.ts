@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { BUILT_IN_MODES } from "./modes.js";
+import { REASONING_EFFORT_PROPERTY } from "@agentlink/core/background-agent-tools";
 import { getAgentTools } from "./toolAdapter.js";
 
 const FOREGROUND_ONLY_TOOLS = new Set([
@@ -40,6 +41,19 @@ describe("foreground/background capability parity contract", () => {
       }
     });
   }
+
+  it("advertises the shared reasoning-effort contract on background spawns", () => {
+    const spawn = getAgentTools(
+      BUILT_IN_MODES.find((mode) => mode.slug === "code"),
+      [],
+      false,
+    ).find((tool) => tool.name === "spawn_background_agent");
+    expect(spawn).toBeDefined();
+    expect(
+      (spawn!.input_schema as { properties: Record<string, unknown> })
+        .properties.reasoningEffort,
+    ).toEqual(REASONING_EFFORT_PROPERTY);
+  });
 
   it("preserves full code-mode MCP and session controls", () => {
     const code = getAgentTools(

@@ -1646,6 +1646,8 @@ These orchestration tools are available inside AgentLink's built-in agent runtim
 
 ### spawn_background_agent
 
+Optional `reasoningEffort` selects the native child's effort independently of model routing (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`). Check the chosen model's supported efforts with `list_models`. Explicit effort overrides configured review effort and task thinking-budget defaults; omission preserves existing defaults. In VS Code, invalid or unsupported values refuse the spawn rather than silently clamping. ACP agents reject the override. The result and background status report the effective effort. See [Delegate work](tools.md#delegate-work) for an example and standalone host differences.
+
 Spawn a background agent that runs in parallel with the current session. Use this for independent research, non-conflicting code/test/docs work, diagnostics, alternative approaches, and quick or thorough reviews.
 
 Good examples:
@@ -1994,7 +1996,7 @@ Notes:
 - `effort` must be one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. It is valid for `model:` and `native:auto` targets, then checked against the resolved model's declared thinking support and allowed efforts. It is rejected for `acp:` targets because ACP agents control their own effort.
 - A model target is validated before the agent launches. Unregistered, chat-only (no tool use), unauthenticated, or cooling-down targets fail the spawn with a message naming the setting rather than silently falling back. Retired model IDs follow the same migration path as other model settings.
 - A model-pinned review reports `routingReason: "configured review model target (<model-id>, effort=<effort>)"`, which distinguishes it from a caller-supplied `spawn_background_agent({ model })` override.
-- An explicit `model` or `provider` on the spawn request still wins over any configured target.
+- An explicit `model` or `provider` on the spawn request still wins over any configured target. An explicit `reasoningEffort` overrides the configured effort without changing the configured model target.
 
 Runtime behavior:
 

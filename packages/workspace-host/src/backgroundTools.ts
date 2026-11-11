@@ -13,8 +13,10 @@ import {
   EXPECTED_RESULT_PROPERTY,
   FORBIDDEN_PATHS_PROPERTY,
   OWNED_PATHS_PROPERTY,
+  REASONING_EFFORT_PROPERTY,
   REVIEW_SCOPE_PROPERTY,
   isReviewTaskClass,
+  parseBackgroundReasoningEffortInput,
   normalizeTaskClass,
   parseAgentBudgetInput,
   parseExpectedResultInput,
@@ -179,9 +181,11 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
           : {}),
         provider_id: { type: "string", minLength: 1 },
         model_id: { type: "string", minLength: 1 },
+        reasoningEffort: REASONING_EFFORT_PROPERTY,
         reasoning_effort: {
-          type: "string",
-          enum: ["none", "minimal", "low", "medium", "high", "xhigh"],
+          ...REASONING_EFFORT_PROPERTY,
+          description:
+            "Deprecated: use reasoningEffort. Kept for compatibility with existing callers.",
         },
       },
       required: ["task", "message"],
@@ -193,6 +197,18 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
       if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
       const providerId = optionalString(input.provider_id);
       const modelId = optionalString(input.model_id);
+      if (
+        Object.hasOwn(input, "reasoningEffort") &&
+        Object.hasOwn(input, "reasoning_effort") &&
+        input.reasoningEffort !== input.reasoning_effort
+      ) {
+        return toolError("conflicting_reasoning_effort_aliases");
+      }
+      const reasoningEffort = parseBackgroundReasoningEffortInput(
+        Object.hasOwn(input, "reasoningEffort")
+          ? input.reasoningEffort
+          : input.reasoning_effort,
+      );
       if ((providerId === undefined) !== (modelId === undefined)) {
         return toolError("provider_id_and_model_id_must_be_supplied_together");
       }
@@ -237,12 +253,7 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
             ? { forbiddenPaths: input.forbiddenPaths.map(String) }
             : {}),
           ...(model ? { model } : {}),
-          ...(typeof input.reasoning_effort === "string"
-            ? {
-                reasoningEffort:
-                  input.reasoning_effort as SpawnWorkspaceBackgroundRequest["reasoningEffort"],
-              }
-            : {}),
+          ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
           ...(taskClass ? { taskClass } : {}),
           routing: routing.report,
           ...(budget ? { budget } : {}),

@@ -78,6 +78,9 @@ async function fixture(
       decision: "allow" | "deny",
     ) => Promise<AgentTurnResult>;
     onAgentChanged?: (change: WorkspaceBackgroundChange) => void;
+    createChildSession?: Parameters<
+      typeof WorkspaceBackgroundSupervisor.create
+    >[0]["createChildSession"];
   } = {},
 ) {
   const root = await fs.mkdtemp(
@@ -92,7 +95,10 @@ async function fixture(
     stateDirectory,
     projectRoot,
     projectId: "project-a",
-    createChildSession: async () => ({ sessionId: `child-${++next}` }),
+    createChildSession: async (request) =>
+      options.createChildSession
+        ? await options.createChildSession(request)
+        : { sessionId: `child-${++next}` },
     onAgentChanged: options.onAgentChanged,
     runTurn: async (sessionId, message, runOptions) =>
       options.runTurn
@@ -124,6 +130,35 @@ function spawnRequest(pathValue: string) {
 }
 
 describe("WorkspaceBackgroundSupervisor", () => {
+  it("forwards explicit reasoning effort to the terminal child model", async () => {
+    const createChildSession = vi.fn<
+      Parameters<
+        typeof WorkspaceBackgroundSupervisor.create
+      >[0]["createChildSession"]
+    >(async (request) => ({
+      sessionId: "child-reasoning",
+      model: { providerId: "test-provider", modelId: "test-model" },
+      reasoningEffort: request.reasoningEffort,
+    }));
+    const test = await fixture({ createChildSession });
+    try {
+      const record = await test.supervisor.spawn({
+        ...spawnRequest("src/a.ts"),
+        reasoningEffort: "ultra",
+      });
+
+      expect(createChildSession).toHaveBeenCalledWith({
+        parentSessionId: "parent-a",
+        model: undefined,
+        reasoningEffort: "ultra",
+      });
+      expect(record.reasoningEffort).toBe("ultra");
+    } finally {
+      await test.supervisor.close();
+      await fs.rm(test.root, { recursive: true, force: true });
+    }
+  });
+
   it("forgets a deleted parent's ended children, not running ones", async () => {
     let finish!: () => void;
     const released = new Promise<void>((resolve) => {
