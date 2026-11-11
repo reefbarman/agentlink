@@ -44,3 +44,32 @@ export function parseEditInForkRequest(
   if (files.length > MAX_ATTACHMENTS) return undefined;
   return { userMessagesAfter, expectedText, prompt, attachments: files };
 }
+
+/**
+ * Request to rewind the current chat to just before one of the user's
+ * messages and put that message back in the composer for editing. The
+ * conversation is cut back; files are restored only when
+ * `restoreFilesCheckpointId` names that message's checkpoint.
+ */
+export interface RewindToUserMessageRequest extends EditInForkRequest {
+  restoreFilesCheckpointId?: string;
+}
+
+const MAX_CHECKPOINT_ID_CHARS = 200;
+
+export function parseRewindToUserMessageRequest(
+  value: unknown,
+): RewindToUserMessageRequest | undefined {
+  const base = parseEditInForkRequest(value);
+  if (!base) return undefined;
+  const { restoreFilesCheckpointId } = value as Record<string, unknown>;
+  if (restoreFilesCheckpointId === undefined) return base;
+  if (
+    typeof restoreFilesCheckpointId !== "string" ||
+    !restoreFilesCheckpointId ||
+    restoreFilesCheckpointId.length > MAX_CHECKPOINT_ID_CHARS
+  ) {
+    return undefined;
+  }
+  return { ...base, restoreFilesCheckpointId };
+}

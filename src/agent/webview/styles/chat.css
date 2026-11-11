@@ -1791,6 +1791,12 @@ body.chat-activity-shelf-resizing * {
   position: relative;
 }
 
+/* content-visibility clips painting to the row; lift it so the edit menu shows. */
+.user-message:has(.user-message-edit.open) {
+  content-visibility: visible;
+  z-index: 5;
+}
+
 .user-skill-activations {
   margin-top: 6px;
   min-width: 0;
@@ -6552,10 +6558,14 @@ body.chat-activity-shelf-resizing * {
 }
 
 /* Sits just left of the user message copy button and shares its styling. */
-.edit-in-fork-button {
+.user-message-edit {
   position: absolute;
   bottom: 4px;
   right: 30px;
+  z-index: 2;
+}
+
+.user-message-edit-button {
   background: var(--vscode-sideBar-background);
   border: 1px solid var(--vscode-panel-border);
   color: var(--vscode-foreground);
@@ -6569,21 +6579,77 @@ body.chat-activity-shelf-resizing * {
   opacity: 0;
   transition: opacity 0.15s;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
-  z-index: 1;
   font-size: 12px;
 }
 
-.user-message:hover .edit-in-fork-button,
-.edit-in-fork-button:focus-visible {
+.user-message:hover .user-message-edit-button,
+.user-message-edit.open .user-message-edit-button,
+.user-message-edit-button:focus-visible {
   opacity: 1;
 }
 
-.edit-in-fork-button:hover {
+.user-message-edit-button:hover {
   background: var(
     --vscode-button-secondaryBackground,
     var(--vscode-sideBar-background)
   );
   border-color: var(--vscode-focusBorder);
+}
+
+.user-message-edit-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  right: 0;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(
+    --vscode-menu-background,
+    var(--vscode-editorWidget-background)
+  );
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border));
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.user-message-edit-menu-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.user-message-edit-menu-item:hover,
+.user-message-edit-menu-item:focus-visible {
+  background: var(
+    --vscode-menu-selectionBackground,
+    var(--vscode-list-hoverBackground)
+  );
+  color: var(--vscode-menu-selectionForeground, inherit);
+}
+
+.user-message-edit-menu-item .codicon {
+  margin-top: 2px;
+}
+
+.user-message-edit-menu-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.user-message-edit-menu-detail {
+  font-size: 0.9em;
+  opacity: 0.75;
 }
 
 /* ── Checkpoint Row ── */

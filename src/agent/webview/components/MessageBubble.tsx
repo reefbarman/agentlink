@@ -8,6 +8,7 @@ import {
   type OpenImageInEditor,
 } from "./ImagePreview";
 import { ImageSourceCaption } from "./ImageSourceCaption";
+import { UserMessageEditMenu } from "./UserMessageEditMenu";
 import {
   ToolCallGroup,
   getToolGroupLabel,
@@ -171,6 +172,14 @@ interface MessageBubbleProps {
   onFinalMarkerContinue?: (prompt: string) => void;
   /** Fork the chat before this user message and restore it for editing. */
   onEditInFork?: (edit: { prompt: string; attachments: string[] }) => void;
+  /** Rewind this chat to before this user message and restore it for editing. */
+  onRewindToEdit?: (edit: {
+    prompt: string;
+    attachments: string[];
+    restoreFiles: boolean;
+  }) => void;
+  /** This message has a checkpoint, so rewinding can also restore files. */
+  canRestoreFiles?: boolean;
   /** Render the inline live-activity row; off when a pinned status bar owns it. */
   showStreamingActivity?: boolean;
 }
@@ -198,6 +207,8 @@ export function MessageBubble({
   onOpenTranscript,
   onFinalMarkerContinue,
   onEditInFork,
+  onRewindToEdit,
+  canRestoreFiles = false,
   showStreamingActivity = true,
 }: MessageBubbleProps) {
   const citations = useMemo(
@@ -476,18 +487,33 @@ export function MessageBubble({
           )}
         </div>
         {activationCards}
-        {onEditInFork && (
-          <button
-            class="edit-in-fork-button"
-            onClick={() =>
-              onEditInFork({ prompt: cleanText, attachments: files })
-            }
-            title="Edit in a new fork (this chat and your files stay as they are)"
-            aria-label="Edit this message in a new fork"
-          >
-            <i class="codicon codicon-edit" />
-          </button>
-        )}
+        <UserMessageEditMenu
+          onRewind={
+            onRewindToEdit
+              ? () =>
+                  onRewindToEdit({
+                    prompt: cleanText,
+                    attachments: files,
+                    restoreFiles: false,
+                  })
+              : undefined
+          }
+          onRewindRestoreFiles={
+            onRewindToEdit && canRestoreFiles
+              ? () =>
+                  onRewindToEdit({
+                    prompt: cleanText,
+                    attachments: files,
+                    restoreFiles: true,
+                  })
+              : undefined
+          }
+          onFork={
+            onEditInFork
+              ? () => onEditInFork({ prompt: cleanText, attachments: files })
+              : undefined
+          }
+        />
         <CopyButton
           text={
             mcpPrompt

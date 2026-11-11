@@ -11971,6 +11971,75 @@ describe("chat tab host routing", () => {
     expect(publicationOrder).toEqual(["session", "commands", "inject"]);
   });
 
+  it("rewinds the chat before an edited user message after confirmation", async () => {
+    const { handle, postMessage, provider } = await makeTabRoutingProvider();
+    const vscode = await import("vscode");
+    vi.mocked(vscode.window.showWarningMessage).mockResolvedValueOnce(
+      "Rewind" as never,
+    );
+    const session = { id: "session-1" };
+    const rewindSession = vi.fn(async () => ({ ok: true }));
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: vi.fn(() => undefined),
+      getSession: vi.fn(() => session),
+      rewindSession,
+    };
+    const internals = provider as unknown as {
+      postSessionLoaded(session: unknown, options: unknown): void;
+      sendInitialState(): void;
+      getSessionCheckpoints(sessionId: string): unknown[];
+    };
+    internals.postSessionLoaded = vi.fn();
+    internals.sendInitialState = vi.fn();
+    internals.getSessionCheckpoints = vi.fn(() => []);
+
+    await handle({
+      command: "agentRewindToUserMessage",
+      sessionId: "session-1",
+      request: {
+        userMessagesAfter: 1,
+        expectedText: "[Attached: src/a.ts]\nFix the parser",
+        prompt: "Fix the parser",
+        attachments: ["src/a.ts"],
+      },
+    });
+
+    expect(rewindSession).toHaveBeenCalledWith("session-1", {
+      userMessagesAfter: 1,
+      expectedText: "[Attached: src/a.ts]\nFix the parser",
+    });
+    expect(internals.postSessionLoaded).toHaveBeenCalledWith(session, {
+      checkpoints: [],
+      tailTurns: 0,
+    });
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "agentInjectPrompt",
+      prompt: "Fix the parser",
+      attachments: ["src/a.ts"],
+    });
+  });
+
+  it("does not rewind when the confirmation is dismissed", async () => {
+    const { handle, provider } = await makeTabRoutingProvider();
+    const vscode = await import("vscode");
+    vi.mocked(vscode.window.showWarningMessage).mockResolvedValueOnce(
+      undefined as never,
+    );
+    const rewindSession = vi.fn();
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: vi.fn(() => undefined),
+      rewindSession,
+    };
+
+    await handle({
+      command: "agentRewindToUserMessage",
+      sessionId: "session-1",
+      request: { userMessagesAfter: 0, expectedText: "Hi", prompt: "Hi" },
+    });
+
+    expect(rewindSession).not.toHaveBeenCalled();
+  });
+
   it("rejects an invalid edit-in-fork request without forking", async () => {
     const { coordinator, handle } = await makeTabRoutingProvider();
 

@@ -2741,6 +2741,90 @@ describe("AgentSessionManager host injection", () => {
     }
   });
 
+  it("rewinds a chat in place before an addressed user message", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "session-rewind-"));
+    const { AgentSession } =
+      await vi.importActual<typeof import("./AgentSession.js")>(
+        "./AgentSession.js",
+      );
+    const host = {
+      createSession: AgentSession.create,
+      config: {
+        resolveModelForMode: (_mode: string, fallback: string) => fallback,
+        resolveReasoningEffortForMode: () => "high" as const,
+        getCondenseThresholdForModel: () => 0.73,
+        getBackgroundAgentSettings: () => ({}),
+      },
+    };
+    try {
+      const store = new SessionStore(workspace);
+      const manager = new AgentSessionManager(
+        makeConfig(),
+        workspace,
+        undefined,
+        false,
+        store,
+        undefined,
+        undefined,
+        { host },
+      );
+      const session = await manager.createSession("code");
+      session.addUserMessage("First ask");
+      session.appendAssistantTurn([{ type: "text", text: "First answer" }]);
+      session.addUserMessage("expanded agent input", {
+        displayText: "Second ask",
+      });
+      session.appendAssistantTurn([{ type: "text", text: "Second answer" }]);
+      session.addUserMessage("Third ask");
+      const before = session.getAllMessages();
+      const checkpoint = (turnIndex: number) => ({
+        id: `cp-${turnIndex}`,
+        turnIndex,
+        commitHash: `hash-${turnIndex}`,
+        createdAt: turnIndex,
+      });
+      (
+        manager as unknown as { checkpoints: Map<string, unknown[]> }
+      ).checkpoints.set(session.id, [checkpoint(1), checkpoint(2)]);
+
+      session.status = "streaming";
+      const busy = await manager.rewindSession(session.id, {
+        userMessagesAfter: 1,
+        expectedText: "Second ask",
+      });
+      expect(busy).toMatchObject({ ok: false, reason: "busy" });
+      expect(session.getAllMessages()).toEqual(before);
+      session.status = "idle";
+
+      const stale = await manager.rewindSession(session.id, {
+        userMessagesAfter: 0,
+        expectedText: "Gone",
+      });
+      expect(stale).toMatchObject({ ok: false, reason: "message_not_found" });
+
+      const result = await manager.rewindSession(session.id, {
+        userMessagesAfter: 1,
+        expectedText: "Second ask",
+      });
+
+      expect(result).toEqual({ ok: true });
+      expect(session.getAllMessages()).toEqual(before.slice(0, 2));
+      expect(manager.getCheckpoints(session.id).map((cp) => cp.id)).toEqual([
+        "cp-1",
+      ]);
+      const persisted = await store.readSession(session.id);
+      if (!persisted.ok) throw new Error(persisted.reason);
+      expect(persisted.value.messages).toEqual(before.slice(0, 2));
+      expect(
+        persisted.value.metadata.checkpointState?.checkpoints.map(
+          (cp) => cp.id,
+        ),
+      ).toEqual(["cp-1"]);
+    } finally {
+      removeTempWorkspace(workspace);
+    }
+  });
+
   it("persists foreground reasoning effort changes immediately", async () => {
     const savedRecords: PersistedSessionRecord[] = [];
     const store = {

@@ -34,7 +34,10 @@ import {
 } from "./browserGatewayRequestTrust.js";
 
 import { loadAskAgentMcpConfigs } from "../agent/mcpConfig.js";
-import { parseEditInForkRequest } from "../shared/editInFork.js";
+import {
+  parseEditInForkRequest,
+  parseRewindToUserMessageRequest,
+} from "../shared/editInFork.js";
 import type { BrowserGatewayInstanceStatusSummary } from "./protocol.js";
 import type {
   BrowserGatewayService,
@@ -698,6 +701,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
         rawExact("/api/tabs/fork"),
         ({ req, res }) => this.handleTabForkAction(req, res),
         json("tab fork action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/tabs/rewind"),
+        ({ req, res }) => this.handleTabRewindAction(req, res),
+        json("tab rewind action failed"),
       ),
       route(
         "POST",
@@ -2683,6 +2692,41 @@ export class BrowserGatewayServer implements vscode.Disposable {
     const result = await this.chatViewProvider.submitBrowserForkTab(
       selection,
       editInFork,
+    );
+    this.writeJson(
+      res,
+      result.ok ? 200 : 409,
+      result.ok ? { ...result, snapshot: this.getSnapshot() } : result,
+    );
+  }
+
+  private async handleTabRewindAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as {
+      selection?: unknown;
+      rewind?: unknown;
+    };
+    const selection = this.parseOptionalChatTabSelection(body?.selection, res);
+    if (selection === false) return;
+    if (!selection?.sessionId) {
+      this.writeJson(res, 400, { error: "invalid_selection" });
+      return;
+    }
+    const rewind = parseRewindToUserMessageRequest(body.rewind);
+    if (!rewind) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const result = await this.chatViewProvider.submitBrowserRewindToUserMessage(
+      selection,
+      rewind,
     );
     this.writeJson(
       res,

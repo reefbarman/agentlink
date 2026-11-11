@@ -25,7 +25,10 @@ import type {
   StreamingBaselineMetrics,
   StreamingBaselineSurface,
 } from "../../../shared/streamingBaselineMetrics";
-import type { EditInForkRequest } from "../../../shared/editInFork";
+import type {
+  EditInForkRequest,
+  RewindToUserMessageRequest,
+} from "../../../shared/editInFork";
 
 interface TranscriptMessageListProps {
   messages: ChatMessage[];
@@ -66,6 +69,10 @@ interface TranscriptMessageListProps {
   ) => void;
   /** Fork the chat before a user message and restore it for editing. */
   onEditUserMessageInFork?: (request: EditInForkRequest) => void;
+  /** Rewind this chat to before a user message and restore it for editing. */
+  onRewindToUserMessage?: (request: RewindToUserMessageRequest) => void;
+  /** Offer "restore files" on rewind for messages with a checkpoint. */
+  rewindCanRestoreFiles?: boolean;
   streamingMetrics?: StreamingBaselineMetrics;
   streamingMetricsSurface?: Extract<
     StreamingBaselineSurface,
@@ -674,6 +681,22 @@ interface TranscriptRowActions {
     message: ChatMessage,
     edit: { prompt: string; attachments: string[] },
   ) => void;
+  onRewindToEdit?: (
+    message: ChatMessage,
+    edit: { prompt: string; attachments: string[]; restoreFiles: boolean },
+  ) => void;
+  rewindCanRestoreFiles?: boolean;
+}
+
+function canRestoreFilesOnRewind(
+  message: ChatMessage,
+  actions: TranscriptRowActions,
+): boolean {
+  return Boolean(
+    message.checkpointId &&
+    actions.onRewindToEdit &&
+    actions.rewindCanRestoreFiles,
+  );
 }
 
 /** User rows that correspond to a real user message the agent received. */
@@ -889,6 +912,12 @@ function renderTranscriptRow({
             ? (edit) => actions.onEditInFork?.(sourceMessage, edit)
             : undefined
         }
+        onRewindToEdit={
+          isEditableUserMessage(message) && actions.onRewindToEdit
+            ? (edit) => actions.onRewindToEdit?.(sourceMessage, edit)
+            : undefined
+        }
+        canRestoreFiles={canRestoreFilesOnRewind(message, actions)}
       />
     </Fragment>
   );
@@ -1051,6 +1080,10 @@ function rowActionAvailability(
       actions.onViewCheckpointDiff,
     ),
     editInFork: Boolean(isEditableUserMessage(message) && actions.onEditInFork),
+    rewindToEdit: Boolean(
+      isEditableUserMessage(message) && actions.onRewindToEdit,
+    ),
+    rewindRestoreFiles: canRestoreFilesOnRewind(message, actions),
   };
 }
 
@@ -1135,6 +1168,8 @@ export function TranscriptMessageList({
   onRevertCheckpoint,
   onViewCheckpointDiff,
   onEditUserMessageInFork,
+  onRewindToUserMessage,
+  rewindCanRestoreFiles = false,
   streamingMetrics,
   streamingMetricsSurface,
   streamingMetricsScope = sessionId ?? "transcript",
@@ -1204,6 +1239,34 @@ export function TranscriptMessageList({
           });
         }
       : undefined,
+    // A running turn cannot be rewound; hiding the action avoids a dead end.
+    onRewindToEdit:
+      onRewindToUserMessage && !streaming
+        ? (
+            message: ChatMessage,
+            edit: {
+              prompt: string;
+              attachments: string[];
+              restoreFiles: boolean;
+            },
+          ) => {
+            const userMessagesAfter = countUserMessagesAfter(
+              messagesRef.current,
+              message,
+            );
+            if (userMessagesAfter === undefined) return;
+            onRewindToUserMessage({
+              userMessagesAfter,
+              expectedText: message.content,
+              prompt: edit.prompt,
+              attachments: edit.attachments,
+              ...(edit.restoreFiles && message.checkpointId
+                ? { restoreFilesCheckpointId: message.checkpointId }
+                : {}),
+            });
+          }
+        : undefined,
+    rewindCanRestoreFiles,
   });
   const actions = actionsRef.current;
   const lastMessageHasError = Boolean(lastMessage?.error);

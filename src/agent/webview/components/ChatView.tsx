@@ -1,4 +1,8 @@
 import type {
+  EditInForkRequest,
+  RewindToUserMessageRequest,
+} from "../../../shared/editInFork";
+import type {
   StreamingBaselineMetrics,
   StreamingBaselineSurface,
 } from "../../../shared/streamingBaselineMetrics";
@@ -15,7 +19,6 @@ import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import type { ComponentChildren } from "preact";
 import type { DetectedQuestion } from "../questionDetection";
-import type { EditInForkRequest } from "../../../shared/editInFork";
 import type { OpenImageInEditor } from "./ImagePreview";
 import { TranscriptMessageList } from "./TranscriptMessageList";
 import { useAutoScroll } from "./useAutoScroll";
@@ -89,6 +92,7 @@ interface ChatViewProps {
     scope: "turn" | "all",
   ) => void;
   onEditUserMessageInFork?: (request: EditInForkRequest) => void;
+  onRewindToUserMessage?: (request: RewindToUserMessageRequest) => void;
   onRetry?: () => void;
   onSignIn?: () => void;
   onSignInAnotherAccount?: () => void;
@@ -131,6 +135,7 @@ export function ChatView({
   onRevertCheckpoint,
   onViewCheckpointDiff,
   onEditUserMessageInFork,
+  onRewindToUserMessage,
   onRetry,
   onSignIn,
   onSignInAnotherAccount,
@@ -476,6 +481,8 @@ export function ChatView({
             onRevertCheckpoint={onRevertCheckpoint}
             onViewCheckpointDiff={onViewCheckpointDiff}
             onEditUserMessageInFork={onEditUserMessageInFork}
+            onRewindToUserMessage={onRewindToUserMessage}
+            rewindCanRestoreFiles
             streamingMetrics={streamingMetrics}
             streamingMetricsSurface={streamingMetricsSurface}
             streamingMetricsScope={streamingMetricsScope}

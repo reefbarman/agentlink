@@ -329,6 +329,7 @@ import {
 import {
   resolveForkUserMessageIndex,
   type ForkSessionOptions,
+  type ForkUserMessageAddress,
 } from "./forkUserMessage.js";
 import type { HookRuntime } from "../core/hooks/HookRuntime.js";
 import {
@@ -665,6 +666,19 @@ export type CheckpointRevertResult =
         | "workspace_revert_failed"
         | "persistence_failed";
       currentRevision?: PersistenceRevision;
+    };
+
+export type SessionRewindResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason:
+        | "not_found"
+        | "busy"
+        | "revert_pending"
+        | "message_not_found"
+        | "persistence_failed";
+      message: string;
     };
 
 export type PersistedSessionMutationOperation = "rename" | "delete";
@@ -9810,6 +9824,98 @@ export class AgentSessionManager {
       restoredPrompt: truncateResult.restoredPrompt,
       sessionRevision: saveResult.revision,
     };
+  }
+
+  /**
+   * Rewind a chat to just before one of its visible user messages so the user
+   * can edit and resend it. Only the conversation is cut back: workspace files
+   * are never touched (checkpoint revert restores them). Checkpoints for the
+   * discarded turns are dropped, and an interrupted run, which always belongs
+   * to a discarded turn, is cleared.
+   */
+  async rewindSession(
+    sessionId: string,
+    address: ForkUserMessageAddress,
+  ): Promise<SessionRewindResult> {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.background) {
+      return {
+        ok: false,
+        reason: "not_found",
+        message: "Only an open chat session can be rewound.",
+      };
+    }
+    const busy = (): SessionRewindResult | undefined => {
+      const live =
+        session.status === "streaming" ||
+        session.status === "tool_executing" ||
+        session.status === "awaiting_approval" ||
+        this.isTurnStarting(sessionId);
+      if (live || session.runState?.phase === "awaiting_question") {
+        return {
+          ok: false,
+          reason: "busy",
+          message:
+            "Stop the current run or answer its pending question before rewinding.",
+        };
+      }
+      return undefined;
+    };
+    const initiallyBusy = busy();
+    if (initiallyBusy) return initiallyBusy;
+    if (this.sessionRevertPending.has(sessionId)) {
+      return {
+        ok: false,
+        reason: "revert_pending",
+        message:
+          "A previous checkpoint revert for this chat still needs recovery.",
+      };
+    }
+
+    const pendingSave = this.sessionSaveQueues.get(sessionId);
+    if (pendingSave) {
+      await pendingSave.catch(() => undefined);
+    }
+    const busyAfterSave = busy();
+    if (busyAfterSave) return busyAfterSave;
+
+    const allMessages = session.getAllMessages();
+    const cutIndex = resolveForkUserMessageIndex(allMessages, address);
+    if (cutIndex === undefined) {
+      return {
+        ok: false,
+        reason: "message_not_found",
+        message:
+          "That message could not be matched in this conversation. Reload the chat and try again.",
+      };
+    }
+    const turnIndex =
+      getVisibleUserMessageIndexes(allMessages).indexOf(cutIndex);
+    const messages = allMessages.slice(0, cutIndex);
+    const nextCheckpoints = (this.checkpoints.get(sessionId) ?? []).filter(
+      (checkpoint) => checkpoint.turnIndex <= turnIndex,
+    );
+
+    const previousRunState = session.runState;
+    session.runState = undefined;
+    const saveResult = await this.saveCheckpointRevertResult(
+      session,
+      messages,
+      nextCheckpoints,
+    );
+    if (!saveResult.ok) {
+      session.runState = previousRunState;
+      return {
+        ok: false,
+        reason: "persistence_failed",
+        message: "The rewound chat could not be saved.",
+      };
+    }
+    session.replaceMessages(messages);
+    session.status = "idle";
+    this.checkpoints.set(sessionId, nextCheckpoints);
+    this.notifySessionsChanged();
+    return { ok: true };
   }
 
   private currentSessionRevisionToken(sessionId: string): PersistenceRevision {

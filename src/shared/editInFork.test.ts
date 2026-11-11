@@ -1,6 +1,36 @@
 import { describe, expect, it } from "vitest";
+import {
+  parseEditInForkRequest,
+  parseRewindToUserMessageRequest,
+} from "./editInFork.js";
 
-import { parseEditInForkRequest } from "./editInFork.js";
+describe("parseRewindToUserMessageRequest", () => {
+  const base = { userMessagesAfter: 1, expectedText: "Hi", prompt: "Hi" };
+
+  it("accepts a chat-only rewind", () => {
+    expect(parseRewindToUserMessageRequest(base)).toEqual({
+      ...base,
+      attachments: [],
+    });
+  });
+
+  it("keeps a restore-files checkpoint id", () => {
+    expect(
+      parseRewindToUserMessageRequest({
+        ...base,
+        restoreFilesCheckpointId: "cp-1",
+      })?.restoreFilesCheckpointId,
+    ).toBe("cp-1");
+  });
+
+  it.each([
+    { ...base, restoreFilesCheckpointId: "" },
+    { ...base, restoreFilesCheckpointId: 7 },
+    { ...base, userMessagesAfter: -1 },
+  ])("rejects %j", (value) => {
+    expect(parseRewindToUserMessageRequest(value)).toBeUndefined();
+  });
+});
 
 describe("parseEditInForkRequest", () => {
   it("accepts a well-formed request and drops invalid attachment entries", () => {

@@ -76,7 +76,10 @@ import {
   McpResourcePendingIndicator,
   useMcpResourceWatchReveal,
 } from "../../shared/ui/McpResourceUpdates";
-import type { EditInForkRequest } from "../../shared/editInFork";
+import type {
+  EditInForkRequest,
+  RewindToUserMessageRequest,
+} from "../../shared/editInFork";
 import { SessionHandoffPanel } from "../../shared/ui/SessionHandoffPanel";
 import type { SessionHandoffDraft } from "../sessionHandoff";
 
@@ -3524,6 +3527,19 @@ export function App({
     [vscodeApi],
   );
 
+  const handleRewindToUserMessage = useCallback(
+    (request: RewindToUserMessageRequest) => {
+      const sessionId = state.chatState.sessionId;
+      if (!sessionId) return;
+      vscodeApi.postMessage({
+        command: "agentRewindToUserMessage",
+        sessionId,
+        request,
+      });
+    },
+    [vscodeApi, state.chatState.sessionId],
+  );
+
   const handleRevertCheckpoint = useCallback(
     (sessionId: string, checkpointId: string) => {
       vscodeApi.postMessage({
@@ -4031,6 +4047,11 @@ export function App({
                 onEditUserMessageInFork={
                   state.chatState.sessionId
                     ? handleEditUserMessageInFork
+                    : undefined
+                }
+                onRewindToUserMessage={
+                  state.chatState.sessionId
+                    ? handleRewindToUserMessage
                     : undefined
                 }
                 onRetry={handleRetry}

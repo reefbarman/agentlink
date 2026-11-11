@@ -74,6 +74,7 @@ import type {
   CheckpointRevertResult,
   PersistedSessionMutationResult,
   SessionApprovalMode,
+  SessionRewindResult,
 } from "./AgentSessionManager.js";
 import type { AgentSession } from "./AgentSession.js";
 import type { ChatTabController } from "./ChatTabController.js";
@@ -81,7 +82,9 @@ import { ChatTabHostCoordinator } from "./ChatTabHostCoordinator.js";
 import { toForkSessionOptions } from "./forkUserMessage.js";
 import {
   parseEditInForkRequest,
+  parseRewindToUserMessageRequest,
   type EditInForkRequest,
+  type RewindToUserMessageRequest,
 } from "../shared/editInFork.js";
 import type { ChatPaneConnection } from "./ChatPaneConnection.js";
 import type { ChatPaneLease } from "./ChatPaneAuthorityController.js";
@@ -11045,6 +11048,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "agentRewindToUserMessage": {
+        const sessionId =
+          typeof msg.sessionId === "string" ? msg.sessionId : undefined;
+        const request = parseRewindToUserMessageRequest(msg.request);
+        if (!sessionId || !request || !this.sessionManager) {
+          this.log("[agent] rewind rejected: invalid request");
+          vscode.window.showWarningMessage(
+            "Could not rewind this chat: the request was invalid.",
+          );
+          break;
+        }
+        await this.rewindToUserMessageWithConfirmation(sessionId, request);
+        break;
+      }
+
       case "agentViewCheckpointDiff": {
         const sessionId = msg.sessionId as string;
         const checkpointId = msg.checkpointId as string;
@@ -14324,9 +14342,115 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     );
   }
 
+  /**
+   * Rewind a chat to just before one of its user messages and put that
+   * message back in the composer. With `restoreFilesCheckpointId` this is a
+   * checkpoint revert (files and chat); otherwise only the chat is cut back.
+   */
+  private async rewindToUserMessageWithConfirmation(
+    sessionId: string,
+    request: RewindToUserMessageRequest,
+  ): Promise<void> {
+    if (!this.sessionManager) return;
+    const composer = {
+      prompt: request.prompt,
+      attachments: request.attachments,
+    };
+    if (request.restoreFilesCheckpointId) {
+      await this.revertCheckpointWithConfirmation(
+        sessionId,
+        request.restoreFilesCheckpointId,
+        composer,
+      );
+      return;
+    }
+
+    const later = request.userMessagesAfter;
+    const confirmed = await vscode.window.showWarningMessage(
+      "Rewind this chat to edit this message?",
+      {
+        modal: true,
+        detail: `This message${later > 0 ? `, the ${later} later message${later === 1 ? "" : "s"},` : ""} and the replies will be removed from this chat. Your files are not changed. Use "Edit in new fork" to keep this conversation instead.`,
+      },
+      "Rewind",
+    );
+    if (confirmed !== "Rewind") return;
+
+    const result = await this.applyRewindToUserMessage(sessionId, request, {
+      injectComposer: true,
+    });
+    if (!result.ok) {
+      vscode.window.showErrorMessage(
+        `Could not rewind this chat: ${result.message}`,
+      );
+    }
+  }
+
+  private async applyRewindToUserMessage(
+    sessionId: string,
+    request: RewindToUserMessageRequest,
+    opts: { injectComposer: boolean },
+  ): Promise<SessionRewindResult> {
+    if (!this.sessionManager) {
+      return {
+        ok: false,
+        reason: "not_found",
+        message: "No agent session is available.",
+      };
+    }
+    const result = await this.sessionManager.rewindSession(sessionId, {
+      userMessagesAfter: request.userMessagesAfter,
+      expectedText: request.expectedText,
+    });
+    if (!result.ok) {
+      this.log(
+        `[agent] Rewind failed for session ${sessionId}: ${result.reason}`,
+      );
+      return result;
+    }
+    this.log(`[agent] Rewound session ${sessionId} to edit a user message`);
+    const session = this.sessionManager.getSession(sessionId);
+    if (session) {
+      this.postSessionLoaded(session, {
+        checkpoints: this.getSessionCheckpoints(session.id),
+        tailTurns: 0,
+      });
+    }
+    if (opts.injectComposer) {
+      this.postMessage({
+        type: "agentInjectPrompt",
+        prompt: request.prompt,
+        attachments: request.attachments,
+      } as ExtensionToWebview);
+    }
+    this.sendInitialState();
+    return result;
+  }
+
+  /**
+   * Browser-initiated chat-only rewind. The browser confirms locally and
+   * restores the composer itself; file restore stays on the checkpoint row.
+   */
+  public async submitBrowserRewindToUserMessage(
+    address: ChatTabActionAddress,
+    request: RewindToUserMessageRequest,
+  ): Promise<{ ok: boolean; reason?: string }> {
+    if (!address.sessionId) return { ok: false, reason: "invalid_selection" };
+    if (request.restoreFilesCheckpointId) {
+      return { ok: false, reason: "restore_files_unsupported" };
+    }
+    const result = await this.applyRewindToUserMessage(
+      address.sessionId,
+      request,
+      { injectComposer: false },
+    );
+    return result.ok ? { ok: true } : { ok: false, reason: result.message };
+  }
+
   private async revertCheckpointWithConfirmation(
     sessionId: string,
     checkpointId: string,
+    composer?: { prompt: string; attachments: string[] },
   ): Promise<void> {
     if (!this.sessionManager) return;
 
@@ -14381,7 +14505,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           tailTurns: 0,
         });
       }
-      if (result.restoredPrompt) {
+      if (composer) {
+        this.postMessage({
+          type: "agentInjectPrompt",
+          prompt: composer.prompt,
+          attachments: composer.attachments,
+        } as ExtensionToWebview);
+      } else if (result.restoredPrompt) {
         this.postMessage({
           type: "agentInjectPrompt",
           prompt: result.restoredPrompt,

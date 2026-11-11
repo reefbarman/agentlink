@@ -7,11 +7,11 @@ import {
   screen,
   waitFor,
 } from "@testing-library/preact";
-import { RemoteToolDetailProvider } from "./RemoteToolDetail";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
+import { RemoteToolDetailProvider } from "./RemoteToolDetail";
 import { StreamingBaselineRecorder } from "../../../shared/streamingBaselineMetrics";
 import { TranscriptMessageList } from "./TranscriptMessageList";
 import { h } from "preact";
@@ -2238,11 +2238,12 @@ describe("edit in fork", () => {
     );
 
     const buttons = screen.getAllByRole("button", {
-      name: "Edit this message in a new fork",
+      name: "Edit this message",
     });
     // Annotation rows are UI-only, so they get no edit button.
     expect(buttons).toHaveLength(3);
     fireEvent.click(buttons[0]);
+    fireEvent.click(screen.getByRole("menuitem", { name: /Edit in new fork/ }));
 
     expect(onEdit).toHaveBeenCalledWith({
       userMessagesAfter: 2,
@@ -2262,7 +2263,71 @@ describe("edit in fork", () => {
       }),
     );
     expect(
-      screen.queryByRole("button", { name: "Edit this message in a new fork" }),
+      screen.queryByRole("button", { name: "Edit this message" }),
+    ).toBeNull();
+    cleanup();
+  });
+
+  it("rewinds in place, optionally restoring files from the message checkpoint", () => {
+    cleanup();
+    const onRewind = vi.fn();
+    render(
+      h(TranscriptMessageList, {
+        messages: [
+          { ...user("u1", "Fix the parser"), checkpointId: "cp-1" },
+          assistant("a1"),
+          user("u2", "Ship it"),
+        ],
+        streaming: false,
+        onRewindToUserMessage: onRewind,
+        rewindCanRestoreFiles: true,
+      }),
+    );
+
+    const [first, second] = screen.getAllByRole("button", {
+      name: "Edit this message",
+    });
+    fireEvent.click(first);
+    expect(
+      screen.queryByRole("menuitem", { name: /Edit in new fork/ }),
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: /Edit here and restore files/ }),
+    );
+    expect(onRewind).toHaveBeenLastCalledWith({
+      userMessagesAfter: 1,
+      expectedText: "Fix the parser",
+      prompt: "Fix the parser",
+      attachments: [],
+      restoreFilesCheckpointId: "cp-1",
+    });
+
+    // No checkpoint on this message, so only the chat-only rewind is offered.
+    fireEvent.click(second);
+    expect(
+      screen.queryByRole("menuitem", { name: /restore files/ }),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Edit here/ }));
+    expect(onRewind).toHaveBeenLastCalledWith({
+      userMessagesAfter: 0,
+      expectedText: "Ship it",
+      prompt: "Ship it",
+      attachments: [],
+    });
+    cleanup();
+  });
+
+  it("hides rewind while the chat is running", () => {
+    cleanup();
+    render(
+      h(TranscriptMessageList, {
+        messages: [user("u1", "Hello"), assistant("a1")],
+        streaming: true,
+        onRewindToUserMessage: vi.fn(),
+      }),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Edit this message" }),
     ).toBeNull();
     cleanup();
   });

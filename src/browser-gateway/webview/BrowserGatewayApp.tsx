@@ -122,7 +122,10 @@ import {
 import { isForwardedBuiltinCommand } from "@agentlink/protocol/builtin-command-forwarding";
 import { deriveModelSetupState } from "@agentlink/protocol/model-setup";
 import { randomId } from "../../shared/randomId";
-import type { EditInForkRequest } from "../../shared/editInFork";
+import type {
+  EditInForkRequest,
+  RewindToUserMessageRequest,
+} from "../../shared/editInFork";
 import {
   isWriteApprovalSelection,
   toHttpSelectionRequest,
@@ -6304,7 +6307,13 @@ export function BrowserGatewayApp({
    * `editInFork`, the copy stops before that user message and the message is
    * restored into the composer for editing.
    */
-  function handleForkTab(editInFork?: EditInForkRequest): void {
+  function selectedChatTabSource():
+    | {
+        instanceId: string;
+        workspace: BrowserGatewayChatWorkspaceSummary;
+        sourceTab: { tabId: string; sessionId: string | null };
+      }
+    | undefined {
     const instanceId = selectedTabId;
     const workspace =
       snapshotCacheRef.current.get(instanceId)?.snapshot.session.chatWorkspace;
@@ -6319,10 +6328,17 @@ export function BrowserGatewayApp({
               tab.sessionId === current.sessionId,
           )
         : undefined;
-    if (!workspace || !sourceTab?.sessionId) {
+    if (!workspace || !sourceTab?.sessionId) return undefined;
+    return { instanceId, workspace, sourceTab };
+  }
+
+  function handleForkTab(editInFork?: EditInForkRequest): void {
+    const source = selectedChatTabSource();
+    if (!source) {
       setModeStatus("No active chat is loaded to fork.");
       return;
     }
+    const { instanceId, workspace, sourceTab } = source;
     void openTabFromSource(
       instanceId,
       workspace,
@@ -6330,6 +6346,79 @@ export function BrowserGatewayApp({
       "fork",
       editInFork,
     );
+  }
+
+  /**
+   * Cut the selected chat back to before one of its user messages and put
+   * that message in the composer. Files are left alone; restoring them stays
+   * on the checkpoint row.
+   */
+  async function handleRewindToUserMessage(
+    request: RewindToUserMessageRequest,
+  ): Promise<void> {
+    const source = selectedChatTabSource();
+    if (!source) {
+      setModeStatus("No active chat is loaded to rewind.");
+      return;
+    }
+    const { instanceId, workspace, sourceTab } = source;
+    const later = request.userMessagesAfter;
+    if (
+      !window.confirm(
+        `Rewind this chat to edit this message?\n\nThis message${later > 0 ? `, the ${later} later message${later === 1 ? "" : "s"},` : ""} and the replies will be removed from this chat. Your files are not changed. Use "Edit in new fork" to keep this conversation instead.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      const response = await fetch(
+        buildApiPathForInstance("/api/tabs/rewind", instanceId),
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            selection: {
+              controllerEpoch: workspace.controllerEpoch,
+              tabId: sourceTab.tabId,
+              sessionId: sourceTab.sessionId,
+            },
+            rewind: {
+              userMessagesAfter: request.userMessagesAfter,
+              expectedText: request.expectedText,
+              prompt: request.prompt,
+              attachments: request.attachments,
+            },
+          }),
+        },
+      );
+      const body = (await response.json()) as {
+        ok?: boolean;
+        reason?: string;
+        error?: string;
+        snapshot?: GatewaySnapshot;
+      };
+      if (!response.ok || !body.ok || !body.snapshot) {
+        throw new Error(
+          body.reason ?? body.error ?? `Request failed (${response.status})`,
+        );
+      }
+      snapshotCacheRef.current.set(instanceId, {
+        generation: selectedTabGenerationRef.current,
+        snapshot: body.snapshot,
+      });
+      setOwnerSnapshotRevision((revision) => revision + 1);
+      setComposerInjection({
+        type: "prompt",
+        prompt: request.prompt,
+        attachments: request.attachments,
+      });
+    } catch (error) {
+      setModeStatus(`Unable to rewind this chat: ${String(error)}`);
+    }
   }
 
   async function openTabFromSource(
@@ -11436,6 +11525,12 @@ export function BrowserGatewayApp({
                         }}
                         onRevertCheckpoint={handleRevertCheckpoint}
                         onViewCheckpointDiff={handleViewCheckpointDiff}
+                        onRewindToUserMessage={
+                          isAskAgentSelected || !foreground?.sessionId
+                            ? undefined
+                            : (request) =>
+                                void handleRewindToUserMessage(request)
+                        }
                         onEditUserMessageInFork={
                           isAskAgentSelected || !foreground?.sessionId
                             ? undefined
