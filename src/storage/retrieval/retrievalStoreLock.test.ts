@@ -13,17 +13,22 @@ describe("withRetrievalStoreLock", () => {
   it("waits beyond the timeout while a live owner makes heartbeat progress", async () => {
     await withRoot(async (root) => {
       let releaseOwner!: () => void;
+      let signalOwnerStarted!: () => void;
       const ownerReleased = new Promise<void>((resolve) => {
         releaseOwner = resolve;
+      });
+      const ownerStarted = new Promise<void>((resolve) => {
+        signalOwnerStarted = resolve;
       });
       const owner = withRetrievalStoreLock(
         root,
         async () => {
+          signalOwnerStarted();
           await ownerReleased;
         },
         { staleMs: 120, timeoutMs: 2_000 },
       );
-      await waitForPath(`${root}.lock`);
+      await ownerStarted;
       let contenderRan = false;
       const contender = withRetrievalStoreLock(
         root,
@@ -45,15 +50,26 @@ describe("withRetrievalStoreLock", () => {
   it("stops waiting at the hard cap while a live owner keeps heartbeating", async () => {
     await withRoot(async (root) => {
       let releaseOwner!: () => void;
+      let signalOwnerStarted!: () => void;
       const ownerReleased = new Promise<void>((resolve) => {
         releaseOwner = resolve;
       });
-      const owner = withRetrievalStoreLock(root, async () => ownerReleased, {
-        staleMs: 120,
-        timeoutMs: 2_000,
-        maxWaitMs: 2_000,
+      const ownerStarted = new Promise<void>((resolve) => {
+        signalOwnerStarted = resolve;
       });
-      await waitForPath(`${root}.lock`);
+      const owner = withRetrievalStoreLock(
+        root,
+        async () => {
+          signalOwnerStarted();
+          return ownerReleased;
+        },
+        {
+          staleMs: 120,
+          timeoutMs: 2_000,
+          maxWaitMs: 2_000,
+        },
+      );
+      await ownerStarted;
 
       await expect(
         withRetrievalStoreLock(root, async () => undefined, {
@@ -122,15 +138,23 @@ describe("withRetrievalStoreLock", () => {
   it("does not remove a successor lock after its owner directory is replaced", async () => {
     await withRoot(async (root) => {
       let releaseOwner!: () => void;
+      let signalOwnerStarted!: () => void;
       const ownerReleased = new Promise<void>((resolve) => {
         releaseOwner = resolve;
       });
-      const owner = withRetrievalStoreLock(root, async () => ownerReleased, {
-        staleMs: 1_000,
-        timeoutMs: 2_000,
+      const ownerStarted = new Promise<void>((resolve) => {
+        signalOwnerStarted = resolve;
       });
+      const owner = withRetrievalStoreLock(
+        root,
+        async () => {
+          signalOwnerStarted();
+          return ownerReleased;
+        },
+        { staleMs: 1_000, timeoutMs: 2_000 },
+      );
       const lockDirectory = `${root}.lock`;
-      await waitForPath(lockDirectory);
+      await ownerStarted;
       const displaced = `${root}.displaced-lock`;
       await fs.rename(lockDirectory, displaced);
       await fs.mkdir(lockDirectory);
@@ -213,17 +237,4 @@ async function waitForMissingPath(target: string): Promise<void> {
     }
   }
   throw new Error(`Timed out waiting for ${target} to be removed`);
-}
-
-async function waitForPath(target: string): Promise<void> {
-  const deadline = Date.now() + 1_000;
-  while (Date.now() < deadline) {
-    try {
-      await fs.stat(target);
-      return;
-    } catch {
-      await pause(10);
-    }
-  }
-  throw new Error(`Timed out waiting for ${target}`);
 }

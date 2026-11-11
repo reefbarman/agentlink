@@ -1,47 +1,52 @@
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
+import { EventEmitter } from "node:events";
+import type { ChildProcess } from "node:child_process";
+import { PassThrough } from "node:stream";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createCredentialsHelperEntry } from "./credentialsHelperClient.js";
 
-const temporaryRoots: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(
-    temporaryRoots
-      .splice(0)
-      .map((root) => fs.rm(root, { recursive: true, force: true })),
-  );
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("createCredentialsHelperEntry", () => {
   it("waits for a timed-out helper to exit before rejecting", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "agentlink-helper-timeout-"),
-    );
-    temporaryRoots.push(root);
-    const helperPath = path.join(root, "slow-helper");
-    await fs.writeFile(
-      helperPath,
-      `#!/bin/sh
-trap 'sleep 0.2; exit 0' TERM
-while :; do sleep 1; done
-`,
-      { mode: 0o755 },
-    );
+    vi.useFakeTimers();
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      kill: vi.fn(),
+    });
+    const spawn = vi.fn(() => child as unknown as ChildProcess);
     const entry = createCredentialsHelperEntry({
-      helperPath,
+      helperPath: "slow-helper",
       service: "test-service",
       account: "test-account",
       label: "Test credential",
       timeoutMs: 500,
+      spawn: spawn as unknown as typeof import("node:child_process").spawn,
     });
-    const startedAt = Date.now();
-    await expect(entry.getPassword()).rejects.toThrow(
-      "agentlink_credentials_helper_timeout",
+    let settled = false;
+    const result = entry.getPassword().then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: Error) => {
+        settled = true;
+        return error;
+      },
     );
-    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(650);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(child.kill).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+
+    child.emit("close");
+    await expect(result).resolves.toMatchObject({
+      message: "agentlink_credentials_helper_timeout",
+    });
+    expect(settled).toBe(true);
   });
 });

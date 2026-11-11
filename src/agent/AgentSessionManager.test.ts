@@ -4,7 +4,15 @@ import * as path from "path";
 import { pathToFileURL } from "url";
 
 import type { AgentConfig, AgentMessage } from "./types.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import {
   AgentSessionManager,
@@ -271,6 +279,12 @@ const makeConfig = (): AgentConfig => ({
 });
 
 describe("AgentSessionManager host injection", () => {
+  let actualSession: typeof import("./AgentSession.js");
+  beforeAll(async () => {
+    // Cold production imports are setup, not part of the persistence assertions.
+    actualSession = await vi.importActual("./AgentSession.js");
+  }, 30_000);
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.setSkillCatalog(undefined, []);
@@ -2453,10 +2467,7 @@ describe("AgentSessionManager host injection", () => {
     const workspace = fs.mkdtempSync(
       path.join(os.tmpdir(), "session-preferences-"),
     );
-    const { AgentSession } =
-      await vi.importActual<typeof import("./AgentSession.js")>(
-        "./AgentSession.js",
-      );
+    const { AgentSession } = actualSession;
     const resolveReasoningEffortForMode = vi.fn(() => "ultra" as const);
     const getCondenseThresholdForModel = vi.fn(() => 0.73);
     const host = {
@@ -2563,10 +2574,7 @@ describe("AgentSessionManager host injection", () => {
 
   it("forks a session into an independent copy without carrying authority or lineage", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "session-fork-"));
-    const { AgentSession } =
-      await vi.importActual<typeof import("./AgentSession.js")>(
-        "./AgentSession.js",
-      );
+    const { AgentSession } = actualSession;
     const host = {
       createSession: AgentSession.create,
       config: {
@@ -2685,10 +2693,7 @@ describe("AgentSessionManager host injection", () => {
 
   it("forks before an addressed user message for editing", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "session-fork-"));
-    const { AgentSession } =
-      await vi.importActual<typeof import("./AgentSession.js")>(
-        "./AgentSession.js",
-      );
+    const { AgentSession } = actualSession;
     const host = {
       createSession: AgentSession.create,
       config: {
@@ -2743,10 +2748,7 @@ describe("AgentSessionManager host injection", () => {
 
   it("rewinds a chat in place before an addressed user message", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "session-rewind-"));
-    const { AgentSession } =
-      await vi.importActual<typeof import("./AgentSession.js")>(
-        "./AgentSession.js",
-      );
+    const { AgentSession } = actualSession;
     const host = {
       createSession: AgentSession.create,
       config: {

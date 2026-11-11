@@ -16,13 +16,17 @@ import {
   type AskAgentNetworkApprovalProposal,
 } from "./askAgentSandboxWorkspace.js";
 import { createHash } from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { pathToFileURL } from "node:url";
 
 // Vitest runs from the repository root.
 const REPO_ROOT = process.cwd();
 const cleanups: Array<() => Promise<void>> = [];
+beforeAll(async () => {
+  // Keep cold SDK loading outside the small tool-contract assertion's deadline.
+  await import("@agentlink/workspace-host");
+}, 30_000);
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
@@ -134,6 +138,7 @@ describe("AskAgentSandboxWorkspace", () => {
 
   it("advertises the same apply_diff contract the shared workspace file tools enforce", async () => {
     const root = await temporaryDirectory("al-ask-diff-");
+
     const { createWorkspaceFileTools } =
       await import("@agentlink/workspace-host");
     const shared = (

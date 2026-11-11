@@ -8,12 +8,42 @@ import {
   withFleetResultInstruction,
 } from "@agentlink/core/background-results";
 
+import type { WorkspaceBackgroundChange } from "./backgroundSupervisor.js";
 import { createHash } from "node:crypto";
 import { createWorkspaceHost } from "./workspaceHostRuntime.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { workspaceBackgroundOutcome } from "./backgroundTools.js";
+
+// These fixtures each spawn one child. Subscribe before starting the parent
+// so even a child that finishes before runTurn returns is observed.
+function backgroundEvents() {
+  let onApprovalAvailable!: () => void;
+  const approvalAvailable = new Promise<void>((resolve) => {
+    onApprovalAvailable = resolve;
+  });
+  let onAgentChanged!: (change: WorkspaceBackgroundChange) => void;
+  const settled = new Promise<void>((resolve) => {
+    onAgentChanged = ({ lifecycle }) => {
+      // Wake on unsuccessful terminal states too, so the result assertions
+      // report a failed child rather than waiting for the test timeout.
+      if (
+        lifecycle === "completed" ||
+        lifecycle === "failed" ||
+        lifecycle === "cancelled" ||
+        lifecycle === "interrupted"
+      ) {
+        resolve();
+      }
+    };
+  });
+  return {
+    approvalAvailable,
+    settled,
+    callbacks: { onApprovalAvailable, onAgentChanged },
+  };
+}
 
 function toolCall(name: string, input: Record<string, unknown>): Response {
   return new Response(
@@ -70,6 +100,7 @@ describe("workspace host background composition", () => {
       .update("before\n")
       .digest("hex");
     const seenTools: string[][] = [];
+    const events = backgroundEvents();
     const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as {
         messages?: Array<{ role?: string; content?: string }>;
@@ -129,7 +160,7 @@ describe("workspace host background composition", () => {
       ],
       defaultModel: { providerId: "fixture", modelId: "fixture-model" },
       files: { enabled: true },
-      background: { enabled: true },
+      background: { enabled: true, ...events.callbacks },
     });
     try {
       const parentSessionId = (
@@ -138,9 +169,8 @@ describe("workspace host background composition", () => {
       await expect(
         host.runTurn(parentSessionId, "delegate child"),
       ).resolves.toMatchObject({ status: "completed", text: "parent done" });
-      await vi.waitFor(() => {
-        expect(host.listBackgroundApprovals(parentSessionId)).toHaveLength(1);
-      });
+      await events.approvalAvailable;
+      expect(host.listBackgroundApprovals(parentSessionId)).toHaveLength(1);
       const child = host.listBackgroundApprovals(parentSessionId)[0]!;
       expect(child).toMatchObject({
         parentSessionId,
@@ -165,12 +195,11 @@ describe("workspace host background composition", () => {
         interactionId: child.approval!.interactionId,
         decision: "allow",
       });
-      await vi.waitFor(() => {
-        expect(host.listBackgroundAgents(parentSessionId)[0]).toMatchObject({
-          lifecycle: "completed",
-          resultState: "completed",
-          resultText: "child done",
-        });
+      await events.settled;
+      expect(host.listBackgroundAgents(parentSessionId)[0]).toMatchObject({
+        lifecycle: "completed",
+        resultState: "completed",
+        resultText: "child done",
       });
       expect(await fs.readFile(filePath, "utf8")).toBe("after\n");
       expect(
@@ -180,7 +209,7 @@ describe("workspace host background composition", () => {
       await host.close();
       await fs.rm(root, { recursive: true, force: true });
     }
-  });
+  }, 30_000); // Durable parent/child turns and real file approval/write work.
 
   it("answers the background tools with VS Code's payloads, including several-agent waits and the legacy child id", async () => {
     const root = await fs.mkdtemp(
@@ -446,6 +475,7 @@ describe("workspace host background composition", () => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "workspace-background-narrow-"),
     );
+    const events = backgroundEvents();
     const projectRoot = path.join(root, "project");
     await fs.mkdir(path.join(projectRoot, "src"), { recursive: true });
     const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
@@ -491,25 +521,24 @@ describe("workspace host background composition", () => {
           { path: "src", kind: "directory", access: "read_write" },
         ],
       },
-      background: { enabled: true },
+      background: { enabled: true, ...events.callbacks },
     });
     try {
       const { sessionId } = await host.createSession();
       await host.runTurn(sessionId, "delegate");
-      await vi.waitFor(() => {
-        expect(host.listBackgroundAgents(sessionId)[0]).toMatchObject({
-          lifecycle: "completed",
-          scopes: [
-            { path: "src", kind: "directory", access: "read" },
-            { path: "src/a.ts", kind: "file", access: "read_write" },
-          ],
-        });
+      await events.settled;
+      expect(host.listBackgroundAgents(sessionId)[0]).toMatchObject({
+        lifecycle: "completed",
+        scopes: [
+          { path: "src", kind: "directory", access: "read" },
+          { path: "src/a.ts", kind: "file", access: "read_write" },
+        ],
       });
     } finally {
       await host.close();
       await fs.rm(root, { recursive: true, force: true });
     }
-  });
+  }, 30_000); // Durable parent/child turns and real filesystem scope resolution.
 
   it("refuses a child limit above eight", async () => {
     const root = await fs.mkdtemp(
@@ -947,6 +976,7 @@ describe("workspace host background composition", () => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "workspace-background-taskclass-"),
     );
+    const events = backgroundEvents();
     const projectRoot = path.join(root, "project");
     await fs.mkdir(projectRoot);
     await fs.writeFile(path.join(projectRoot, "math.js"), "export {};\n");
@@ -1011,6 +1041,7 @@ describe("workspace host background composition", () => {
       },
       background: {
         enabled: true,
+        ...events.callbacks,
         inheritSessionGrants: true,
         modelRoles: {
           review: { providerId: "claude", modelId: "review-model" },
@@ -1035,14 +1066,13 @@ describe("workspace host background composition", () => {
         fallbackUsed: false,
         expectedResult: "review_findings",
       });
-      await vi.waitFor(() => {
-        expect(host.listBackgroundAgents(sessionId)[0]).toMatchObject({
-          lifecycle: "completed",
-          taskClass: "review_code",
-          resolvedMode: "review",
-          expectedResult: "review_findings",
-          structuredResult: { type: "review_findings", emptyDiff: false },
-        });
+      await events.settled;
+      expect(host.listBackgroundAgents(sessionId)[0]).toMatchObject({
+        lifecycle: "completed",
+        taskClass: "review_code",
+        resolvedMode: "review",
+        expectedResult: "review_findings",
+        structuredResult: { type: "review_findings", emptyDiff: false },
       });
       // Its command was not cleared by VS Code's read-only check, so it was
       // refused outright, as VS Code's review profile does, despite the

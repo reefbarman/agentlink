@@ -304,7 +304,7 @@ describe("handleGetContext", () => {
     expect(invalid.isError).toBe(true);
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
     vscodeMock.workspaceFolders = [];
@@ -326,7 +326,9 @@ describe("handleGetContext", () => {
     ]);
     vscodeMock.getDiagnostics.mockReturnValue([]);
     vscodeMock.getExtension.mockReturnValue(undefined);
-  });
+    // Import the provider graph as setup, after resetting its module state.
+    await import("./getContext.js");
+  }, 30_000);
 
   it.each([undefined, true, false])(
     "preserves context metadata and skips symbol lookup only when include_symbols is %s",

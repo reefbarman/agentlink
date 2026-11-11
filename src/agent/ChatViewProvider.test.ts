@@ -2,7 +2,15 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { AUTO_CONTINUE_MAX_TURNS } from "./SessionAutoContinueController.js";
 import type { AgentMessage } from "./types.js";
@@ -96,6 +104,11 @@ const mockGetConfiguration = vi.fn((section?: string) => ({
 }));
 
 describe("selected-model provider usage", () => {
+  beforeAll(async () => {
+    // Load the production dependency graph outside this callback assertion.
+    await import("./ChatViewProvider.js");
+  }, 30_000);
+
   it("forwards the selected session's provider through the production usage callback", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const { providerRegistry } = await import("./providers/index.js");
