@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "a29c678f93b7172a56095594d5af504be35fa164",
-  "createdAt": "2026-11-11T01:37:39.903Z",
+  "sourceSha": "3ddb2396cc35e1df0a6d24efe7b750b8234128ce",
+  "createdAt": "2026-11-11T04:16:51.368Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,67 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.91.0",
-      "baselineRef": "v1.91.0",
-      "reserved": "1.91.0",
-      "commits": [
-        "36e243913ac4e0fb83f039af9ecf7b95741cd647",
-        "a29c678f93b7172a56095594d5af504be35fa164"
-      ],
+      "published": "1.91.1",
+      "baselineRef": "v1.91.1",
+      "reserved": "1.91.1",
+      "commits": ["3ddb2396cc35e1df0a6d24efe7b750b8234128ce"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.91.1",
-      "effectiveBump": "patch",
+      "version": "1.92.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.91.1",
+      "tag": "v1.92.0",
       "notes": [
         {
-          "sha": "36e243913ac4e0fb83f039af9ecf7b95741cd647",
-          "subject": "fix(ui): release activity shelf growth on tab switch and shrinking content",
-          "summary": "The chat activity shelf now releases temporary growth when switching tabs or when its content shrinks, instead of staying oversized.",
-          "breaking": false
-        },
-        {
-          "sha": "a29c678f93b7172a56095594d5af504be35fa164",
-          "subject": "fix(ui): measure activity shelf chrome directly so it can shrink back",
-          "summary": "The chat activity shelf now measures its chrome directly so it can shrink back after growing for taller content.",
+          "sha": "3ddb2396cc35e1df0a6d24efe7b750b8234128ce",
+          "subject": "feat(chat): edit a past message by rewinding the chat or forking",
+          "summary": "The pencil on user messages now opens a menu to edit a past message by rewinding the chat, rewinding and restoring files (VS Code), or forking, and restores the message text and attachments to the composer.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.91.0",
-      "baselineRef": "desktop-v0.91.0",
-      "reserved": "0.91.0",
-      "commits": [
-        "36e243913ac4e0fb83f039af9ecf7b95741cd647",
-        "a29c678f93b7172a56095594d5af504be35fa164"
-      ],
+      "published": "0.91.1",
+      "baselineRef": "desktop-v0.91.1",
+      "reserved": "0.91.1",
+      "commits": ["3ddb2396cc35e1df0a6d24efe7b750b8234128ce"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.91.1",
-      "effectiveBump": "patch",
+      "version": "0.92.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.91.1",
+      "tag": "desktop-v0.92.0",
       "notes": [
         {
-          "sha": "36e243913ac4e0fb83f039af9ecf7b95741cd647",
-          "subject": "fix(ui): release activity shelf growth on tab switch and shrinking content",
-          "summary": "The chat activity shelf now releases temporary growth when switching tabs or when its content shrinks, instead of staying oversized.",
-          "breaking": false
-        },
-        {
-          "sha": "a29c678f93b7172a56095594d5af504be35fa164",
-          "subject": "fix(ui): measure activity shelf chrome directly so it can shrink back",
-          "summary": "The chat activity shelf now measures its chrome directly so it can shrink back after growing for taller content.",
+          "sha": "3ddb2396cc35e1df0a6d24efe7b750b8234128ce",
+          "subject": "feat(chat): edit a past message by rewinding the chat or forking",
+          "summary": "The pencil on user messages now opens a menu to edit a past message by rewinding the chat, rewinding and restoring files (VS Code), or forking, and restores the message text and attachments to the composer.",
           "breaking": false
         }
       ]
@@ -100,34 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.63.0",
-      "baselineRef": "assistant-v0.63.0",
-      "reserved": "0.63.0",
-      "commits": [
-        "36e243913ac4e0fb83f039af9ecf7b95741cd647",
-        "a29c678f93b7172a56095594d5af504be35fa164"
-      ],
+      "published": "0.63.1",
+      "baselineRef": "assistant-v0.63.1",
+      "reserved": "0.63.1",
+      "commits": ["3ddb2396cc35e1df0a6d24efe7b750b8234128ce"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.63.1",
-      "effectiveBump": "patch",
+      "version": "0.64.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.63.1",
+      "tag": "assistant-v0.64.0",
       "notes": [
         {
-          "sha": "36e243913ac4e0fb83f039af9ecf7b95741cd647",
-          "subject": "fix(ui): release activity shelf growth on tab switch and shrinking content",
-          "summary": "The chat activity shelf now releases temporary growth when switching tabs or when its content shrinks, instead of staying oversized.",
-          "breaking": false
-        },
-        {
-          "sha": "a29c678f93b7172a56095594d5af504be35fa164",
-          "subject": "fix(ui): measure activity shelf chrome directly so it can shrink back",
-          "summary": "The chat activity shelf now measures its chrome directly so it can shrink back after growing for taller content.",
+          "sha": "3ddb2396cc35e1df0a6d24efe7b750b8234128ce",
+          "subject": "feat(chat): edit a past message by rewinding the chat or forking",
+          "summary": "The pencil on user messages now opens a menu to edit a past message by rewinding the chat, rewinding and restoring files (VS Code), or forking, and restores the message text and attachments to the composer.",
           "breaking": false
         }
       ]
@@ -146,6 +119,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "The chat activity shelf now measures its chrome directly so it can shrink back after growing for taller content.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "3ddb2396cc35e1df0a6d24efe7b750b8234128ce": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The pencil on user messages now opens a menu to edit a past message by rewinding the chat, rewinding and restoring files (VS Code), or forking, and restores the message text and attachments to the composer.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

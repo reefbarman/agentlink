@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.92.0
+
 - You can now edit a past message in the current chat, not only in a fork. The pencil on your messages opens a menu: **Edit here** rewinds this chat to before the message (your files stay as they are), **Edit here and restore files** also rolls files back to that message's checkpoint (VS Code only), and **Edit in new fork** keeps the old behaviour. Each option puts the message text and attached files back in the composer. Before, rewinding the chat always reverted files, only worked where a checkpoint existed, and dropped attachments. Works in VS Code chat and browser workspace tabs.
 
 ## 1.91.1
