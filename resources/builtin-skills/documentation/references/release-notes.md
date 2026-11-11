@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.91.1
+
+- The chat activity shelf now releases temporary growth when switching tabs or when its content shrinks, instead of staying oversized.
+- The chat activity shelf now measures its chrome directly so it can shrink back after growing for taller content.
+
 ## 1.91.0
 
 - Background agent status is easier to act on when a worker seems stuck. `get_background_status` now shows:

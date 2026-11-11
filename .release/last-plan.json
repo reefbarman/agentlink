@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "5ded14d09bef76335051c36385978dd7020903cc",
-  "createdAt": "2026-11-10T06:30:24.357Z",
+  "sourceSha": "a29c678f93b7172a56095594d5af504be35fa164",
+  "createdAt": "2026-11-11T01:37:39.903Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,182 +10,142 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.90.0",
-      "baselineRef": "v1.90.0",
-      "reserved": "1.90.0",
+      "published": "1.91.0",
+      "baselineRef": "v1.91.0",
+      "reserved": "1.91.0",
       "commits": [
-        "123476aef521a6c3aff983eb1762ea8dc235380e",
-        "5ded14d09bef76335051c36385978dd7020903cc"
+        "36e243913ac4e0fb83f039af9ecf7b95741cd647",
+        "a29c678f93b7172a56095594d5af504be35fa164"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.91.0",
-      "effectiveBump": "minor",
+      "version": "1.91.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.91.0",
+      "tag": "v1.91.1",
       "notes": [
         {
-          "sha": "123476aef521a6c3aff983eb1762ea8dc235380e",
-          "subject": "fix(background): show stuck tools, approval waits and technical blockers",
-          "summary": "Background agent status now shows every running tool (longest-running first), redacted execute_command commands and terminal IDs, pending approvals, and a technical_blocker reason when a worker stops without a recorded denial.",
+          "sha": "36e243913ac4e0fb83f039af9ecf7b95741cd647",
+          "subject": "fix(ui): release activity shelf growth on tab switch and shrinking content",
+          "summary": "The chat activity shelf now releases temporary growth when switching tabs or when its content shrinks, instead of staying oversized.",
           "breaking": false
         },
         {
-          "sha": "5ded14d09bef76335051c36385978dd7020903cc",
-          "subject": "fix(ui): shrink activity shelf back after temporary growth for new cards",
-          "summary": "The chat activity shelf now shrinks back after temporarily growing to fit new cards, instead of staying enlarged.",
+          "sha": "a29c678f93b7172a56095594d5af504be35fa164",
+          "subject": "fix(ui): measure activity shelf chrome directly so it can shrink back",
+          "summary": "The chat activity shelf now measures its chrome directly so it can shrink back after growing for taller content.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.90.0",
-      "baselineRef": "desktop-v0.90.0",
-      "reserved": "0.90.0",
+      "published": "0.91.0",
+      "baselineRef": "desktop-v0.91.0",
+      "reserved": "0.91.0",
       "commits": [
-        "123476aef521a6c3aff983eb1762ea8dc235380e",
-        "5ded14d09bef76335051c36385978dd7020903cc"
+        "36e243913ac4e0fb83f039af9ecf7b95741cd647",
+        "a29c678f93b7172a56095594d5af504be35fa164"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.91.0",
-      "effectiveBump": "minor",
+      "version": "0.91.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.91.0",
+      "tag": "desktop-v0.91.1",
       "notes": [
         {
-          "sha": "123476aef521a6c3aff983eb1762ea8dc235380e",
-          "subject": "fix(background): show stuck tools, approval waits and technical blockers",
-          "summary": "Background agent status now shows every running tool (longest-running first), redacted execute_command commands and terminal IDs, pending approvals, and a technical_blocker reason when a worker stops without a recorded denial.",
+          "sha": "36e243913ac4e0fb83f039af9ecf7b95741cd647",
+          "subject": "fix(ui): release activity shelf growth on tab switch and shrinking content",
+          "summary": "The chat activity shelf now releases temporary growth when switching tabs or when its content shrinks, instead of staying oversized.",
           "breaking": false
         },
         {
-          "sha": "5ded14d09bef76335051c36385978dd7020903cc",
-          "subject": "fix(ui): shrink activity shelf back after temporary growth for new cards",
-          "summary": "The chat activity shelf now shrinks back after temporarily growing to fit new cards, instead of staying enlarged.",
+          "sha": "a29c678f93b7172a56095594d5af504be35fa164",
+          "subject": "fix(ui): measure activity shelf chrome directly so it can shrink back",
+          "summary": "The chat activity shelf now measures its chrome directly so it can shrink back after growing for taller content.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.62.1",
-      "baselineRef": "cli-v0.62.1",
-      "reserved": "0.62.1",
-      "commits": ["123476aef521a6c3aff983eb1762ea8dc235380e"],
+      "published": "0.63.0",
+      "baselineRef": "cli-v0.63.0",
+      "reserved": "0.63.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.63.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.63.0",
-      "notes": [
-        {
-          "sha": "123476aef521a6c3aff983eb1762ea8dc235380e",
-          "subject": "fix(background): show stuck tools, approval waits and technical blockers",
-          "summary": "Background agent status now shows every running tool (longest-running first), redacted execute_command commands and terminal IDs, pending approvals, and a technical_blocker reason when a worker stops without a recorded denial.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.52.1",
-      "baselineRef": "sdk-v0.52.1",
-      "reserved": "0.52.1",
-      "commits": ["123476aef521a6c3aff983eb1762ea8dc235380e"],
+      "published": "0.53.0",
+      "baselineRef": "sdk-v0.53.0",
+      "reserved": "0.53.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.53.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.53.0",
-      "notes": [
-        {
-          "sha": "123476aef521a6c3aff983eb1762ea8dc235380e",
-          "subject": "fix(background): show stuck tools, approval waits and technical blockers",
-          "summary": "Background agent status now shows every running tool (longest-running first), redacted execute_command commands and terminal IDs, pending approvals, and a technical_blocker reason when a worker stops without a recorded denial.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.62.0",
-      "baselineRef": "assistant-v0.62.0",
-      "reserved": "0.62.0",
+      "published": "0.63.0",
+      "baselineRef": "assistant-v0.63.0",
+      "reserved": "0.63.0",
       "commits": [
-        "123476aef521a6c3aff983eb1762ea8dc235380e",
-        "5ded14d09bef76335051c36385978dd7020903cc"
+        "36e243913ac4e0fb83f039af9ecf7b95741cd647",
+        "a29c678f93b7172a56095594d5af504be35fa164"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.63.0",
-      "effectiveBump": "minor",
+      "version": "0.63.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.63.0",
+      "tag": "assistant-v0.63.1",
       "notes": [
         {
-          "sha": "123476aef521a6c3aff983eb1762ea8dc235380e",
-          "subject": "fix(background): show stuck tools, approval waits and technical blockers",
-          "summary": "Background agent status now shows every running tool (longest-running first), redacted execute_command commands and terminal IDs, pending approvals, and a technical_blocker reason when a worker stops without a recorded denial.",
+          "sha": "36e243913ac4e0fb83f039af9ecf7b95741cd647",
+          "subject": "fix(ui): release activity shelf growth on tab switch and shrinking content",
+          "summary": "The chat activity shelf now releases temporary growth when switching tabs or when its content shrinks, instead of staying oversized.",
           "breaking": false
         },
         {
-          "sha": "5ded14d09bef76335051c36385978dd7020903cc",
-          "subject": "fix(ui): shrink activity shelf back after temporary growth for new cards",
-          "summary": "The chat activity shelf now shrinks back after temporarily growing to fit new cards, instead of staying enlarged.",
+          "sha": "a29c678f93b7172a56095594d5af504be35fa164",
+          "subject": "fix(ui): measure activity shelf chrome directly so it can shrink back",
+          "summary": "The chat activity shelf now measures its chrome directly so it can shrink back after growing for taller content.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "dd180b4d026f89379ede0a4b6f5fc397b5e761ad": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Masked image edits from generate_image are now resized to the edit target and keep original pixels outside the mask, with a new mask_composite option and provider_size reporting.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "bd3dd3772168f06b508df7231730e6f291af56f6": {
+    "36e243913ac4e0fb83f039af9ecf7b95741cd647": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Generate for Session approval now also covers image edits, masks and ordinary quality/size options, while xhigh/max quality and sizes above 2560x1440 still need per-call approval.",
+      "summary": "The chat activity shelf now releases temporary growth when switching tabs or when its content shrinks, instead of staying oversized.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "123476aef521a6c3aff983eb1762ea8dc235380e": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Background agent status now shows every running tool (longest-running first), redacted execute_command commands and terminal IDs, pending approvals, and a technical_blocker reason when a worker stops without a recorded denial.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "5ded14d09bef76335051c36385978dd7020903cc": {
+    "a29c678f93b7172a56095594d5af504be35fa164": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "The chat activity shelf now shrinks back after temporarily growing to fit new cards, instead of staying enlarged.",
+      "summary": "The chat activity shelf now measures its chrome directly so it can shrink back after growing for taller content.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
