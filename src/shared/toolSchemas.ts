@@ -1332,7 +1332,7 @@ export const respondToBackgroundQuestionSchema = {
   answers: z
     .record(z.string(), backgroundQuestionAnswerValueSchema)
     .describe(
-      "Complete answer map keyed by the question IDs in the interjection.",
+      'Complete answer map keyed by the question IDs in the interjection. yes_no answers accept true/false or "Yes"/"No".',
     ),
   notes: z
     .record(z.string(), z.string())

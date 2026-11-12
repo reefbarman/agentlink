@@ -178,4 +178,19 @@ describe("createLocalMarkdownImageReader", () => {
     await expect(read("notes.txt")).rejects.toThrow("Only PNG");
     await expect(read("/etc/hosts.png")).rejects.toThrow();
   });
+
+  it.skipIf(process.platform === "win32")(
+    "reads images from the shared /tmp folder",
+    async () => {
+      const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "md-root-"));
+      const shared = fs.mkdtempSync("/tmp/md-image-");
+      dirs.push(workspace, shared);
+      fs.writeFileSync(path.join(shared, "crop.png"), PNG_BYTES);
+      const read = createLocalMarkdownImageReader(() => [workspace]);
+      await expect(read(path.join(shared, "crop.png"))).resolves.toMatchObject({
+        mimeType: "image/png",
+        name: "crop.png",
+      });
+    },
+  );
 });

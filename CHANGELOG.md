@@ -8,6 +8,16 @@
 
 - Image-heavy chats use less temporary memory: Codex reuses full-history translations, oversized WebSocket continuation snapshots are rejected before serializing their image data, and tool-result accounting no longer builds arrays of individual characters. VS Code chat panes receive background-agent images and documents only while viewing that agent's full transcript, and release their copy when it is closed. Reopening loads the latest history. Saved images and model-visible context are unchanged. This reduces extension-host out-of-memory risk, including when several background agents work with images, but does not cap total image-history memory.
 
+- `get_terminal_output` now returns the `protected_git_metadata` reviewed native retry guidance when a sandboxed background command (such as `npm run preflight`) fails on a write inside `.git`. Before, only foreground `execute_command` results carried it, so agents had to recognise the denial themselves.
+
+- `respond_to_background_question` accepts `"Yes"`/`"No"` (any case) for yes/no questions instead of rejecting everything but `true`/`false`.
+
+- `generate_image` results now flag when the image backend returns a different size or quality than requested, with `option_mismatches` and a `warning`. Before, the result echoed the requested options without saying they were not met. This applies in VS Code and Browser Ask Agent.
+
+- Delegated background agents can use `generate_image` with edit targets, masks and reference images outside their `ownedPaths`; ownership now applies only to `output_path`, so parallel workers can share a style reference.
+
+- `present_images` shows local images from `/tmp` on macOS and Linux, not only the per-user temporary folder.
+
 - Background agents can now choose `reasoningEffort` explicitly, such as Opus on `medium`, independently of the model tier. Omission keeps existing defaults; unsupported levels fail instead of silently changing effort. The CLI and Assistant accept the same field, with the older `reasoning_effort` alias retained. ACP agents still control their own reasoning.
 
 ## 1.92.0

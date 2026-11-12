@@ -2957,8 +2957,14 @@ function enforceDelegatedPathPolicy(
       : workspaceRoots.map(({ canonicalRoot }) =>
           canonicalizeWorkspacePath(path.resolve(canonicalRoot, value)),
         );
+  // generate_image only reads its edit, mask and reference inputs; ownership
+  // applies to the output destination it writes.
   const paths = Object.entries(input)
-    .filter(([key]) => /(^|_)(path|file|directory)$/i.test(key))
+    .filter(([key]) =>
+      toolName === "generate_image"
+        ? key === "output_path"
+        : /(^|_)(path|file|directory)$/i.test(key),
+    )
     .flatMap(([, value]) =>
       typeof value === "string"
         ? [resolveInputPath(value)]
@@ -4505,6 +4511,9 @@ async function dispatchToolCallWithTrackedApprovals(
         terminalProvider: ctx.terminalProvider,
         waitForPendingInterjection: ctx.waitForPendingInterjection,
         toolAbortSignal,
+        workspaceRoots:
+          ctx.workspaceProjectRoots ??
+          (ctx.projectRoot ? [ctx.projectRoot] : undefined),
       });
     case "close_terminals":
       return handleCloseTerminals(params, {

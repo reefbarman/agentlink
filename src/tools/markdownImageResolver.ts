@@ -233,8 +233,19 @@ function isWithin(child: string, parent: string): boolean {
 }
 
 /**
- * Reads PNG, JPEG, GIF or WebP files inside the given roots (plus the OS
- * temporary directory, where generated images are often saved). Relative
+ * Temporary folders images may be shown from: the OS temporary directory and,
+ * on macOS and Linux, the shared /tmp (macOS gives each user a separate
+ * os.tmpdir(), but scripts commonly write to /tmp).
+ */
+export function temporaryImageRoots(): string[] {
+  return process.platform === "win32"
+    ? [os.tmpdir()]
+    : [...new Set([os.tmpdir(), "/tmp"])];
+}
+
+/**
+ * Reads PNG, JPEG, GIF or WebP files inside the given roots (plus the
+ * temporary folders, where generated images are often saved). Relative
  * paths resolve against the first root.
  */
 export function createLocalMarkdownImageReader(
@@ -264,7 +275,7 @@ export function createLocalMarkdownImageReader(
       throw new Error(`Image file not found: ${filePath}`);
     }
     const allowedRoots = await Promise.all(
-      [...roots, os.tmpdir()].map((root) =>
+      [...roots, ...temporaryImageRoots()].map((root) =>
         fs.promises.realpath(root).catch(() => root),
       ),
     );

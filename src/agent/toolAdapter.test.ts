@@ -3076,6 +3076,49 @@ describe("spawn_background_agent tool", () => {
     );
   });
 
+  it("applies delegated ownership to generate_image outputs, not its read inputs", async () => {
+    const onDecision = vi.fn();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      projectRoot: "/tmp/project-a",
+      workspaceProjectRoots: ["/tmp/project-a"],
+      delegationPolicy: { ownedPaths: ["out/worker-a"], onDecision },
+    });
+    const readInputs = {
+      action: "edit",
+      prompt: "refine",
+      edit_image_path: "shared/source.png",
+      mask_image_path: "shared/mask.png",
+      reference_image_paths: ["shared/style.png"],
+    };
+
+    await runtime
+      .executeTool({
+        name: "generate_image",
+        input: { ...readInputs, output_path: "out/worker-a/cands/" },
+        context: { sessionId: "test-session", mode: "code" },
+      })
+      .catch(() => undefined);
+    expect(onDecision).not.toHaveBeenCalledWith(
+      expect.objectContaining({ decision: "denied" }),
+    );
+    expect(onDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: "allowed",
+        operation: "generate_image",
+        path: expect.stringMatching(/\/out\/worker-a\/cands$/),
+      }),
+    );
+
+    await expect(
+      runtime.executeTool({
+        name: "generate_image",
+        input: { ...readInputs, output_path: "shared/overwrite.png" },
+        context: { sessionId: "test-session", mode: "code" },
+      }),
+    ).rejects.toThrow(/outside owned paths/);
+  });
+
   it("canonicalizes relative forbidden scopes through symlinked directories", async () => {
     const projectRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "delegated-symlink-root-"),
@@ -6977,6 +7020,7 @@ describe("dispatchToolCall", () => {
         terminalProvider: undefined,
         waitForPendingInterjection: undefined,
         toolAbortSignal: undefined,
+        workspaceRoots: ["/tmp/project"],
       },
     );
     expect(handleCloseTerminals).toHaveBeenLastCalledWith(
@@ -7008,6 +7052,8 @@ describe("dispatchToolCall", () => {
         terminalProvider: mockCtx.terminalProvider,
         waitForPendingInterjection,
         toolAbortSignal,
+        // Lets finished background commands get protected Git metadata guidance.
+        workspaceRoots: ["/tmp/project"],
       },
     );
   });

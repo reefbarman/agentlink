@@ -101,6 +101,7 @@ import {
 } from "../terminal/commandOutput.js";
 import { streamableOutputFilter } from "../terminal/output/StreamingOutputFilter.js";
 import { sandboxDockerRecovery } from "./sandboxDockerRecovery.js";
+import { protectedGitMetadataRecovery } from "./protectedGitMetadataRecovery.js";
 import { buildSandboxPolicyEnvironment } from "../terminal/sandbox/sandboxEnvironmentPolicy.js";
 import { validateCommand } from "../util/pipeValidator.js";
 import { validateInteractiveCommand } from "../util/interactiveValidator.js";
@@ -583,11 +584,6 @@ const NODE_OOM_PATTERNS = [
   /fatal error:.*(?:heap out of memory|allocation failed)/i,
   /javascript heap out of memory/i,
   /reached heap limit/i,
-];
-
-const PROTECTED_GIT_DENIAL_PATTERNS = [
-  /(?:permission denied|operation not permitted|read-only file system|unable to create|could not create|failed to write)/i,
-  /(?:index\.lock|ORIG_HEAD\.lock|FETCH_HEAD|objects\/tmp_object_)/i,
 ];
 
 const NODE_RUNNER_COMMANDS = new Set(["node", "npm", "npx", "pnpm", "yarn"]);
@@ -1427,97 +1423,25 @@ async function attachProtectedGitMetadataRetryGuidance(input: {
   workspaceRoots: readonly string[];
 }): Promise<void> {
   const { result, command, output, cwd, workspaceRoots } = input;
-  const internalApplyFailure =
-    /^error:\s*['"]?git apply['"]? failed\s*$/im.test(output);
   if (
     hasRetryGuidance(result) ||
     result.security?.route !== "sandbox" ||
-    result.exit_code === null ||
     result.backgrounded ||
     result.is_running ||
-    !result.process_launched ||
-    !PROTECTED_GIT_DENIAL_PATTERNS[0].test(output)
+    !result.process_launched
   ) {
     return;
   }
-  const protection = await resolveBaselineProtectedGitMetadataForCwd(
+  const recovery = await protectedGitMetadataRecovery({
+    command,
+    output,
     cwd,
+    exitCode: result.exit_code,
     workspaceRoots,
-  ).catch(() => undefined);
-  if (!protection) return;
-  const normalizedMarker = protection.marker.replaceAll("\\", "/");
-  const normalizedOutput = output.replaceAll("\\", "/");
-  const outputLines = normalizedOutput.split(/\r?\n/);
-  const protectedRoots = (protection.deniedWrite ?? [protection.marker]).map(
-    (root) => root.replaceAll("\\", "/"),
-  );
-  const referencesProtectedPath =
-    (PROTECTED_GIT_DENIAL_PATTERNS.every((pattern) => pattern.test(output)) &&
-      (normalizedOutput.includes(normalizedMarker) ||
-        outputLines.some((line) =>
-          PROTECTED_GIT_DENIAL_PATTERNS.every((pattern) => pattern.test(line)),
-        ))) ||
-    // A tool or script (for example a Node EPERM) denied a write under the
-    // protected Git directory itself, without naming a Git lock file.
-    outputLines.some(
-      (line) =>
-        PROTECTED_GIT_DENIAL_PATTERNS[0].test(line) &&
-        protectedRoots.some((root) => line.includes(`${root}/`)),
-    );
-  if (!referencesProtectedPath) return;
-  if (result.exit_code === 0 && !internalApplyFailure) {
-    const protectedDenial = normalizedOutput.split(/\r?\n/).some((line) => {
-      if (!PROTECTED_GIT_DENIAL_PATTERNS.every((pattern) => pattern.test(line)))
-        return false;
-      const denial =
-        /^(?:fatal|error):\s*(?:unable to create|could not create|cannot open|failed to write)\s+(['"])(.+?)\1:\s*(?:permission denied|operation not permitted|read-only file system)\s*$/i.exec(
-          line,
-        );
-      if (!denial) return false;
-      const deniedPath = path.resolve(cwd, denial[2]);
-      return (protection.deniedWrite ?? [protection.marker]).some((root) => {
-        const relative = path.relative(root, deniedPath);
-        return (
-          relative !== "" &&
-          !relative.startsWith("..") &&
-          !path.isAbsolute(relative)
-        );
-      });
-    });
-    if (!protectedDenial) return;
-  }
-  Object.assign(result, {
-    retry_guidance: {
-      code: "protected_git_metadata",
-      message:
-        "The sandbox denied a write to this repository's protected Git metadata. Earlier steps may have changed repository state; inspect it before any reviewed native retry. AgentLink will not retry automatically.",
-      automatic_retry: false,
-      options: [
-        {
-          action: "reviewed_native_retry",
-          same_command: true,
-          sandbox_permissions: "require_escalated",
-          reason_required: true,
-          reviewed_native_execution: true,
-          command,
-          suggested_reason:
-            "The command needs to write protected repository Git metadata.",
-        },
-      ],
-    } satisfies ExecuteCommandRetryGuidance,
-    capability_code: "protected_git_metadata",
-    protected_path: protection.marker,
-    ...((internalApplyFailure || result.exit_code === 0) && {
-      failure_evidence: {
-        code: internalApplyFailure
-          ? "git_apply_failed"
-          : "protected_git_write_denied",
-        message: internalApplyFailure
-          ? "Git reported an internal apply failure. The shell exit code does not establish that staging succeeded; inspect the index before any reviewed retry."
-          : "Git reported a denied write to protected repository metadata. The shell exit code does not establish that every step succeeded; inspect repository state before any reviewed retry.",
-      },
-    }),
   });
+  if (!recovery) return;
+  const guidance: ExecuteCommandRetryGuidance = recovery.retry_guidance;
+  Object.assign(result, { ...recovery, retry_guidance: guidance });
 }
 
 function attachSandboxNodeOomRetryGuidance(input: {

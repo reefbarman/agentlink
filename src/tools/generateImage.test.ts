@@ -442,6 +442,57 @@ describe("handleGenerateImage", () => {
     }
   });
 
+  it("warns when the backend returns a different size or quality", async () => {
+    vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+      method: "apiKey",
+      bearerToken: "test-key",
+      canRefresh: false,
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      sseResponse([
+        {
+          type: "response.image_generation_call.completed",
+          item_id: "ig_downgraded",
+          output_index: 0,
+          result: tinyPngBase64,
+          size: "1254x836",
+          quality: "medium",
+        },
+      ]),
+    );
+
+    const result = await handleGenerateImage(
+      {
+        prompt: "Redraw the map crop",
+        output_size: "1536x1024",
+        quality: "high",
+      },
+      { isBuiltInToolApproved: vi.fn().mockReturnValue(true) } as never,
+      "session-1",
+    );
+
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(JSON.parse(text)).toMatchObject({
+      status: "accepted",
+      option_mismatches: [
+        {
+          image_index: 0,
+          option: "output_size",
+          requested: "1536x1024",
+          actual: "1254x836",
+        },
+        {
+          image_index: 0,
+          option: "quality",
+          requested: "high",
+          actual: "medium",
+        },
+      ],
+      warning: expect.stringContaining("did not honour"),
+    });
+  });
+
   it("returns paid image bytes inline when the requested file format mismatches", async () => {
     vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
       method: "apiKey",

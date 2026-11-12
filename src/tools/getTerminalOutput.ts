@@ -7,6 +7,7 @@ import {
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { detectInteractivePrompt } from "../terminal/interactivePromptDetector.js";
+import { protectedGitMetadataRecovery } from "./protectedGitMetadataRecovery.js";
 import { sandboxDockerRecovery } from "./sandboxDockerRecovery.js";
 import { sleep } from "../util/sleep.js";
 
@@ -18,6 +19,8 @@ export interface GetTerminalOutputProviders {
   toolAbortSignal?: AbortSignal;
   /** Allows the completion control to recover output after management state is gone. */
   allowDirectOutputFallback?: boolean;
+  /** Workspace roots used to recognise denied writes to protected Git metadata. */
+  workspaceRoots?: readonly string[];
 }
 
 function unavailableTerminalOutputResult(params: {
@@ -261,6 +264,25 @@ export async function handleGetTerminalOutput(
       state: state.state,
     });
     if (guidance) result.retry_guidance = guidance;
+    if (
+      !guidance &&
+      providers.workspaceRoots?.length &&
+      context.security?.route === "sandbox" &&
+      !state.is_running &&
+      outputComplete &&
+      outputFinalized &&
+      state.state === "completed"
+    ) {
+      const recovery = await protectedGitMetadataRecovery({
+        command: context.command,
+        output,
+        cwd: context.cwd,
+        exitCode: state.exit_code,
+        workspaceRoots: providers.workspaceRoots,
+        includeCwd: true,
+      });
+      if (recovery) Object.assign(result, recovery);
+    }
   }
 
   if (state.is_running && state.output_captured) {

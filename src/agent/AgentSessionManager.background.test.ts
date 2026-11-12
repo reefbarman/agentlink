@@ -6422,6 +6422,59 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("accepts Yes/No labels for yes_no background questions", async () => {
+    const onQuestion = vi.fn().mockResolvedValue({ answers: {}, notes: {} });
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext({ ...toolCtx, onQuestion });
+    const foreground = await mgr.createSession("code");
+    foreground.status = "streaming";
+    const setPendingInterjection = vi.mocked(foreground.setPendingInterjection);
+    const spawned = await mgr.spawnBackground(
+      { task: "confirm task", message: "run" },
+      foreground.id,
+    );
+    const bgRuntime = mocks.setToolRuntime.mock.calls.at(-1)?.[0];
+    const backgroundAnswer = bgRuntime.executeTool({
+      name: "ask_user",
+      input: {
+        context: "Two confirmations decide how the worker proceeds.",
+        questions: [
+          { id: "offset", type: "yes_no", question: "Apply the offset?" },
+          { id: "cleanup", type: "yes_no", question: "Delete temp files?" },
+        ],
+      },
+      context: { sessionId: spawned.sessionId },
+    });
+    await waitFor(
+      () => setPendingInterjection.mock.calls.length,
+      (calls) => calls === 1,
+    );
+    const requestId = setPendingInterjection.mock.calls[0][1];
+
+    expect(
+      mgr.respondToBackgroundQuestion({
+        callerSessionId: foreground.id,
+        requestId,
+        answers: { offset: "maybe", cleanup: "No" },
+        notes: {},
+      }),
+    ).toEqual({ accepted: false, error: "invalid_yes_no_answer:offset" });
+    expect(
+      mgr.respondToBackgroundQuestion({
+        callerSessionId: foreground.id,
+        requestId,
+        answers: { offset: " yes ", cleanup: "No" },
+        notes: {},
+      }),
+    ).toEqual({ accepted: true });
+
+    const answerResult = await backgroundAnswer;
+    const text = (answerResult.content[0] as { text: string }).text;
+    expect(text).toMatch(/"answer":\s*true/);
+    expect(text).toMatch(/"answer":\s*false/);
+    expect(onQuestion).not.toHaveBeenCalled();
+  });
+
   it("coordinates background approvals before escalating the original standard card", async () => {
     const onApprovalRequest = vi.fn(async () => "accept-session");
     const mgr = new AgentSessionManager(config, "/tmp");

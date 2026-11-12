@@ -33,6 +33,7 @@ import {
   type CodexImageGenerationSseResult,
   type CodexImageReferenceImage,
 } from "../core/model/providers/codex/imageGeneration.js";
+import { imageGenerationOptionMismatchFields } from "../core/model/providers/codex/imageGenerationOptionMismatch.js";
 import type { SessionImageReference } from "../agent/toolAdapter.js";
 import { toSupportedImageMediaType } from "../agent/providers/types.js";
 import { errorResult, type ToolResult } from "@agentlink/protocol/tool-result";
@@ -747,6 +748,10 @@ function buildGenerateImageSuccessResult(params: {
               mime_type: image.mimeType,
             })),
             images: codexGeneratedImageMetadata(result.images),
+            ...imageGenerationOptionMismatchFields(
+              params.requestedOptions,
+              result.images,
+            ),
             ...(result.responseId ? { response_id: result.responseId } : {}),
             ...(result.usage ? { usage: result.usage } : {}),
             event_types: Array.from(new Set(result.eventTypes)),

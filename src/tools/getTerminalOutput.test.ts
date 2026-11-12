@@ -4,6 +4,14 @@ import { StreamingOutputFilter } from "../terminal/output/StreamingOutputFilter.
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import { handleGetTerminalOutput } from "./getTerminalOutput.js";
 
+const { resolveBaselineProtectedGitMetadataForCwd } = vi.hoisted(() => ({
+  resolveBaselineProtectedGitMetadataForCwd: vi.fn(),
+}));
+
+vi.mock("../terminal/sandbox/gitMetadataProtection.js", () => ({
+  resolveBaselineProtectedGitMetadataForCwd,
+}));
+
 const terminalProvider: TerminalProvider = {
   executeCommand: vi.fn(),
   getBackgroundState: vi.fn(),
@@ -29,6 +37,119 @@ describe("handleGetTerminalOutput", () => {
     vi.clearAllMocks();
     terminalProvider.getRetainedOutput = undefined;
     vi.mocked(terminalProvider.getRecentlyClosedTerminals).mockReturnValue([]);
+    resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue(undefined);
+  });
+
+  describe("protected Git metadata guidance", () => {
+    const preflightDenial =
+      "preflight: EPERM: operation not permitted, mkdir '/workspace/.git/agentlink-preflight/abc123'";
+
+    function mockFinishedCommand(
+      overrides: {
+        route?: "sandbox" | "native";
+        running?: boolean;
+        output?: string;
+        exitCode?: number;
+      } = {},
+    ) {
+      vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+        command_id: "preflight-command",
+        exit_code: overrides.exitCode ?? 2,
+        is_running: overrides.running ?? false,
+        state: overrides.running ? "running" : "completed",
+        output: overrides.output ?? preflightDenial,
+        output_captured: true,
+        output_complete: true,
+        output_finalized: !overrides.running,
+        executionContext: {
+          commandId: "preflight-command",
+          command: "npm run preflight",
+          cwd: "/workspace",
+          temporaryHome: false,
+          replayable: true,
+          security: {
+            auditId: "preflight-audit",
+            route: overrides.route ?? "sandbox",
+            confinement: "verified-baseline",
+            routeReason: "verified-local-macos",
+            executionSurface: "verified-sandbox",
+            requiredAuthority: "sandbox",
+            permissionIntent: "default",
+            approvalRequirement: "policy",
+            authorityReason: "approval-policy",
+            approvalPolicySnapshot: "on-request",
+            approvalReviewerSnapshot: "auto-review",
+            executionPresetSnapshot: "workspace-write",
+            commandApprovalPolicySnapshot: "approve-for-me",
+            executionPolicy: "sandbox-baseline-v2",
+            preparedAt: 100,
+          },
+        },
+      });
+    }
+
+    it("returns reviewed native retry guidance for a finished background .git denial", async () => {
+      resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+        marker: "/workspace/.git",
+      });
+      mockFinishedCommand();
+      const payload = textPayload(
+        await handleGetTerminalOutput(
+          {
+            terminal_id: "preflight-terminal",
+            command_id: "preflight-command",
+          },
+          { terminalProvider, workspaceRoots: ["/workspace"] },
+        ),
+      );
+      expect(resolveBaselineProtectedGitMetadataForCwd).toHaveBeenCalledWith(
+        "/workspace",
+        ["/workspace"],
+      );
+      expect(payload).toMatchObject({
+        capability_code: "protected_git_metadata",
+        protected_path: "/workspace/.git",
+        retry_guidance: {
+          code: "protected_git_metadata",
+          automatic_retry: false,
+          options: [
+            {
+              action: "reviewed_native_retry",
+              command: "npm run preflight",
+              cwd: "/workspace",
+              sandbox_permissions: "require_escalated",
+            },
+          ],
+        },
+      });
+      expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { name: "native route", route: "native" as const },
+      { name: "running command", running: true },
+      {
+        name: "denial outside .git",
+        output:
+          "EPERM: operation not permitted, mkdir '/workspace/node_modules/x'",
+      },
+    ])("does not add guidance for $name", async (scenario) => {
+      resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+        marker: "/workspace/.git",
+      });
+      mockFinishedCommand(scenario);
+      const payload = textPayload(
+        await handleGetTerminalOutput(
+          {
+            terminal_id: "preflight-terminal",
+            command_id: "preflight-command",
+          },
+          { terminalProvider, workspaceRoots: ["/workspace"] },
+        ),
+      );
+      expect(payload.retry_guidance).toBeUndefined();
+      expect(payload.capability_code).toBeUndefined();
+    });
   });
 
   it.each([

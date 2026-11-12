@@ -211,6 +211,7 @@ import {
   type CodexImageGenerationQuality,
   type CodexImageReferenceImage,
 } from "../../core/model/providers/codex/imageGeneration.js";
+import { imageGenerationOptionMismatchFields } from "../../core/model/providers/codex/imageGenerationOptionMismatch.js";
 import {
   toCoreModelDocumentMediaType,
   toCoreModelImageMediaType,
@@ -8701,6 +8702,10 @@ export class BrowserGatewayHelper {
                 mime_type: image.mimeType,
               })),
               images: codexGeneratedImageMetadata(result.images),
+              ...imageGenerationOptionMismatchFields(
+                input.options,
+                result.images,
+              ),
               ...(result.responseId ? { response_id: result.responseId } : {}),
               ...(result.usage ? { usage: result.usage } : {}),
               event_types: Array.from(new Set(result.eventTypes)),

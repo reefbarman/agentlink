@@ -11767,9 +11767,20 @@ export class AgentSessionManager {
       };
     }
 
+    // Coordinators often answer yes/no questions with the visible "Yes"/"No"
+    // labels; normalise those to the booleans the asking agent expects.
+    const answers = structuredClone(request.answers);
+    for (const question of pending.questions) {
+      const answer = answers[question.id];
+      if (question.type !== "yes_no" || typeof answer !== "string") continue;
+      const normalized = answer.trim().toLowerCase();
+      if (normalized === "yes") answers[question.id] = true;
+      else if (normalized === "no") answers[question.id] = false;
+    }
+
     const validationError = this.validateBackgroundQuestionAnswers(
       pending.questions,
-      request.answers,
+      answers,
       request.notes,
     );
     if (validationError) {
@@ -11780,7 +11791,7 @@ export class AgentSessionManager {
     this.bgStatusDetail.delete(pending.backgroundSessionId);
     this.noteBackgroundProgress(pending.backgroundSessionId, "executing_tool");
     pending.resolve({
-      answers: structuredClone(request.answers),
+      answers,
       notes: structuredClone(request.notes),
     });
     this.notifySessionsChanged();
