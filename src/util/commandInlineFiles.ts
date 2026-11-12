@@ -139,6 +139,13 @@ export function materializeInlineCommandFiles(
   try {
     const previews: InlineCommandFilePreview[] = [];
     const pathByName = new Map<string, string>();
+    const runAsCode = new Set(
+      occurrences
+        .filter((occurrence) =>
+          isInterpreterArgument(command.slice(0, occurrence.start)),
+        )
+        .map(({ name }) => name),
+    );
 
     for (const file of files) {
       const ext = normalizedExtension(file.name, file.ext);
@@ -153,15 +160,21 @@ export function materializeInlineCommandFiles(
 
       fs.writeFileSync(filePath, file.content, { encoding: "utf-8", mode });
       pathByName.set(file.name, filePath);
+      const previewMode: PreviewMode =
+        file.mode === "755"
+          ? "full"
+          : runAsCode.has(file.name) || isScriptFilename(filename)
+            ? "script"
+            : "excerpt";
       previews.push({
         name: file.name,
         path: filePath,
         ext,
         bytes,
         sha256,
-        truncated: shouldTruncatePreview(file.content, file.mode === "755"),
+        truncated: shouldTruncatePreview(file.content, previewMode),
         executable: file.mode === "755",
-        preview: buildPreview(file.content, file.mode === "755"),
+        preview: buildPreview(file.content, previewMode),
       });
     }
 
@@ -330,15 +343,100 @@ function normalizedExtension(
   return ext;
 }
 
-function buildPreview(content: string, executable: boolean): string {
-  if (executable) return content;
+/**
+ * How much of an inline file the approval card and reviewer see. Code the
+ * command runs needs its whole body to be judged; data files only an excerpt.
+ */
+type PreviewMode = "full" | "script" | "excerpt";
+
+/** Cap for scripts run through an interpreter (mode-755 files stay uncapped). */
+export const MAX_INLINE_SCRIPT_PREVIEW_CHARS = 64 * 1024;
+
+const SCRIPT_EXTENSIONS = new Set([
+  "bash",
+  "cjs",
+  "fish",
+  "js",
+  "jsx",
+  "ksh",
+  "lua",
+  "mjs",
+  "mts",
+  "php",
+  "pl",
+  "ps1",
+  "py",
+  "r",
+  "rb",
+  "sh",
+  "swift",
+  "ts",
+  "tsx",
+  "zsh",
+]);
+
+const INTERPRETERS = new Set([
+  ".",
+  "bash",
+  "bun",
+  "deno",
+  "dash",
+  "fish",
+  "ksh",
+  "lua",
+  "node",
+  "osascript",
+  "perl",
+  "php",
+  "pwsh",
+  "python",
+  "rscript",
+  "ruby",
+  "sh",
+  "source",
+  "swift",
+  "ts-node",
+  "tsx",
+  "uv",
+  "zsh",
+]);
+
+function isScriptFilename(filename: string): boolean {
+  const dot = filename.lastIndexOf(".");
+  return (
+    dot > 0 && SCRIPT_EXTENSIONS.has(filename.slice(dot + 1).toLowerCase())
+  );
+}
+
+/**
+ * Whether the simple command containing a token runs it through an
+ * interpreter, e.g. `python3 "$AL_FILE(x)"` or `sh -s < $AL_FILE(x)`.
+ */
+function isInterpreterArgument(before: string): boolean {
+  const segment = before.split(/&&|\|\||[;|&\n(]/).at(-1) ?? "";
+  return segment
+    .split(/\s+/)
+    .map((word) => word.replace(/^["'<]+|["']+$/g, ""))
+    .filter((word) => word && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word))
+    .some((word) => {
+      const base = word.slice(word.lastIndexOf("/") + 1).toLowerCase();
+      return INTERPRETERS.has(base.replace(/[0-9.]+$/, "") || base);
+    });
+}
+
+function buildPreview(content: string, mode: PreviewMode): string {
+  if (mode === "full") return content;
+  if (mode === "script")
+    return content.slice(0, MAX_INLINE_SCRIPT_PREVIEW_CHARS);
   const lines = content.split(/\r?\n/);
   const firstLines = lines.slice(0, 40).join("\n");
   return firstLines.length > 4096 ? firstLines.slice(0, 4096) : firstLines;
 }
 
-function shouldTruncatePreview(content: string, executable: boolean): boolean {
-  if (executable) return false;
+function shouldTruncatePreview(content: string, mode: PreviewMode): boolean {
+  if (mode === "full") return false;
+  if (mode === "script")
+    return content.length > MAX_INLINE_SCRIPT_PREVIEW_CHARS;
   const lines = content.split(/\r?\n/);
   return lines.length > 40 || content.length > 4096;
 }

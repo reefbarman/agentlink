@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The command approval reviewer now sees the whole of an inline script the command runs, such as `python3 "$AL_FILE(check.py)"` or `node $AL_FILE(stage.mjs)`, up to 64 KB. Before, only scripts given mode `755` were shown in full and everything else was cut to 40 lines, so the reviewer often refused to judge a script it could only partly see and asked you instead. Data files such as commit messages or PR bodies still show a 40-line excerpt.
+
+- A sandboxed script that writes Git objects (for example `git hash-object -w`) and is refused now gets the same `protected_git_metadata` reviewed native retry option as Git lock-file denials. Before, Git's error named no path, so the denial wasn't recognised.
+
 ## 1.94.0
 
 - A sandboxed foreground command that reaches its `timeout` and keeps running in the background now keeps its managed network access. Before, every later connection was refused, so a watcher such as `gh pr checks --watch` failed with `Forbidden` right after the handoff. Closing the terminal or the command ending still cuts access off.

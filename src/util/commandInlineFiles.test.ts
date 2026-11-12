@@ -4,6 +4,7 @@ import * as path from "path";
 
 import {
   InlineCommandFileError,
+  MAX_INLINE_SCRIPT_PREVIEW_CHARS,
   materializeInlineCommandFiles,
   quotePosixShellArg,
   validateInlineCommandFiles,
@@ -240,6 +241,48 @@ describe("commandInlineFiles", () => {
     expect(
       run?.previews.find((file) => file.name === "body")?.preview.split("\n"),
     ).toHaveLength(40);
+    run?.cleanup();
+  });
+
+  it("shows the full body of scripts the command runs through an interpreter", () => {
+    const long = Array.from({ length: 120 }, (_, i) => `step(${i})`).join("\n");
+    const run = materializeInlineCommandFiles(
+      [
+        'python3 "$AL_FILE(validate)" --fast',
+        "FOO=1 /usr/bin/env node $AL_FILE(stage.mjs)",
+        "ssh host 'sh -s' < $AL_FILE(health)",
+        "git commit -F $AL_FILE(msg)",
+      ].join(" && "),
+      [
+        { name: "validate", content: long },
+        { name: "stage.mjs", content: long },
+        { name: "health", content: long },
+        { name: "msg", content: long },
+      ],
+    );
+    const byName = (name: string) =>
+      run?.previews.find((file) => file.name === name);
+    for (const name of ["validate", "stage.mjs", "health"]) {
+      expect(byName(name)).toMatchObject({
+        truncated: false,
+        executable: false,
+        preview: long,
+      });
+    }
+    expect(byName("msg")?.truncated).toBe(true);
+    expect(byName("msg")?.preview.split("\n")).toHaveLength(40);
+    run?.cleanup();
+  });
+
+  it("shows script-extension files in full up to the script cap", () => {
+    const huge = "x".repeat(MAX_INLINE_SCRIPT_PREVIEW_CHARS + 1);
+    const run = materializeInlineCommandFiles("cat $AL_FILE(tool)", [
+      { name: "tool", ext: "py", content: huge },
+    ]);
+    expect(run?.previews[0]).toMatchObject({ truncated: true });
+    expect(run?.previews[0].preview).toHaveLength(
+      MAX_INLINE_SCRIPT_PREVIEW_CHARS,
+    );
     run?.cleanup();
   });
 

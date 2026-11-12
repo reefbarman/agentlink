@@ -7,6 +7,16 @@ export const PROTECTED_GIT_DENIAL_PATTERNS = [
   /(?:index\.lock|ORIG_HEAD\.lock|FETCH_HEAD|objects\/tmp_object_)/i,
 ];
 
+/**
+ * Git's object-database writes (`hash-object -w`, `write-tree`, staging a new
+ * blob) create a temporary file under `.git/objects` without naming it, so the
+ * denial carries no protected path. Both lines must appear together.
+ */
+const GIT_OBJECT_TEMP_DENIAL =
+  /^error:\s*unable to create temporary file:\s*(?:permission denied|operation not permitted|read-only file system)\s*$/im;
+const GIT_OBJECT_WRITE_FAILURE =
+  /^(?:fatal|error):\s*(?:unable to add .+ to database|unable to write (?:loose )?object|failed to write object|insufficient permission for adding an object)/im;
+
 export interface ProtectedGitMetadataRecovery {
   retry_guidance: {
     code: "protected_git_metadata";
@@ -72,7 +82,9 @@ export async function protectedGitMetadataRecovery(input: {
       (line) =>
         PROTECTED_GIT_DENIAL_PATTERNS[0].test(line) &&
         protectedRoots.some((root) => line.includes(`${root}/`)),
-    );
+    ) ||
+    (GIT_OBJECT_TEMP_DENIAL.test(normalizedOutput) &&
+      GIT_OBJECT_WRITE_FAILURE.test(normalizedOutput));
   if (!referencesProtectedPath) return undefined;
   if (exitCode === 0 && !internalApplyFailure) {
     const protectedDenial = outputLines.some((line) => {
