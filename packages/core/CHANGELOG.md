@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.55.1 — 2026-11-12
+
+- Image-heavy sessions on OpenAI-compatible providers no longer exhaust memory, because request bodies are encoded into a single off-heap buffer with identical wire bytes.
+
 ## 0.55.0 — 2026-11-12
 
 - MCP stdio servers can set a working directory via cwd, list_mcp_resources and list_mcp_prompts accept an optional server filter, and sandboxed commands timed out into the background keep their network review so watchers continue working.

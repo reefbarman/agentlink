@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "5346fc072139868291ba716a414a3f84cda8e187",
-  "createdAt": "2026-11-12T06:02:05.821Z",
+  "sourceSha": "db91038bf1a363d267a56d9ed3dd34e7f9f3367f",
+  "createdAt": "2026-11-12T12:36:17.062Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,131 +10,157 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.93.0",
-      "baselineRef": "v1.93.0",
-      "reserved": "1.93.0",
-      "commits": ["5346fc072139868291ba716a414a3f84cda8e187"],
+      "published": "1.94.0",
+      "baselineRef": "v1.94.0",
+      "reserved": "1.94.0",
+      "commits": [
+        "1bd0c891287dc94c69326aad444f35c761b1cf82",
+        "db91038bf1a363d267a56d9ed3dd34e7f9f3367f"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.94.0",
-      "effectiveBump": "minor",
+      "version": "1.94.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.94.0",
+      "tag": "v1.94.1",
       "notes": [
         {
-          "sha": "5346fc072139868291ba716a414a3f84cda8e187",
-          "subject": "fix(tools): keep watcher network, filter MCP lists, add MCP cwd",
-          "summary": "MCP stdio servers can set a working directory via cwd, list_mcp_resources and list_mcp_prompts accept an optional server filter, and sandboxed commands timed out into the background keep their network review so watchers continue working.",
+          "sha": "1bd0c891287dc94c69326aad444f35c761b1cf82",
+          "subject": "fix(approvals): show reviewers full inline scripts, catch Git object-write denials",
+          "summary": "Approval cards and reviewers now see full bodies (up to 64 KB) of inline scripts run through interpreters, and sandbox-denied Git object writes in protected repositories get native retry guidance.",
+          "breaking": false
+        },
+        {
+          "sha": "db91038bf1a363d267a56d9ed3dd34e7f9f3367f",
+          "subject": "fix(openai-compatible): send image history without extra heap copies",
+          "summary": "Image-heavy sessions on OpenAI-compatible providers no longer exhaust memory, because request bodies are encoded into a single off-heap buffer with identical wire bytes.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.93.0",
-      "baselineRef": "desktop-v0.93.0",
-      "reserved": "0.93.0",
-      "commits": ["5346fc072139868291ba716a414a3f84cda8e187"],
+      "published": "0.94.0",
+      "baselineRef": "desktop-v0.94.0",
+      "reserved": "0.94.0",
+      "commits": [
+        "1bd0c891287dc94c69326aad444f35c761b1cf82",
+        "db91038bf1a363d267a56d9ed3dd34e7f9f3367f"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.94.0",
-      "effectiveBump": "minor",
+      "version": "0.94.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.94.0",
+      "tag": "desktop-v0.94.1",
       "notes": [
         {
-          "sha": "5346fc072139868291ba716a414a3f84cda8e187",
-          "subject": "fix(tools): keep watcher network, filter MCP lists, add MCP cwd",
-          "summary": "MCP stdio servers can set a working directory via cwd, list_mcp_resources and list_mcp_prompts accept an optional server filter, and sandboxed commands timed out into the background keep their network review so watchers continue working.",
+          "sha": "1bd0c891287dc94c69326aad444f35c761b1cf82",
+          "subject": "fix(approvals): show reviewers full inline scripts, catch Git object-write denials",
+          "summary": "Approval cards and reviewers now see full bodies (up to 64 KB) of inline scripts run through interpreters, and sandbox-denied Git object writes in protected repositories get native retry guidance.",
+          "breaking": false
+        },
+        {
+          "sha": "db91038bf1a363d267a56d9ed3dd34e7f9f3367f",
+          "subject": "fix(openai-compatible): send image history without extra heap copies",
+          "summary": "Image-heavy sessions on OpenAI-compatible providers no longer exhaust memory, because request bodies are encoded into a single off-heap buffer with identical wire bytes.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.64.0",
-      "baselineRef": "cli-v0.64.0",
-      "reserved": "0.64.0",
-      "commits": ["5346fc072139868291ba716a414a3f84cda8e187"],
+      "published": "0.65.0",
+      "baselineRef": "cli-v0.65.0",
+      "reserved": "0.65.0",
+      "commits": ["db91038bf1a363d267a56d9ed3dd34e7f9f3367f"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.65.0",
-      "effectiveBump": "minor",
+      "version": "0.65.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.65.0",
+      "tag": "cli-v0.65.1",
       "notes": [
         {
-          "sha": "5346fc072139868291ba716a414a3f84cda8e187",
-          "subject": "fix(tools): keep watcher network, filter MCP lists, add MCP cwd",
-          "summary": "MCP stdio servers can set a working directory via cwd, list_mcp_resources and list_mcp_prompts accept an optional server filter, and sandboxed commands timed out into the background keep their network review so watchers continue working.",
+          "sha": "db91038bf1a363d267a56d9ed3dd34e7f9f3367f",
+          "subject": "fix(openai-compatible): send image history without extra heap copies",
+          "summary": "Image-heavy sessions on OpenAI-compatible providers no longer exhaust memory, because request bodies are encoded into a single off-heap buffer with identical wire bytes.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.54.0",
-      "baselineRef": "sdk-v0.54.0",
-      "reserved": "0.54.0",
-      "commits": ["5346fc072139868291ba716a414a3f84cda8e187"],
+      "published": "0.55.0",
+      "baselineRef": "sdk-v0.55.0",
+      "reserved": "0.55.0",
+      "commits": ["db91038bf1a363d267a56d9ed3dd34e7f9f3367f"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.55.0",
-      "effectiveBump": "minor",
+      "version": "0.55.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.55.0",
+      "tag": "sdk-v0.55.1",
       "notes": [
         {
-          "sha": "5346fc072139868291ba716a414a3f84cda8e187",
-          "subject": "fix(tools): keep watcher network, filter MCP lists, add MCP cwd",
-          "summary": "MCP stdio servers can set a working directory via cwd, list_mcp_resources and list_mcp_prompts accept an optional server filter, and sandboxed commands timed out into the background keep their network review so watchers continue working.",
+          "sha": "db91038bf1a363d267a56d9ed3dd34e7f9f3367f",
+          "subject": "fix(openai-compatible): send image history without extra heap copies",
+          "summary": "Image-heavy sessions on OpenAI-compatible providers no longer exhaust memory, because request bodies are encoded into a single off-heap buffer with identical wire bytes.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.65.0",
-      "baselineRef": "assistant-v0.65.0",
-      "reserved": "0.65.0",
-      "commits": ["5346fc072139868291ba716a414a3f84cda8e187"],
+      "published": "0.66.0",
+      "baselineRef": "assistant-v0.66.0",
+      "reserved": "0.66.0",
+      "commits": ["db91038bf1a363d267a56d9ed3dd34e7f9f3367f"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.66.0",
-      "effectiveBump": "minor",
+      "version": "0.66.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.66.0",
+      "tag": "assistant-v0.66.1",
       "notes": [
         {
-          "sha": "5346fc072139868291ba716a414a3f84cda8e187",
-          "subject": "fix(tools): keep watcher network, filter MCP lists, add MCP cwd",
-          "summary": "MCP stdio servers can set a working directory via cwd, list_mcp_resources and list_mcp_prompts accept an optional server filter, and sandboxed commands timed out into the background keep their network review so watchers continue working.",
+          "sha": "db91038bf1a363d267a56d9ed3dd34e7f9f3367f",
+          "subject": "fix(openai-compatible): send image history without extra heap copies",
+          "summary": "Image-heavy sessions on OpenAI-compatible providers no longer exhaust memory, because request bodies are encoded into a single off-heap buffer with identical wire bytes.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "5346fc072139868291ba716a414a3f84cda8e187": {
-      "bump": "minor",
+    "1bd0c891287dc94c69326aad444f35c761b1cf82": {
+      "bump": "patch",
       "breakingUnits": [],
-      "summary": "MCP stdio servers can set a working directory via cwd, list_mcp_resources and list_mcp_prompts accept an optional server filter, and sandboxed commands timed out into the background keep their network review so watchers continue working.",
+      "summary": "Approval cards and reviewers now see full bodies (up to 64 KB) of inline scripts run through interpreters, and sandbox-denied Git object writes in protected repositories get native retry guidance.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "db91038bf1a363d267a56d9ed3dd34e7f9f3367f": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Image-heavy sessions on OpenAI-compatible providers no longer exhaust memory, because request bodies are encoded into a single off-heap buffer with identical wire bytes.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.94.1
+
 - The command approval reviewer now sees the whole of an inline script the command runs, such as `python3 "$AL_FILE(check.py)"` or `node $AL_FILE(stage.mjs)`, up to 64 KB. Before, only scripts given mode `755` were shown in full and everything else was cut to 40 lines, so the reviewer often refused to judge a script it could only partly see and asked you instead. Data files such as commit messages or PR bodies still show a 40-line excerpt.
 
 - A sandboxed script that writes Git objects (for example `git hash-object -w`) and is refused now gets the same `protected_git_metadata` reviewed native retry option as Git lock-file denials. Before, Git's error named no path, so the denial wasn't recognised.
