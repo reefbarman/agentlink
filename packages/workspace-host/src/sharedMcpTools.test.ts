@@ -217,9 +217,33 @@ describe("shared MCP workspace tools", () => {
         .modelContent,
     ).toContain("test://item");
     expect(
+      (
+        await byName("list_mcp_resources").execute(
+          { server: "records" },
+          executionContext,
+        )
+      ).modelContent,
+    ).toContain("test://item");
+    expect(
+      (
+        await byName("list_mcp_resources").execute(
+          { server: "other" },
+          executionContext,
+        )
+      ).modelContent,
+    ).toBe("[]");
+    expect(
       (await byName("list_mcp_prompts").execute({}, executionContext))
         .modelContent,
     ).toContain("summary");
+    expect(
+      (
+        await byName("list_mcp_prompts").execute(
+          { server: "other" },
+          executionContext,
+        )
+      ).modelContent,
+    ).toBe("[]");
     expect(
       (
         await byName("read_mcp_resource").execute(

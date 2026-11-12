@@ -635,6 +635,28 @@ describe("loadMcpConfigs", () => {
     });
   });
 
+  it("preserves a stdio working directory across manager edits", async () => {
+    const configPath = join(home, ".agentlink", "ask-agent", "mcp.json");
+    await writeJson(configPath, {
+      mcpServers: {
+        local: { command: "bash", args: ["server.sh"], cwd: "scripts" },
+      },
+    });
+
+    await upsertMcpConfigServer({
+      profile: "ask-agent",
+      scope: "ask-agent-global",
+      server: { name: "local", command: "bash", args: ["server.sh"] },
+    });
+
+    const written = JSON.parse(await readFile(configPath, "utf-8"));
+    expect(written.mcpServers.local).toEqual({
+      command: "bash",
+      args: ["server.sh"],
+      cwd: "scripts",
+    });
+  });
+
   it("writes and removes Ask Agent MCP servers only in the Ask Agent config", async () => {
     await upsertMcpConfigServer({
       profile: "ask-agent",

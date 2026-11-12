@@ -279,7 +279,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   close_terminals: {
     label: "Clean up terminals",
     description:
-      "Close managed terminals to clean up clutter. With no arguments, closes all terminals created by agentlink. Pass specific names to close only those (e.g. ['Server'] to close a background dev server terminal). Recently closed output and final status remain retrievable by terminal ID.",
+      "Close managed terminals to clean up clutter. With no arguments, closes all terminals created by agentlink. Pass terminal IDs or names in `names` to close only those (e.g. ['Server'] for a background dev server, or the IDs listed by a terminal_cleanup warning). Prefer IDs when several terminals share a name, since a name closes every terminal with that name. Recently closed output and final status remain retrievable by terminal ID.",
   },
 
   get_editor_state: {

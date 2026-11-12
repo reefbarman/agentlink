@@ -646,7 +646,9 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         channel.active.background = true;
         this.detachImplicitFromPool(channel);
       }
-      channel.active?.networkAbortController.abort();
+      // The command keeps running in the background, so it keeps its managed
+      // network review like an explicit background launch. Closing, exit, or
+      // termination still aborts it.
       options.onCommandFinalizationDeferred?.();
       void completion.catch((error) =>
         this.log?.(`[sandbox-terminal] Timed-out command failed: ${error}`),

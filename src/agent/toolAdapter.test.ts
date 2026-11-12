@@ -1357,13 +1357,17 @@ describe("tool usage telemetry project attribution", () => {
 
   it("invokes deferred MCP resource and prompt bridges through call_native_tool", async () => {
     const mcpResourcePromptProvider = {
-      listResources: vi
-        .fn()
-        .mockReturnValue([{ serverName: "linear", uri: "linear://issues" }]),
+      listResources: vi.fn().mockReturnValue([
+        { serverName: "linear", uri: "linear://issues" },
+        { serverName: "posthog", uri: "posthog://skills/b9e1" },
+      ]),
       readResource: vi.fn().mockResolvedValue({
         content: [{ type: "text", text: "resource-body-7f3a" }],
       }),
-      listPrompts: vi.fn().mockReturnValue([]),
+      listPrompts: vi.fn().mockReturnValue([
+        { serverName: "linear", name: "triage" },
+        { serverName: "posthog", name: "insight-c4d2" },
+      ]),
       getPrompt: vi.fn().mockResolvedValue({
         content: [{ type: "text", text: "prompt-body-7f3a" }],
       }),
@@ -1397,6 +1401,18 @@ describe("tool usage telemetry project attribution", () => {
     const listed = await call("list_mcp_resources", {});
     expect(listed.isError).toBeFalsy();
     expect(JSON.stringify(listed)).toContain("linear://issues");
+    expect(JSON.stringify(listed)).toContain("posthog://skills/b9e1");
+
+    const filtered = await call("list_mcp_resources", { server: "linear" });
+    expect(filtered.isError).toBeFalsy();
+    expect(JSON.stringify(filtered)).toContain("linear://issues");
+    expect(JSON.stringify(filtered)).not.toContain("posthog://skills/b9e1");
+
+    const filteredPrompts = await call("list_mcp_prompts", {
+      server: "posthog",
+    });
+    expect(JSON.stringify(filteredPrompts)).toContain("insight-c4d2");
+    expect(JSON.stringify(filteredPrompts)).not.toContain("triage");
 
     const read = await call("read_mcp_resource", {
       server: "linear",

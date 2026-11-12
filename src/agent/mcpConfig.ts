@@ -175,6 +175,7 @@ function redactConfig(config: McpServerConfig): McpManagerServerDraft {
     type: config.type,
     command: config.command,
     args: config.args,
+    cwd: config.cwd,
     url: config.url,
     timeout: config.timeout,
     toolPolicy: config.toolPolicy,
@@ -225,6 +226,7 @@ async function buildConfigEntries(
         type: existing?.config.type ?? "stdio",
         command: existing?.config.command,
         args: existing?.config.args,
+        cwd: existing?.config.cwd,
         env: existing?.config.env,
         url: existing?.config.url,
         timeout: existing?.config.timeout,
@@ -243,6 +245,7 @@ async function buildConfigEntries(
         next.type = raw.type as McpServerConfig["type"];
       if (raw.command !== undefined) next.command = raw.command;
       if (raw.args !== undefined) next.args = raw.args;
+      if (typeof raw.cwd === "string") next.cwd = raw.cwd;
       if (raw.env !== undefined) next.env = redactRecord(raw.env);
       if (raw.url !== undefined) next.url = raw.url;
       if (raw.timeout !== undefined) next.timeout = raw.timeout;
@@ -880,6 +883,7 @@ function applySecretMutation(
 
 /** Hand-edited mcp.json fields with no manager control. */
 const MANAGER_PRESERVED_FIELDS = [
+  "cwd",
   "protocol",
   "promptPolicy",
   "allowedPrompts",

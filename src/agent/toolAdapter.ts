@@ -1610,6 +1610,15 @@ function createMcpToolDiscoveryProvider(
   };
 }
 
+/** Optional `server` filter for list_mcp_resources and list_mcp_prompts. */
+function matchesMcpListServerFilter(
+  params: Record<string, unknown>,
+  serverName: string,
+): boolean {
+  const server = typeof params.server === "string" ? params.server.trim() : "";
+  return !server || serverName === server;
+}
+
 function createMcpResourcePromptProvider(
   mcpHub: McpClientHub,
 ): McpResourcePromptProvider {
@@ -4864,8 +4873,13 @@ async function dispatchToolCallWithTrackedApprovals(
           return errorResult("MCP hub not available");
         const resources = mcpResourcePromptProvider
           .listResources()
-          .filter((resource) =>
-            skillAllowlistAllowsMcpServer(skillAllowlist, resource.serverName),
+          .filter(
+            (resource) =>
+              matchesMcpListServerFilter(params, resource.serverName) &&
+              skillAllowlistAllowsMcpServer(
+                skillAllowlist,
+                resource.serverName,
+              ),
           );
         return {
           content: [{ type: "text", text: JSON.stringify(resources, null, 2) }],
@@ -4946,8 +4960,10 @@ async function dispatchToolCallWithTrackedApprovals(
           return errorResult("MCP hub not available");
         const prompts = mcpResourcePromptProvider
           .listPrompts()
-          .filter((prompt) =>
-            skillAllowlistAllowsMcpServer(skillAllowlist, prompt.serverName),
+          .filter(
+            (prompt) =>
+              matchesMcpListServerFilter(params, prompt.serverName) &&
+              skillAllowlistAllowsMcpServer(skillAllowlist, prompt.serverName),
           );
         return {
           content: [{ type: "text", text: JSON.stringify(prompts, null, 2) }],

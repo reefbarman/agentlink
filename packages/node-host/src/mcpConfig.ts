@@ -190,11 +190,14 @@ export async function loadMcpConfigsFromSources(
         allowedPrompts: existing?.allowedPrompts,
         disabled: existing?.disabled ?? false,
         protocol: existing?.protocol,
+        cwd: existing?.cwd,
       };
       if (raw.type !== undefined)
         next.type = raw.type as McpServerConfig["type"];
       if (raw.command !== undefined) next.command = raw.command;
       if (raw.args !== undefined) next.args = raw.args;
+      if (typeof raw.cwd === "string" && raw.cwd.trim())
+        next.cwd = resolveMcpServerCwd(raw.cwd.trim(), filePath);
       if (raw.env !== undefined)
         next.env = resolveConfigVars(raw.env, environment);
       if (raw.url !== undefined) next.url = raw.url;
@@ -241,6 +244,36 @@ export async function loadMcpConfigsFromSources(
     }
   }
   return Array.from(merged.values());
+}
+
+/**
+ * Resolves a configured stdio `cwd`. `~` expands to the home folder; any other
+ * relative path resolves against the folder holding the config's
+ * `.agentlink`/`.claude`/`.agents` directory (the project root for project
+ * sources), not the host process's own working directory.
+ */
+export function resolveMcpServerCwd(
+  cwd: string,
+  configFilePath: string,
+  home = os.homedir(),
+): string {
+  if (cwd === "~") return home;
+  if (cwd.startsWith("~/")) return path.join(home, cwd.slice(2));
+  return path.resolve(mcpConfigOwnerFolder(configFilePath), cwd);
+}
+
+const MCP_CONFIG_DIRECTORIES = new Set([".agentlink", ".claude", ".agents"]);
+
+function mcpConfigOwnerFolder(configFilePath: string): string {
+  const directory = path.dirname(path.resolve(configFilePath));
+  for (let candidate = directory; ;) {
+    if (MCP_CONFIG_DIRECTORIES.has(path.basename(candidate)))
+      return path.dirname(candidate);
+    const parent = path.dirname(candidate);
+    if (parent === candidate) break;
+    candidate = parent;
+  }
+  return directory;
 }
 
 function resolveConfigVars(

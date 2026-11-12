@@ -54,6 +54,7 @@ export type McpConfigDiagnosticCode =
   | "invalid_transport"
   | "invalid_command"
   | "invalid_args"
+  | "invalid_cwd"
   | "invalid_env"
   | "invalid_headers"
   | "invalid_record_key"
@@ -102,6 +103,7 @@ const SUPPORTED_FIELDS = new Set([
   "command",
   "args",
   "env",
+  "cwd",
   "url",
   "serverUrl",
   "headers",
@@ -523,6 +525,29 @@ export function validateMcpServerConfig(
       diagnostics,
     );
     if (args !== undefined) draft.args = args;
+  }
+  if (configValue.cwd !== undefined) {
+    if (typeof configValue.cwd !== "string" || !configValue.cwd.trim()) {
+      diagnostics.push(
+        diagnostic(
+          "error",
+          "invalid_cwd",
+          fieldPath(path, "cwd"),
+          "Working directory must be a non-empty string.",
+        ),
+      );
+    } else if (type !== undefined && type !== "stdio") {
+      diagnostics.push(
+        diagnostic(
+          "error",
+          "invalid_cwd",
+          fieldPath(path, "cwd"),
+          "Working directory applies only to stdio servers.",
+        ),
+      );
+    } else {
+      draft.cwd = configValue.cwd.trim();
+    }
   }
   if (configValue.allowedTools !== undefined) {
     const allowedTools = validateStringArray(

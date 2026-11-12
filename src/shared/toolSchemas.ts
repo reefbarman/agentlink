@@ -1579,7 +1579,7 @@ export const closeTerminalsSchema = {
     .array(z.string())
     .optional()
     .describe(
-      "Terminal names to close (e.g. ['Server', 'Tests']). Omit to close all managed terminals.",
+      "Terminal IDs or names to close (e.g. ['Server', 'sandbox-3']). Use IDs to close one of several same-named terminals; a name closes every terminal with that name. Omit to close all managed terminals.",
     ),
 };
 
@@ -1646,14 +1646,24 @@ export const unwatchMcpResourceSchema = {
   uri: z.string().min(1).max(2048),
 };
 
-export const listMcpResourcesSchema = {};
+const mcpListServerFilterSchema = z
+  .string()
+  .max(256)
+  .optional()
+  .describe("Optional server name; omit to list every server");
+
+export const listMcpResourcesSchema = {
+  server: mcpListServerFilterSchema,
+};
 
 export const readMcpResourceSchema = {
   server: z.string(),
   uri: z.string(),
 };
 
-export const listMcpPromptsSchema = {};
+export const listMcpPromptsSchema = {
+  server: mcpListServerFilterSchema,
+};
 
 export const getMcpPromptSchema = {
   server: z.string(),

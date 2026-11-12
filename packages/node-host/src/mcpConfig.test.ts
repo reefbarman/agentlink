@@ -5,6 +5,7 @@ import {
   loadMcpConfigsFromSources,
   projectMcpConfigSources,
   readMcpConfig,
+  resolveMcpServerCwd,
 } from "./mcpConfig.js";
 
 import { promises as fs } from "node:fs";
@@ -91,6 +92,46 @@ describe("shared MCP config", () => {
         provenance: expect.objectContaining({ kind: "native" }),
       }),
     ]);
+  });
+
+  it("resolves a relative stdio cwd against the config's owning folder", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-shared-"));
+    roots.push(root);
+    const file = await source(root, ".agentlink", {
+      mcpServers: {
+        relative: { command: "bash", args: ["drawthings.sh"], cwd: "scripts" },
+        dot: { command: "node", cwd: "." },
+        absolute: { command: "node", cwd: "/opt/mcp" },
+        home: { command: "node", cwd: "~/mcp" },
+        unset: { command: "node" },
+      },
+    });
+    const configs = await loadMcpConfigsFromSources(
+      [file],
+      {},
+      {
+        root,
+        sources: [file],
+      },
+    );
+    expect(
+      Object.fromEntries(configs.map((cfg) => [cfg.name, cfg.cwd])),
+    ).toEqual({
+      relative: path.join(root, "scripts"),
+      dot: root,
+      absolute: "/opt/mcp",
+      home: path.join(os.homedir(), "mcp"),
+      unset: undefined,
+    });
+    expect(resolveMcpServerCwd("~", file, "/home/u")).toBe("/home/u");
+    // Ask Agent's config lives one level deeper but still belongs to home.
+    expect(
+      resolveMcpServerCwd(
+        "tools",
+        "/home/u/.agentlink/ask-agent/mcp.json",
+        "/home/u",
+      ),
+    ).toBe("/home/u/tools");
   });
 
   it("reads the per-server protocol override", async () => {

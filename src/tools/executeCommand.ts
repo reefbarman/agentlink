@@ -2350,7 +2350,7 @@ function attachTerminalCleanupWarning(
     terminalCleanupWarningScopes.add(scopeKey);
 
     result.terminal_cleanup = {
-      warning: `There are ${inactive.length} inactive managed terminals. Close terminals you no longer need before opening more; use close_terminals when it is available in the current mode.`,
+      warning: `There are ${inactive.length} inactive managed terminals. Close terminals you no longer need before opening more; use close_terminals with the listed terminal IDs when it is available in the current mode.`,
       inactive_count: inactive.length,
       threshold: INACTIVE_TERMINAL_CLEANUP_THRESHOLD,
       terminals: inactive

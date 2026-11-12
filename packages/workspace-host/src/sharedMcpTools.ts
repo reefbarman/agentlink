@@ -722,16 +722,28 @@ export function createWorkspaceSharedMcpTools(
         defineTool({
           name,
           description,
-          inputSchema: { type: "object", properties: {} },
+          inputSchema: {
+            type: "object",
+            properties: {
+              server: {
+                type: "string",
+                description: "Optional server name; omit to list every server",
+              },
+            },
+          },
           effect: "read",
-          handler: async (_input, context) => {
+          handler: async (input, context) => {
             if (!(await validContext(context)))
               return { modelContent: "MCP turn has changed", isError: true };
+            const server =
+              typeof input.server === "string" ? input.server.trim() : "";
             const available = await Promise.all(
-              value().map(async (item) => ({
-                item,
-                current: await validContext(context, item.serverName),
-              })),
+              value()
+                .filter((item) => !server || item.serverName === server)
+                .map(async (item) => ({
+                  item,
+                  current: await validContext(context, item.serverName),
+                })),
             );
             return {
               modelContent: JSON.stringify(
@@ -887,7 +899,7 @@ export function createWorkspaceSharedMcpTools(
         }),
         catalog(
           "list_mcp_resources",
-          "List all resources available from connected MCP servers.",
+          "List resources available from connected MCP servers. Pass server to list only that server's resources.",
           () => hub.getAllResources(),
         ),
         read(
@@ -901,7 +913,7 @@ export function createWorkspaceSharedMcpTools(
         ),
         catalog(
           "list_mcp_prompts",
-          "List all prompt templates available from connected MCP servers.",
+          "List prompt templates available from connected MCP servers. Pass server to list only that server's prompts.",
           () => hub.getAllPrompts(),
         ),
         read(

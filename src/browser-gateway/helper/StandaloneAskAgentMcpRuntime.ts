@@ -413,7 +413,9 @@ export class StandaloneAskAgentMcpRuntime {
           return findMcpTools(tools, input);
         }
         if (toolName === "list_mcp_resources") {
-          return jsonToolResult(resourcePrompts.listResources());
+          return jsonToolResult(
+            filterByMcpServer(resourcePrompts.listResources(), input),
+          );
         }
         if (toolName === "read_mcp_resource") {
           const serverName = requiredInputText(input.server);
@@ -429,7 +431,9 @@ export class StandaloneAskAgentMcpRuntime {
           });
         }
         if (toolName === "list_mcp_prompts") {
-          return jsonToolResult(resourcePrompts.listPrompts());
+          return jsonToolResult(
+            filterByMcpServer(resourcePrompts.listPrompts(), input),
+          );
         }
         if (toolName === "get_mcp_prompt") {
           const serverName = requiredInputText(input.server);
@@ -969,9 +973,11 @@ export class StandaloneAskAgentMcpRuntime {
           });
         }
         if (toolName === "list_mcp_resources")
-          return jsonToolResult(hub.getAllResources());
+          return jsonToolResult(
+            filterByMcpServer(hub.getAllResources(), input),
+          );
         if (toolName === "list_mcp_prompts")
-          return jsonToolResult(hub.getAllPrompts());
+          return jsonToolResult(filterByMcpServer(hub.getAllPrompts(), input));
         if (toolName === "read_mcp_resource") {
           const server = requiredInputText(input.server);
           const uri = requiredInputText(input.uri);
@@ -1586,6 +1592,17 @@ function normalizeTimeout(value: number | undefined): number {
   return Number.isSafeInteger(value) && value! > 0
     ? Math.min(value!, DEFAULT_MCP_TIMEOUT_MS)
     : DEFAULT_MCP_TIMEOUT_MS;
+}
+
+/** Applies the optional `server` filter of list_mcp_resources/list_mcp_prompts. */
+function filterByMcpServer<T extends { readonly serverName: string }>(
+  items: readonly T[],
+  input: Record<string, unknown>,
+): T[] {
+  const server = requiredInputText(input.server);
+  return server
+    ? items.filter((item) => item.serverName === server)
+    : [...items];
 }
 
 function requiredInputText(value: unknown): string | undefined {

@@ -1236,6 +1236,46 @@ describe("SandboxTerminalCoordinator", () => {
     }
   });
 
+  it("keeps reviewing managed network requests after a foreground timeout backgrounds the command", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      enableManagedNetworking(test);
+      const onManagedNetworkRequest = vi.fn(
+        async (_request: unknown, signal: AbortSignal) =>
+          signal.aborted ? ("reject" as const) : ("allow-once" as const),
+      );
+      const result = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "gh pr checks 1 --watch",
+        cwd: "/workspace",
+        sandboxSessionId: "session-network",
+        timeout: 100,
+        onManagedNetworkRequest,
+      });
+      await flush();
+      const process = test.processes[0];
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(result).resolves.toMatchObject({
+        timed_out: true,
+        backgrounded: true,
+        is_running: true,
+      });
+
+      process.emit({ type: "network-request", request: managedDestination });
+      await flush();
+
+      expect(onManagedNetworkRequest).toHaveBeenCalledOnce();
+      expect(onManagedNetworkRequest.mock.calls[0][1].aborted).toBe(false);
+      expect(process.respondToNetworkRequest).toHaveBeenCalledWith(
+        "network-1",
+        "allow-once",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("isolates identical network request IDs across concurrent commands", async () => {
     const test = harness();
     enableManagedNetworking(test);
@@ -1281,6 +1321,40 @@ describe("SandboxTerminalCoordinator", () => {
       "network-1",
       "reject",
     );
+  });
+
+  it("closes one idle pooled terminal by ID while a same-named terminal keeps running", async () => {
+    const test = harness();
+    const running = await test.coordinator.executeCommand({
+      owner: undefined,
+      command: "npm run watch",
+      cwd: "/workspace",
+      sandboxSessionId: "session",
+      background: true,
+    });
+    const idle = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "pwd",
+      cwd: "/workspace",
+      sandboxSessionId: "session",
+    });
+    await flush();
+    await finish(test.processes[1], "/workspace\r\n", 0);
+    const idleResult = await idle;
+    expect(idleResult.terminal_id).not.toBe(running.terminal_id);
+    const listed = test.coordinator.listTerminals({ owner: undefined });
+    expect(new Set(listed.map((terminal) => terminal.name)).size).toBe(1);
+
+    expect(
+      test.coordinator.closeTerminals({
+        owner: undefined,
+        names: [idleResult.terminal_id!],
+      }),
+    ).toEqual({ closed: 1 });
+    expect(
+      test.coordinator.listTerminals({ owner: undefined }).map(({ id }) => id),
+    ).toEqual([running.terminal_id]);
+    expect(test.processes[0].terminate).not.toHaveBeenCalled();
   });
 
   it("rejects pending network review when its terminal closes", async () => {

@@ -45,6 +45,7 @@ describe("MCP config validation protocol", () => {
       | "invalid_transport"
       | "invalid_command"
       | "invalid_args"
+      | "invalid_cwd"
       | "invalid_env"
       | "invalid_headers"
       | "invalid_record_key"
@@ -76,6 +77,20 @@ describe("MCP config validation protocol", () => {
         set: { Authorization: "Bearer secret" },
       },
     });
+  });
+
+  it("keeps a stdio working directory", () => {
+    const result = validateMcpServerConfig("local", {
+      command: "bash",
+      args: ["scripts/server.sh"],
+      cwd: " tools ",
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.draft).toMatchObject({ type: "stdio", cwd: "tools" });
+    expect(result.diagnostics).not.toContainEqual(
+      expect.objectContaining({ code: "unknown_field" }),
+    );
   });
 
   it("normalizes and preserves every supported field", () => {
@@ -277,6 +292,13 @@ describe("MCP config validation protocol", () => {
       { command: "mcp", allowedPrompts: [1] },
       "invalid_allowed_prompts",
     ],
+    ["empty cwd", "server", { command: "mcp", cwd: " " }, "invalid_cwd"],
+    [
+      "cwd on a remote server",
+      "server",
+      { url: "https://one.test", cwd: "scripts" },
+      "invalid_cwd",
+    ],
     [
       "both URL aliases",
       "server",
@@ -312,7 +334,7 @@ describe("MCP config validation protocol", () => {
   it("warns for unknown fields without copying them", () => {
     const result = validateMcpServerConfig("foreign", {
       command: "mcp",
-      cwd: "/tmp/workspace",
+      alwaysAllow: ["lookup"],
       autoApprove: ["all"],
     });
 

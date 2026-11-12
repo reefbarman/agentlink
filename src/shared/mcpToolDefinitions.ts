@@ -61,10 +61,16 @@ export const MCP_META_TOOL_DEFINITIONS: CoreModelToolDefinition[] = [
   },
   {
     name: "list_mcp_resources",
-    description: "List all resources available from connected MCP servers.",
+    description:
+      "List resources available from connected MCP servers. Pass server to list only that server's resources.",
     input_schema: {
       type: "object",
-      properties: {},
+      properties: {
+        server: {
+          type: "string",
+          description: "Optional server name; omit to list every server",
+        },
+      },
     },
   },
   {
@@ -82,10 +88,15 @@ export const MCP_META_TOOL_DEFINITIONS: CoreModelToolDefinition[] = [
   {
     name: "list_mcp_prompts",
     description:
-      "List all prompt templates available from connected MCP servers.",
+      "List prompt templates available from connected MCP servers. Pass server to list only that server's prompts.",
     input_schema: {
       type: "object",
-      properties: {},
+      properties: {
+        server: {
+          type: "string",
+          description: "Optional server name; omit to list every server",
+        },
+      },
     },
   },
   {

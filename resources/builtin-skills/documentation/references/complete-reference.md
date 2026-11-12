@@ -1589,9 +1589,9 @@ Close managed terminals. With no arguments, closes all terminals created by Agen
 
 Use this proactively to clean up dedicated terminals you created for background/parallel work once they are no longer needed. `execute_command` prompts the agent once when the current chat crosses five inactive managed terminals, then re-arms after cleanup drops the count below five. Recently closed terminals retain bounded output, capture metadata, and final exit status for retrieval through `get_terminal_output`; close results exclude terminals whose disposal is still pending.
 
-| Parameter | Type      | Description                                                                      |
-| --------- | --------- | -------------------------------------------------------------------------------- |
-| `names`   | string[]? | Terminal names to close (e.g. `["Server", "Tests"]`). Omit to close all managed. |
+| Parameter | Type      | Description                                                                                                                                                               |
+| --------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `names`   | string[]? | Terminal IDs or names to close (e.g. `["Server", "sandbox-3"]`). A name closes every terminal with that name; use IDs to close one of several. Omit to close all managed. |
 
 ### `/worktree` manual parallel setup
 
@@ -1880,6 +1880,10 @@ List resources exposed by currently connected MCP servers.
 
 This is useful from the built-in agent when an MCP server publishes documentation, files, or other browseable resources.
 
+| Parameter | Type    | Description                                            |
+| --------- | ------- | ------------------------------------------------------ |
+| `server`  | string? | Only list this server's resources. Omit for every one. |
+
 ### read_mcp_resource
 
 Read an MCP resource by server name and resource URI.
@@ -1892,6 +1896,10 @@ Read an MCP resource by server name and resource URI.
 ### list_mcp_prompts
 
 List prompt templates exposed by connected MCP servers.
+
+| Parameter | Type    | Description                                          |
+| --------- | ------- | ---------------------------------------------------- |
+| `server`  | string? | Only list this server's prompts. Omit for every one. |
 
 ### get_mcp_prompt
 

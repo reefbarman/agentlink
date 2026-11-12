@@ -77,6 +77,11 @@ export interface McpManagerServerDraft {
   type?: McpTransportType;
   command?: string;
   args?: string[];
+  /**
+   * Stdio working directory. A relative path resolves against the folder that
+   * holds the config's `.agentlink`/`.claude`/`.agents` directory.
+   */
+  cwd?: string;
   url?: string;
   timeout?: number;
   toolPolicy?: "ask" | "allow";

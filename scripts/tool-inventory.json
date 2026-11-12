@@ -476,7 +476,7 @@
     },
     {
       "name": "list_mcp_prompts",
-      "parameters": [],
+      "parameters": ["server"],
       "cluster": "mcp",
       "sideEffect": "read",
       "devOnly": false,
@@ -485,7 +485,7 @@
     },
     {
       "name": "list_mcp_resources",
-      "parameters": [],
+      "parameters": ["server"],
       "cluster": "mcp",
       "sideEffect": "read",
       "devOnly": false,
@@ -940,5 +940,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "0a2449b3d65c89d0cd6150c1dee42f4156ac1d718da1122943ec714d7baf820e"
+  "revision": "e6bbbf17b2a6c860a9c379e62c3c5d0b7d8b168824d3bdf076d4fda0e22366fc"
 }

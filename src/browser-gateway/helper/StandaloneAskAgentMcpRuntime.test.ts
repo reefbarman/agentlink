@@ -264,6 +264,15 @@ describe("StandaloneAskAgentMcpRuntime", () => {
         expect.objectContaining({ serverName: "remote" }),
       ]),
     });
+    const filtered = await turn.execute(
+      "list_mcp_resources",
+      { server: "remote" },
+      new AbortController().signal,
+      request,
+    );
+    expect(filtered.data).toEqual([
+      expect.objectContaining({ serverName: "remote" }),
+    ]);
     await expect(
       turn.execute(
         "read_mcp_resource",

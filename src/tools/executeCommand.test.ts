@@ -8653,7 +8653,7 @@ describe("handleExecuteCommand", () => {
 
     expect(textPayload(result).terminal_cleanup).toEqual({
       warning:
-        "There are 5 inactive managed terminals. Close terminals you no longer need before opening more; use close_terminals when it is available in the current mode.",
+        "There are 5 inactive managed terminals. Close terminals you no longer need before opening more; use close_terminals with the listed terminal IDs when it is available in the current mode.",
       inactive_count: 5,
       threshold: 5,
       terminals: [

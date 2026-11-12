@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- A sandboxed foreground command that reaches its `timeout` and keeps running in the background now keeps its managed network access. Before, every later connection was refused, so a watcher such as `gh pr checks --watch` failed with `Forbidden` right after the handoff. Closing the terminal or the command ending still cuts access off.
+
+- `close_terminals` now documents that `names` also takes terminal IDs, and the inactive-terminal warning from `execute_command` points the agent at the IDs it lists. Use IDs to close one idle terminal when several share a name, such as the pooled `AgentLink` terminals, without closing a busy one.
+
+- `list_mcp_resources` and `list_mcp_prompts` take an optional `server` to list one server's entries instead of every connected server's. This applies in VS Code, Browser Ask Agent, the CLI and the Assistant.
+
+- Stdio servers in `mcp.json` can set `cwd`. A relative path resolves against the folder that holds the config's `.agentlink`, `.claude` or `.agents` directory (the project root for project configs), so `"args": ["scripts/server.sh"]` with `"cwd": "."` works no matter where VS Code was started. `~` expands to your home folder. Import JSON no longer drops it, and saving the server from the MCP Manager keeps it. Without `cwd`, servers start where they always did.
+
 ## 1.93.0
 
 - CLI and Assistant background agents now recheck elapsed-time deadlines before stopping. A timer notification arriving one clock tick early is rescheduled instead of prematurely reporting `budget_exhausted`; the configured limits and hard-limit multipliers are unchanged.
