@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Desktop and Browser Ask Agent no longer label pending messages as **Remote**. Sends now acknowledge acceptance without waiting for the agent to finish, retry stalled delivery with the same message ID, and keep an unconfirmed draft available for a safe retry instead of leaving the composer waiting indefinitely. Healthy long-running turns are not cancelled or restarted.
+
 - Image-heavy chats use less temporary memory: Codex reuses full-history translations, oversized WebSocket continuation snapshots are rejected before serializing their image data, and tool-result accounting no longer builds arrays of individual characters. VS Code chat panes receive background-agent images and documents only while viewing that agent's full transcript, and release their copy when it is closed. Reopening loads the latest history. Saved images and model-visible context are unchanged. This reduces extension-host out-of-memory risk, including when several background agents work with images, but does not cap total image-history memory.
 
 - Background agents can now choose `reasoningEffort` explicitly, such as Opus on `medium`, independently of the model tier. Omission keeps existing defaults; unsupported levels fail instead of silently changing effort. The CLI and Assistant accept the same field, with the older `reasoning_effort` alias retained. ACP agents still control their own reasoning.

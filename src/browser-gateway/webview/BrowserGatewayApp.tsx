@@ -201,6 +201,11 @@ import {
 } from "./relay/useRelayGatewayConnection";
 import { useGatewaySnapshotConnection } from "./useGatewaySnapshotConnection";
 import {
+  AskAgentSendTransport,
+  AskAgentSendUnconfirmedError,
+  type AskAgentSendResponse,
+} from "./AskAgentSendTransport";
+import {
   requestDirectSessionDetail,
   type BrowserGatewaySessionDetailRequest,
 } from "./sessionDetailTransport";
@@ -2131,6 +2136,11 @@ export function BrowserGatewayApp({
     notes: Record<string, string>;
   } | null>(null);
   const [sendStatus, setSendStatus] = useState<string>("");
+  const [sendDeliveryError, setSendDeliveryError] = useState<{
+    sessionId: string;
+    message: string;
+  } | null>(null);
+  const askAgentSendTransportRef = useRef(new AskAgentSendTransport());
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<
     Array<{
       sessionId: string;
@@ -5617,7 +5627,18 @@ export function BrowserGatewayApp({
         ? selectedSendTarget
         : null;
 
-    const userMessageId = randomId();
+    const askAgentSendKey = JSON.stringify([
+      sendForeground.sessionId,
+      text,
+      attachments,
+      displayText,
+      slashCommandLabel,
+      media,
+      skillSelection,
+      interject,
+      origin,
+    ]);
+    let userMessageId = randomId();
     const removeOptimisticUserMessage = () => {
       setOptimisticUserMessages((current) =>
         current.filter(({ message }) => message.id !== userMessageId),
@@ -5736,6 +5757,10 @@ export function BrowserGatewayApp({
       }
 
       const actionOrigin = { ...snapshotOriginRef.current };
+      if (isAskAgentSelected) {
+        userMessageId =
+          askAgentSendTransportRef.current.reserveMessageId(askAgentSendKey);
+      }
       const optimisticUserMessage: ChatMessage = {
         id: userMessageId,
         role: "user",
@@ -5744,7 +5769,7 @@ export function BrowserGatewayApp({
         blocks: [{ type: "text", text: displayWithMedia }],
         isSlashCommand: Boolean(slashCommandLabel),
         slashCommandLabel,
-        origin: "browser",
+        ...(isAskAgentSelected ? {} : { origin: "browser" as const }),
         ...(images.length > 0 || documents.length > 0
           ? {
               displayMedia: {
@@ -5810,6 +5835,9 @@ export function BrowserGatewayApp({
       if (interject) addOptimisticQueuedMessage(true);
       else addOptimisticUserMessage();
       setSendStatus("Sending…");
+      setSendDeliveryError((current) =>
+        current?.sessionId === sendForeground.sessionId ? null : current,
+      );
       logAskAgentBrowserEvent("send.start", {
         askAgentSelected: isAskAgentSelected,
         sessionId: sendForeground.sessionId,
@@ -5878,47 +5906,67 @@ export function BrowserGatewayApp({
       const sendPath = isAskAgentSelected
         ? "/api/ask-agent/send"
         : buildApiPath("/api/send");
-      const response = await fetch(sendPath, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({
-          text: trimmed,
-          id: userMessageId,
-          sessionId: sendForeground.sessionId,
-          projectId: isAskAgentSelected
-            ? undefined
-            : snapshot?.session.foreground?.project?.projectId,
-          mode: sendForeground.mode,
-          model: sendForeground.model,
-          reasoningEffort: effectiveReasoningEffort,
-          thinkingEnabled: effectiveReasoningEffort !== "none",
-          attachments,
-          images: images.length > 0 ? images : undefined,
-          documents: documents.length > 0 ? documents : undefined,
-          displayText: displayWithMedia,
-          slashCommandLabel,
-          isSlashCommand: Boolean(slashCommandLabel),
-          skillSelection,
-          interject,
-          instanceId: isAskAgentSelected
-            ? askAgentAssociatedInstanceId || undefined
-            : undefined,
-        }),
-      });
-      const body = (await response.json()) as {
-        ok?: boolean;
-        queued?: boolean;
-        interjected?: boolean;
-        error?: string;
-        snapshot?: GatewaySnapshot;
+      const sendPayload = {
+        text: trimmed,
+        id: userMessageId,
+        sessionId: sendForeground.sessionId,
+        projectId: isAskAgentSelected
+          ? undefined
+          : snapshot?.session.foreground?.project?.projectId,
+        mode: sendForeground.mode,
+        model: sendForeground.model,
+        reasoningEffort: effectiveReasoningEffort,
+        thinkingEnabled: effectiveReasoningEffort !== "none",
+        attachments,
+        images: images.length > 0 ? images : undefined,
+        documents: documents.length > 0 ? documents : undefined,
+        displayText: displayWithMedia,
+        slashCommandLabel,
+        isSlashCommand: Boolean(slashCommandLabel),
+        skillSelection,
+        interject,
+        instanceId: isAskAgentSelected
+          ? askAgentAssociatedInstanceId || undefined
+          : undefined,
       };
+      const response = isAskAgentSelected
+        ? await askAgentSendTransportRef.current.send(
+            askAgentSendKey,
+            sendPayload,
+            authToken,
+          )
+        : await (async () => {
+            const result = await fetch(sendPath, {
+              method: "POST",
+              credentials: "same-origin",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${authToken}`,
+              },
+              body: JSON.stringify(sendPayload),
+            });
+            return {
+              status: result.status,
+              body: (await result.json()) as AskAgentSendResponse,
+            };
+          })();
+      const { body } = response;
       if (body.ok && body.snapshot) {
         if (isAskAgentSelected) {
-          commitAskAgentSnapshot(body.snapshot);
+          const current = snapshotCacheRef.current.get(
+            BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
+          )?.snapshot.session.foreground;
+          const alreadyObserved =
+            current?.sessionId === sendForeground.sessionId &&
+            (current.projectedMessages.some(
+              (message) => message.id === userMessageId,
+            ) ||
+              current.messageQueue.some(
+                (message) => message.id === userMessageId,
+              ));
+          // A delayed acknowledgement must not replace newer streamed progress
+          // (or a completed turn) with the snapshot captured at acceptance.
+          if (!alreadyObserved) commitAskAgentSnapshot(body.snapshot);
         } else if (!relayClientEnabled) {
           commitSnapshot(
             body.snapshot,
@@ -5974,7 +6022,17 @@ export function BrowserGatewayApp({
       });
       removeOptimisticUserMessage();
       removeOptimisticQueuedMessage();
-      setSendStatus(`Send error: ${String(err)}`);
+      if (err instanceof AskAgentSendUnconfirmedError) {
+        setSendDeliveryError({
+          sessionId: sendForeground.sessionId,
+          message: err.message,
+        });
+      }
+      setSendStatus(
+        err instanceof AskAgentSendUnconfirmedError
+          ? "Delivery not confirmed"
+          : `Send error: ${String(err)}`,
+      );
       return false;
     }
   }
@@ -6038,8 +6096,8 @@ export function BrowserGatewayApp({
       base64: string;
       kind: "image" | "document";
     }>,
-  ): void => {
-    void handleSend(
+  ): Promise<boolean> => {
+    return handleSend(
       text,
       attachments,
       displayText,
@@ -11571,6 +11629,11 @@ export function BrowserGatewayApp({
                 }
                 revealKey={
                   visibleApproval?.id ??
+                  (isAskAgentSelected &&
+                  sendDeliveryError &&
+                  sendDeliveryError.sessionId === foreground?.sessionId
+                    ? `send-delivery:${foreground?.sessionId}`
+                    : null) ??
                   pendingFormElicitation?.id ??
                   (!isAskAgentSelected ? pendingUrlElicitation?.id : null) ??
                   (environmentPanelOpen
@@ -11590,6 +11653,14 @@ export function BrowserGatewayApp({
                     : 0,
                 )}
               >
+                {isAskAgentSelected &&
+                  sendDeliveryError &&
+                  sendDeliveryError.sessionId === foreground?.sessionId && (
+                    <div class="session-history-error" role="alert">
+                      <i class="codicon codicon-warning" aria-hidden="true" />
+                      <span>{sendDeliveryError.message}</span>
+                    </div>
+                  )}
                 {/* Keep this order in step with the VS Code shelf in
                     src/agent/webview/App.tsx. */}
                 {foreground && messageQueue.length > 0 && !mobileReviewOpen && (
@@ -12198,6 +12269,12 @@ export function BrowserGatewayApp({
                 <div class="browser-chat-composer">
                   <InputArea
                     onSend={handleSend}
+                    sendAcceptanceScope={
+                      isAskAgentSelected ? foreground?.sessionId : undefined
+                    }
+                    onDraftChanged={() => {
+                      askAgentSendTransportRef.current.discardDraft();
+                    }}
                     voiceInput={voiceInput}
                     placeholder={
                       isAskAgentSelected ? productCopy.placeholder : undefined

@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  waitFor,
+} from "@testing-library/preact";
 
 import { InputArea, type ComposerContextMode } from "./InputArea";
 import {
@@ -56,6 +62,187 @@ function renderInputArea(
     />,
   );
 }
+
+describe("send acceptance", () => {
+  it("keeps an unconfirmed draft and clears it only after a successful retry", async () => {
+    const responses: Array<(accepted: boolean) => void> = [];
+    const onSend = vi.fn(
+      () => new Promise<boolean>((resolve) => responses.push(resolve)),
+    );
+    const { container } = renderInputArea([], {
+      onSend,
+      sendAcceptanceScope: "chat-a",
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    input.value = "Keep this message";
+    fireEvent.input(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(input.value).toBe("Keep this message");
+    await act(async () => responses[0](false));
+    expect(input.value).toBe("Keep this message");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await act(async () => responses[1](true));
+    expect(input.value).toBe("");
+  });
+
+  it("does not erase edits typed while awaiting acceptance", async () => {
+    let accept!: (accepted: boolean) => void;
+    const { container } = renderInputArea([], {
+      onSend: () =>
+        new Promise<boolean>((resolve) => {
+          accept = resolve;
+        }),
+      sendAcceptanceScope: "chat-a",
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    input.value = "First message";
+    fireEvent.input(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    input.value = "Next draft";
+    fireEvent.input(input);
+    await act(async () => accept(true));
+    expect(input.value).toBe("Next draft");
+  });
+
+  it("invalidates delivery identity on draft edits, even when the text is later the same", async () => {
+    let accept!: (accepted: boolean) => void;
+    const onDraftChanged = vi.fn();
+    const { container } = renderInputArea([], {
+      onSend: () =>
+        new Promise<boolean>((resolve) => {
+          accept = resolve;
+        }),
+      sendAcceptanceScope: "chat-a",
+      onDraftChanged,
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    input.value = "yes";
+    fireEvent.input(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    onDraftChanged.mockClear();
+    input.value = "new draft";
+    fireEvent.input(input);
+    input.value = "yes";
+    fireEvent.input(input);
+    expect(onDraftChanged).toHaveBeenCalledTimes(2);
+    await act(async () => accept(true));
+    expect(input.value).toBe("yes");
+  });
+
+  it.each([false, true])(
+    "preserves normal-draft identity across a question while acceptance is %s",
+    async (accepted) => {
+      let settle!: (accepted: boolean) => void;
+      const onSend = vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            settle = resolve;
+          }),
+      );
+      const onDraftChanged = vi.fn();
+      const view = (contextMode: ComposerContextMode | null) => (
+        <InputArea
+          onSend={onSend}
+          onStop={vi.fn()}
+          streaming={false}
+          reasoningEffort="none"
+          onSetReasoningEffort={vi.fn()}
+          onExportTranscript={vi.fn()}
+          hasMessages={false}
+          vscodeApi={{ postMessage: vi.fn() }}
+          injection={null}
+          onInjectionConsumed={vi.fn()}
+          sendAcceptanceScope="chat-a"
+          onDraftChanged={onDraftChanged}
+          contextMode={contextMode}
+        />
+      );
+      const { container, rerender } = render(view(null));
+      const input = container.querySelector(
+        ".chat-input",
+      ) as HTMLTextAreaElement;
+      input.value = "Original request";
+      fireEvent.input(input);
+      fireEvent.keyDown(input, { key: "Enter" });
+      onDraftChanged.mockClear();
+      rerender(
+        view({
+          key: "question-1",
+          title: "More detail",
+          placeholder: "Answer the question",
+          initialText: "",
+          onSubmit: vi.fn(),
+          onCancel: vi.fn(),
+        }),
+      );
+      input.value = "Question answer";
+      fireEvent.input(input);
+      expect(onDraftChanged).not.toHaveBeenCalled();
+      await act(async () => settle(accepted));
+      expect(input.value).toBe("Question answer");
+      rerender(view(null));
+      expect(input.value).toBe(accepted ? "" : "Original request");
+      if (!accepted) expect(onDraftChanged).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains pasted media when delivery is unconfirmed", async () => {
+    const onSend = vi.fn(async () => false);
+    const { container } = renderInputArea([], {
+      onSend,
+      sendAcceptanceScope: "chat-a",
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    const image = new File(["image"], "screenshot.png", { type: "image/png" });
+    fireEvent.paste(input, {
+      clipboardData: {
+        items: [{ kind: "file", type: "image/png", getAsFile: () => image }],
+        files: [],
+      },
+    });
+    await waitFor(() =>
+      expect(container.querySelector(".image-attachment-chip")).toBeTruthy(),
+    );
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(container.querySelector(".image-attachment-chip")).toBeTruthy();
+    expect(onSend.mock.calls[0]).toBeDefined();
+  });
+
+  it("retains a custom slash-command draft when delivery is unconfirmed", async () => {
+    const onSend = vi.fn(async () => false);
+    const { container } = renderInputArea(
+      [
+        {
+          name: "review",
+          description: "Review",
+          source: "project",
+          builtin: false,
+          body: "Review the code",
+        },
+      ],
+      { onSend, sendAcceptanceScope: "chat-a" },
+    );
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    input.value = "/review details";
+    fireEvent.input(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(input.value).toBe("/review details");
+  });
+
+  it("keeps the existing immediate-clear behaviour unless the surface opts in", () => {
+    const { container } = renderInputArea([], {
+      onSend: () => new Promise<boolean>(() => {}),
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    input.value = "VS Code message";
+    fireEvent.input(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input.value).toBe("");
+  });
+});
 
 describe("explicit skill selection", () => {
   const skill: SlashCommandInfo = {

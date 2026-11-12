@@ -249,7 +249,7 @@ export type ComposerSubmitHandler = (
   slashCommandLabel?: string,
   media?: ComposerMedia[],
   skillSelection?: ExplicitSkillSelection,
-) => void;
+) => void | boolean | Promise<void | boolean>;
 
 export interface ComposerContextMode {
   key: string;
@@ -275,6 +275,10 @@ export interface ComposerContextMode {
 
 interface InputAreaProps {
   onSend: ComposerSubmitHandler;
+  /** Opt in to retaining the draft until delivery is accepted in this chat. */
+  sendAcceptanceScope?: string;
+  /** Discard retained delivery identity when the user edits or leaves a draft. */
+  onDraftChanged?: () => void;
   onInterject?: ComposerSubmitHandler;
   onStop: () => void;
   onPolishPrompt?: (draft: string) => Promise<string>;
@@ -400,6 +404,8 @@ export function InputArea({
   submitOnEnter = true,
   contextMode: requestedContextMode = null,
   onComposerEvent,
+  sendAcceptanceScope,
+  onDraftChanged,
 }: InputAreaProps) {
   // An open question card can be set aside so the composer behaves as the
   // normal chat input (slash commands such as /mcp, mode/model controls)
@@ -421,6 +427,12 @@ export function InputArea({
     [],
   );
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sendAcceptanceScopeRef = useRef(sendAcceptanceScope);
+  sendAcceptanceScopeRef.current = sendAcceptanceScope;
+  const draftVersionRef = useRef(0);
+  const draftChangedRef = useRef(onDraftChanged);
+  draftChangedRef.current = onDraftChanged;
+
   const inputWrapperRef = useRef<HTMLDivElement>(null);
   const requestedAttachmentPreviewsRef = useRef(new Set<string>());
   const clearAttachmentPreviews = useCallback(() => {
@@ -433,6 +445,35 @@ export function InputArea({
     mediaAttachments: MediaAttachment[];
   } | null>(null);
   const activeContextKeyRef = useRef<string | null>(null);
+  const observedScopeRef = useRef(sendAcceptanceScope);
+  const observedNormalDraftRef = useRef<typeof normalDraftRef.current>(null);
+  useLayoutEffect(() => {
+    if (observedScopeRef.current !== sendAcceptanceScope) {
+      observedScopeRef.current = sendAcceptanceScope;
+      observedNormalDraftRef.current = null;
+      draftVersionRef.current += 1;
+      draftChangedRef.current?.();
+    }
+    // Question context temporarily borrows the composer. It does not create a
+    // new normal draft or invalidate that draft's uncertain delivery identity.
+    if (contextMode || activeContextKeyRef.current !== null) return;
+    const previous = observedNormalDraftRef.current;
+    if (
+      previous?.text === text &&
+      previous.attachments === attachments &&
+      previous.mediaAttachments === mediaAttachments
+    )
+      return;
+    observedNormalDraftRef.current = { text, attachments, mediaAttachments };
+    draftVersionRef.current += 1;
+    draftChangedRef.current?.();
+  }, [
+    text,
+    attachments,
+    mediaAttachments,
+    sendAcceptanceScope,
+    contextMode?.key,
+  ]);
   const {
     open: emojiOpen,
     query: emojiQuery,
@@ -832,7 +873,7 @@ export function InputArea({
     inputWrapperRef,
   });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const nextKey = contextMode?.key ?? null;
     if (nextKey === activeContextKeyRef.current) return;
 
@@ -916,6 +957,42 @@ export function InputArea({
           ? onInterject
           : onSend;
 
+      const submittedDraftVersion = draftVersionRef.current;
+      const settleSubmission = (
+        submission: ReturnType<ComposerSubmitHandler>,
+      ) => {
+        if (contextMode || sendAcceptanceScope === undefined) return;
+        void Promise.resolve(submission)
+          .then((accepted) => {
+            if (
+              accepted === false ||
+              sendAcceptanceScopeRef.current !== sendAcceptanceScope ||
+              draftVersionRef.current !== submittedDraftVersion
+            )
+              return;
+            if (activeContextKeyRef.current !== null) {
+              // The agent may ask a question before the acknowledgement arrives.
+              // Clear the accepted normal draft, not the question being answered.
+              normalDraftRef.current = {
+                text: "",
+                attachments: [],
+                mediaAttachments: [],
+              };
+              return;
+            }
+            // Preserve edits and attachments added while delivery was pending.
+            setText((current) => (current === text ? "" : current));
+            setAttachments((current) =>
+              current.filter((item) => !submitAttachments.includes(item)),
+            );
+            setMediaAttachments((current) =>
+              current.filter((item) => !mediaAttachments.includes(item)),
+            );
+            clearAttachmentPreviews();
+          })
+          .catch(() => {});
+      };
+
       if (!contextMode && matchedExecutableSlashCommand?.command.mcpPrompt) {
         if (mcp.pending) return;
         const match = matchedExecutableSlashCommand;
@@ -935,13 +1012,18 @@ export function InputArea({
               asInterjection && current.streaming && current.onInterject
                 ? current.onInterject
                 : current.onSend;
-            send(
+            const submission = send(
               [match.prefixText, result.text].filter(Boolean).join("\n\n"),
               submitAttachments,
               undefined,
               match.displayText,
               submitMedia,
             );
+            if (sendAcceptanceScope !== undefined) {
+              settleSubmission(submission);
+              closeSlash();
+              return;
+            }
             // Don't erase a new draft typed while the approval card was open.
             setText((current) => (current === text ? "" : current));
             setAttachments((current) =>
@@ -957,10 +1039,15 @@ export function InputArea({
       }
 
       if (!contextMode && matchedExecutableSlashCommand) {
-        setText("");
-        setAttachments([]);
-        setMediaAttachments([]);
-        clearAttachmentPreviews();
+        if (
+          sendAcceptanceScope === undefined ||
+          matchedExecutableSlashCommand.command.builtin
+        ) {
+          setText("");
+          setAttachments([]);
+          setMediaAttachments([]);
+          clearAttachmentPreviews();
+        }
         closeSlash();
         if (textareaRef.current) textareaRef.current.style.height = "auto";
 
@@ -993,27 +1080,30 @@ export function InputArea({
             route: "slash_command_body",
             command: command.name,
           });
-          submitMessage(
-            finalText,
-            submitAttachments,
-            userText,
-            displayText,
-            submitMedia,
-            ...(selection ? ([selection] as const) : []),
+          settleSubmission(
+            submitMessage(
+              finalText,
+              submitAttachments,
+              userText,
+              displayText,
+              submitMedia,
+              ...(selection ? ([selection] as const) : []),
+            ),
           );
         }
         return;
       }
 
       onComposerEvent?.("submit.send", { route: "message" });
-      submitMessage(
+      const submission = submitMessage(
         trimmed,
         submitAttachments,
         undefined,
         undefined,
         submitMedia,
       );
-      if (!contextMode) {
+      settleSubmission(submission);
+      if (!contextMode && sendAcceptanceScope === undefined) {
         setText("");
         setAttachments([]);
         setMediaAttachments([]);
@@ -1045,6 +1135,7 @@ export function InputArea({
       contextMode,
       clearAttachmentPreviews,
       submitQuestionAction,
+      sendAcceptanceScope,
     ],
   );
 

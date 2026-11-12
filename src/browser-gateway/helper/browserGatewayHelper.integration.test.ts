@@ -5020,6 +5020,166 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
   });
 
+  it("acknowledges committed sends and deduplicates retries during preparation", async () => {
+    let resolveModelStarted!: () => void;
+    const modelStarted = new Promise<void>((resolve) => {
+      resolveModelStarted = resolve;
+    });
+    let releaseModel!: () => void;
+    const modelGate = new Promise<void>((resolve) => {
+      releaseModel = resolve;
+    });
+    let modelCalls = 0;
+    const modelClient = makeAskAgentToolLoopClient(async () => {
+      modelCalls += 1;
+      resolveModelStarted();
+      await modelGate;
+      return { text: "Completed after acknowledgement", toolCalls: [] };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const sessionResponse = await fetch(
+      `${harness.helperBase}/api/ask-agent/session`,
+      { headers: { Cookie: harness.cookie } },
+    );
+    const sessionBody = (await sessionResponse.json()) as {
+      session: { sessionId: string };
+    };
+    const sessionId = sessionBody.session.sessionId;
+
+    let releasePreparation!: () => void;
+    const preparationGate = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    let preparationStarted!: () => void;
+    const preparation = new Promise<void>((resolve) => {
+      preparationStarted = resolve;
+    });
+    const helperWithTheme = harness.helper as unknown as {
+      resolveInitialTheme: (theme: null) => Promise<unknown>;
+    };
+    const originalResolveInitialTheme =
+      helperWithTheme.resolveInitialTheme.bind(harness.helper);
+    helperWithTheme.resolveInitialTheme = async (theme) => {
+      preparationStarted();
+      await preparationGate;
+      return await originalResolveInitialTheme(theme);
+    };
+
+    const requestBody = {
+      acknowledge: true,
+      id: "acknowledged-send-id",
+      sessionId,
+      text: "Commit before completing the model turn",
+    };
+    const post = (signal?: AbortSignal) =>
+      fetch(`${harness.helperBase}/api/ask-agent/send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify(requestBody),
+        signal,
+      });
+
+    const originalController = new AbortController();
+    const firstRequest = post(originalController.signal);
+    await preparation;
+    const duplicateRequest = post();
+    originalController.abort();
+    await expect(firstRequest).rejects.toMatchObject({ name: "AbortError" });
+    releasePreparation();
+
+    const acknowledgement = await duplicateRequest;
+    const acknowledgementBody = (await acknowledgement.json()) as {
+      ok: boolean;
+      snapshot: {
+        session: {
+          foreground: {
+            streaming: boolean;
+            projectedMessages: Array<{ role: string; content: string }>;
+          };
+        };
+      };
+    };
+    expect(acknowledgementBody.ok).toBe(true);
+    expect(acknowledgementBody.snapshot.session.foreground.streaming).toBe(
+      true,
+    );
+    expect(
+      acknowledgementBody.snapshot.session.foreground.projectedMessages,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: requestBody.text,
+        }),
+      ]),
+    );
+    await modelStarted;
+    expect(modelCalls).toBe(1);
+    const queuedBody = {
+      acknowledge: true,
+      id: "acknowledged-queued-id",
+      interject: true,
+      sessionId,
+      text: "Queue an interjection",
+    };
+    const queued = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: harness.cookie,
+      },
+      body: JSON.stringify(queuedBody),
+    });
+    await expect(queued.json()).resolves.toMatchObject({
+      ok: true,
+      queued: true,
+      interjected: true,
+    });
+    const queuedDuplicate = await fetch(
+      `${harness.helperBase}/api/ask-agent/send`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify(queuedBody),
+      },
+    );
+    await expect(queuedDuplicate.json()).resolves.toMatchObject({
+      ok: true,
+      queued: true,
+      interjected: true,
+    });
+    releaseModel();
+    await waitForExpectation(async () => {
+      const session = await fetch(
+        `${harness.helperBase}/api/ask-agent/session`,
+        { headers: { Cookie: harness.cookie } },
+      );
+      await expect(session.json()).resolves.toMatchObject({
+        snapshot: {
+          session: {
+            foreground: {
+              projectedMessages: expect.arrayContaining([
+                expect.objectContaining({
+                  role: "assistant",
+                  content: "Completed after acknowledgement",
+                }),
+              ]),
+            },
+          },
+        },
+      });
+    });
+  });
+
   it("stops an in-flight helper-owned Ask Agent model turn", async () => {
     const extensionRootPath = await makeExtensionRoot();
     const helperPort = 47214;

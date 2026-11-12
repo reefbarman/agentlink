@@ -56,6 +56,8 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     onInterject,
     onSelectModel,
     onSend,
+    sendAcceptanceScope,
+    onDraftChanged,
     onSetReasoningEffort,
     onSetServiceTier,
     onStop,
@@ -88,6 +90,8 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
       media?: unknown[],
       skillSelection?: { skillId: string; skillRevision: string },
     ) => void;
+    sendAcceptanceScope?: string;
+    onDraftChanged?: () => void;
     onSetReasoningEffort?: (effort: "none" | "low" | "medium" | "high") => void;
     onSetServiceTier?: (tier: "standard" | "fast" | "ultrafast") => void;
     serviceTier?: string;
@@ -120,7 +124,19 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     } | null;
   }) =>
     h("div", { "data-testid": "mock-input-area" }, [
+      h(
+        "span",
+        { "data-testid": "send-acceptance-scope" },
+        sendAcceptanceScope,
+      ),
       contextMode?.content,
+      onDraftChanged
+        ? h(
+            "button",
+            { "data-testid": "trigger-draft-change", onClick: onDraftChanged },
+            "Edit draft",
+          )
+        : null,
       onSetCommandApprovalPolicy
         ? h(
             "button",
@@ -2254,8 +2270,174 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     fireEvent.click(await screen.findByTestId("trigger-send"));
 
     expect(await screen.findByText("Ship it")).toBeTruthy();
+    expect(screen.queryByText("Remote")).toBeNull();
+    expect(screen.getByTestId("send-acceptance-scope").textContent).toBe(
+      "browser-gateway:ask-agent:default",
+    );
     expect(resolveSend).toBeTypeOf("function");
+    const sendCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).includes("/api/ask-agent/send"),
+    );
+    expect(JSON.parse(String(sendCall?.[1]?.body))).toMatchObject({
+      acknowledge: true,
+      sessionId: expect.any(String),
+      id: expect.any(String),
+    });
     await act(async () => resolveSend?.(jsonResponse({ ok: true })));
+  });
+
+  it("retries an unconfirmed Ask Agent draft with the same id rather than duplicating it", async () => {
+    const fallbackFetch = globalThis.fetch;
+    const sendBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = vi.fn(async (input, init) => {
+      if (String(input).includes("/api/ask-agent/send")) {
+        sendBodies.push(JSON.parse(String(init?.body)));
+        if (sendBodies.length <= 2) throw new TypeError("connection lost");
+        return jsonResponse({ ok: true });
+      }
+      return fallbackFetch(input, init);
+    });
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+    await screen.findByText("Ask Agent");
+    fireEvent.click(await screen.findByTestId("trigger-send"));
+    await screen.findByText(
+      "Delivery not confirmed. Retry this message to check again without sending it twice.",
+    );
+    expect(sendBodies).toHaveLength(2);
+    expect(sendBodies[1]).toEqual(sendBodies[0]);
+    expect(screen.queryByText("Ship it")).toBeNull();
+    fireEvent.click(screen.getByTestId("trigger-send"));
+    await waitFor(() => expect(sendBodies).toHaveLength(3));
+    expect(sendBodies[2]).toEqual(sendBodies[0]);
+    expect(await screen.findByText("Ship it")).toBeTruthy();
+    expect(screen.queryByText("Remote")).toBeNull();
+  });
+
+  it("releases an unconfirmed id when the composer draft changes", async () => {
+    const fallbackFetch = globalThis.fetch;
+    const ids: string[] = [];
+    globalThis.fetch = vi.fn(async (input, init) => {
+      if (String(input).includes("/api/ask-agent/send")) {
+        ids.push(JSON.parse(String(init?.body)).id);
+        if (ids.length <= 2) throw new TypeError("connection lost");
+        return jsonResponse({ ok: true });
+      }
+      return fallbackFetch(input, init);
+    });
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+    await screen.findByText("Ask Agent");
+    fireEvent.click(await screen.findByTestId("trigger-send"));
+    await screen.findByText(
+      "Delivery not confirmed. Retry this message to check again without sending it twice.",
+    );
+    expect(ids[1]).toBe(ids[0]);
+    fireEvent.click(screen.getByTestId("trigger-draft-change"));
+    fireEvent.click(screen.getByTestId("trigger-send"));
+    await waitFor(() => expect(ids).toHaveLength(3));
+    expect(ids[2]).not.toBe(ids[0]);
+  });
+
+  it("does not roll completed streamed progress back to a delayed acknowledgement", async () => {
+    const fallbackFetch = globalThis.fetch;
+    let resolveSend!: (response: Response) => void;
+    let messageId = "";
+    globalThis.fetch = vi.fn(async (input, init) => {
+      if (String(input).includes("/api/ask-agent/send")) {
+        messageId = JSON.parse(String(init?.body)).id;
+        return new Promise<Response>((resolve) => {
+          resolveSend = resolve;
+        });
+      }
+      return fallbackFetch(input, init);
+    });
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        dataPlaneMode: "off",
+      }),
+    );
+    await screen.findByText("Ask Agent");
+    fireEvent.click(await screen.findByTestId("trigger-send"));
+    await waitFor(() => expect(messageId).not.toBe(""));
+    const completed = createAskAgentSessionResponse().snapshot;
+    completed.session.foreground.projectedMessages = [
+      {
+        id: messageId,
+        role: "user",
+        content: "Ship it",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "Ship it" }],
+      },
+      {
+        id: "answer",
+        role: "assistant",
+        content: "Completed research",
+        timestamp: 2,
+        blocks: [{ type: "text", text: "Completed research" }],
+      },
+    ];
+    await act(async () =>
+      MockEventSource.instances[0].emit("snapshot", completed),
+    );
+    expect(await screen.findByText("Completed research")).toBeTruthy();
+    const accepted = structuredClone(completed);
+    accepted.session.foreground.streaming = true;
+    accepted.session.foreground.projectedMessages.pop();
+    await act(async () =>
+      resolveSend(jsonResponse({ ok: true, snapshot: accepted })),
+    );
+    expect(screen.getByText("Completed research")).toBeTruthy();
+  });
+
+  it("keeps the Remote badge for pending messages sent to VS Code", async () => {
+    const snapshot = createSnapshot();
+    const fallbackFetch = globalThis.fetch;
+    let resolveSend!: (response: Response) => void;
+    globalThis.fetch = vi.fn(async (input, init) => {
+      if (String(input).includes("/api/ui-state"))
+        return jsonResponse(snapshot);
+      if (String(input).includes("/api/send")) {
+        return new Promise<Response>((resolve) => {
+          resolveSend = resolve;
+        });
+      }
+      return fallbackFetch(input, init);
+    });
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+    await selectWorkspaceTab();
+    await waitFor(() =>
+      expect(screen.getByTestId("current-model").textContent).toBe(
+        snapshot.session.foreground.model,
+      ),
+    );
+    fireEvent.click(await screen.findByTestId("trigger-send"));
+    expect(await screen.findByText("Ship it")).toBeTruthy();
+    expect(screen.getByText("Remote")).toBeTruthy();
+    await act(async () => resolveSend(jsonResponse({ ok: true })));
   });
 
   it("sends explicit skill selections through the workspace endpoint", async () => {

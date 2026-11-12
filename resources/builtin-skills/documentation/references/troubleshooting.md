@@ -19,6 +19,13 @@ Desktop GitHub releases are signed with an Apple Development certificate but not
 
 If **Could not reach the Assistant** appears while a browser on the same Mac opens the Assistant address fine, macOS is probably blocking Desktop's **Local Network** access. Open **System Settings → Privacy & Security → Local Network**, turn **AgentLink** off and on, then quit Desktop with **⌘Q** and reopen it. A generic icon next to that entry means it belongs to a differently signed copy of the app, which happens after replacing an unsigned build. If AgentLink is missing from the list, reopen Desktop and choose **Allow** when macOS asks. Signed releases keep this permission across updates. For certificate errors instead, see the Assistant view section in [Desktop setup](getting-started.md#standalone-desktop-preview).
 
+## Desktop Ask Agent stays on “Sending…”
+
+- Ask Agent confirms delivery when it accepts your message, without waiting for the agent to finish. Long-running turns continue normally after that acknowledgement.
+- If delivery stalls, Desktop and Browser Ask Agent retry the acknowledgement once using the same message ID. This checks the original submission rather than starting another turn.
+- If **Delivery not confirmed** appears, your draft stays in the composer. Retry that unchanged draft in the same open chat to reuse its message ID. The earlier request may already have been accepted, so do not copy it into a new chat as a workaround.
+- Ask Agent's pending messages do not show a **Remote** badge. That badge identifies messages sent to a VS Code session, not delivery status.
+
 ## The chat says a model needs setup
 
 Use the setup action shown in the empty chat:

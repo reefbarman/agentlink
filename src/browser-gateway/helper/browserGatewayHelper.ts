@@ -1092,6 +1092,11 @@ type AskAgentModelExecutionContext = {
   openAiCompatibleRuntimeProfile?: OpenAiCompatibleRuntimeProfile;
 };
 
+type AskAgentAcknowledgement = {
+  readonly status: number;
+  readonly payload: unknown;
+};
+
 export class BrowserGatewayHelper {
   private readonly startedAt = new Date();
   private readonly startedAtMs = this.startedAt.getTime();
@@ -1264,6 +1269,13 @@ export class BrowserGatewayHelper {
   private askAgentQueueDrainPromise: Promise<void> | undefined;
   private readonly askAgentQueueDrainToken = randomUUID();
   private readonly drainingAskAgentMessageIds = new Set<string>();
+  private readonly askAgentSendAcknowledgements = new Map<
+    string,
+    {
+      readonly promise: Promise<AskAgentAcknowledgement>;
+      readonly resolve: (acknowledgement: AskAgentAcknowledgement) => void;
+    }
+  >();
   private lastLeaseActivityAtMs = Date.now();
   private dataPlaneModeFallbackFingerprint: string | undefined;
   private releaseAskAgentTurnLiveness: (() => void) | undefined;
@@ -11032,9 +11044,23 @@ export class BrowserGatewayHelper {
     res: http.ServerResponse,
   ): Promise<void> {
     let activeTurn: AskAgentControllerTurn | null = null;
+    let responseWritten = false;
+    let acknowledgementEntry:
+      | {
+          readonly key: string;
+          readonly promise: Promise<AskAgentAcknowledgement>;
+          readonly resolve: (acknowledgement: AskAgentAcknowledgement) => void;
+        }
+      | undefined;
+    const respond = (status: number, payload: unknown): void => {
+      acknowledgementEntry?.resolve({ status, payload });
+      if (responseWritten || res.writableEnded || res.destroyed) return;
+      responseWritten = true;
+      writeJson(res, status, payload);
+    };
     try {
       if (this.shuttingDown) {
-        writeJson(res, 503, { error: "ask_agent_helper_shutting_down" });
+        respond(503, { error: "ask_agent_helper_shutting_down" });
         return;
       }
       const body = (await readJsonBody(req)) as {
@@ -11047,6 +11073,7 @@ export class BrowserGatewayHelper {
         instanceId?: unknown;
         queueDrainToken?: unknown;
         interject?: unknown;
+        acknowledge?: unknown;
       } | null;
       const images = parseAskAgentMediaItems(body?.images);
       const documents = parseAskAgentMediaItems(body?.documents);
@@ -11060,7 +11087,7 @@ export class BrowserGatewayHelper {
           ok: false,
           error: "invalid_request",
         });
-        writeJson(res, 400, { error: "invalid_request" });
+        respond(400, { error: "invalid_request" });
         return;
       }
       const requestedSessionId =
@@ -11075,7 +11102,7 @@ export class BrowserGatewayHelper {
           ok: false,
           error: "ask_agent_session_not_found",
         });
-        writeJson(res, 404, { error: "ask_agent_session_not_found" });
+        respond(404, { error: "ask_agent_session_not_found" });
         return;
       }
       if (Array.isArray(body.attachments) && body.attachments.length > 0) {
@@ -11085,10 +11112,34 @@ export class BrowserGatewayHelper {
           ok: false,
           error: "ask_agent_path_attachments_unavailable",
         });
-        writeJson(res, 400, {
+        respond(400, {
           error: "ask_agent_path_attachments_unavailable",
         });
         return;
+      }
+
+      const acknowledge = body.acknowledge === true;
+      const requestId = typeof body.id === "string" ? body.id.trim() : "";
+      if (acknowledge && requestedSessionId && requestId) {
+        const key = `${requestedSessionId}\u0000${requestId}`;
+        const existing = this.askAgentSendAcknowledgements.get(key);
+        if (existing) {
+          const acknowledgement = await existing.promise;
+          respond(acknowledgement.status, acknowledgement.payload);
+          return;
+        }
+        if (this.askAgentSendAcknowledgements.size >= 128) {
+          respond(503, { error: "ask_agent_send_dedup_capacity" });
+          return;
+        }
+        let resolve!: (acknowledgement: AskAgentAcknowledgement) => void;
+        const promise = new Promise<AskAgentAcknowledgement>(
+          (resolvePromise) => {
+            resolve = resolvePromise;
+          },
+        );
+        acknowledgementEntry = { key, promise, resolve };
+        this.askAgentSendAcknowledgements.set(key, acknowledgementEntry);
       }
 
       const now = Date.now();
@@ -11109,7 +11160,7 @@ export class BrowserGatewayHelper {
             ok: false,
             error: "ask_agent_turn_in_progress",
           });
-          writeJson(res, 409, { error: "ask_agent_turn_in_progress" });
+          respond(409, { error: "ask_agent_turn_in_progress" });
           return;
         }
         const targeted = this.askAgentSessionStore.targetSession(
@@ -11137,7 +11188,7 @@ export class BrowserGatewayHelper {
           ok: false,
           error: "credential_missing",
         });
-        writeJson(res, 409, { error: "credential_missing" });
+        respond(409, { error: "credential_missing" });
         return;
       }
       let response: AskAgentSessionResponse | null = null;
@@ -11199,11 +11250,19 @@ export class BrowserGatewayHelper {
           ...(interject ? { interjectionReady: true } : {}),
         };
         if (!this.askAgentSessionStore.enqueueMessage(queuedMessage)) {
-          writeJson(res, 409, { error: "queue_full" });
+          respond(409, { error: "queue_full" });
           return;
         }
-        await this.persistAskAgentHistory();
         response = this.buildAskAgentSnapshotResponse(now, theme);
+        const queuedPayload = {
+          ok: true,
+          queued: true,
+          ...(interject ? { interjected: true } : {}),
+          snapshot: response.snapshot,
+        };
+        if (acknowledge) respond(200, queuedPayload);
+        await this.persistAskAgentHistory();
+        if (!acknowledge) respond(200, queuedPayload);
         void this.publishAskAgentSnapshot(response.snapshot).catch((error) => {
           this.logAskAgentEvent("ask-agent.queue.publish", {
             queueId: id,
@@ -11218,12 +11277,7 @@ export class BrowserGatewayHelper {
           queueId: id,
           interject,
         });
-        writeJson(res, 200, {
-          ok: true,
-          queued: true,
-          ...(interject ? { interjected: true } : {}),
-          snapshot: response.snapshot,
-        });
+
         return;
       }
       if (!duplicateUserMessage && modelContext) {
@@ -11241,6 +11295,13 @@ export class BrowserGatewayHelper {
           });
         activeTurn = this.beginAskAgentTurn(assistantMessage.id);
         if (!activeTurn) throw new Error("ask_agent_turn_in_progress");
+        if (acknowledge) {
+          const acknowledgement = {
+            ok: true,
+            snapshot: this.buildAskAgentSnapshotResponse(now, theme).snapshot,
+          };
+          respond(200, acknowledgement);
+        }
         const streamSnapshot = this.askAgentController.projectState({
           now,
           theme,
@@ -11351,9 +11412,21 @@ export class BrowserGatewayHelper {
       // Return the snapshot for the sender's immediate UI update and broadcast
       // the same full snapshot for any other connected Ask Agent browser tabs.
       await this.publishAskAgentSnapshot(response.snapshot);
-      writeJson(res, 200, {
+      const duplicateQueuedMessageDetails = duplicateQueuedMessage
+        ? response.snapshot.session.foreground.messageQueue.find(
+            (message) => message.id === body.id,
+          )
+        : undefined;
+      respond(200, {
         ok: true,
-        ...(duplicateQueuedMessage ? { queued: true } : {}),
+        ...(duplicateQueuedMessageDetails
+          ? {
+              queued: true,
+              ...(duplicateQueuedMessageDetails.interjectionReady
+                ? { interjected: true }
+                : {}),
+            }
+          : {}),
         snapshot: response.snapshot,
       });
     } catch (err) {
@@ -11363,7 +11436,7 @@ export class BrowserGatewayHelper {
           ok: false,
           error: "invalid_request",
         });
-        writeJson(res, 400, { error: "invalid_request" });
+        respond(400, { error: "invalid_request" });
         return;
       }
       const invalidJson =
@@ -11372,10 +11445,13 @@ export class BrowserGatewayHelper {
         ok: false,
         error: invalidJson ? "invalid_json" : "internal_error",
       });
-      writeJson(res, invalidJson ? 400 : 500, {
+      respond(invalidJson ? 400 : 500, {
         error: invalidJson ? "invalid_json" : "internal_error",
       });
     } finally {
+      if (acknowledgementEntry) {
+        this.askAgentSendAcknowledgements.delete(acknowledgementEntry.key);
+      }
       if (activeTurn) {
         this.askAgentController.completeTurn(activeTurn);
         void this.drainAskAgentMessageQueue();
