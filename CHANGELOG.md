@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.93.0
+
 - CLI and Assistant background agents now recheck elapsed-time deadlines before stopping. A timer notification arriving one clock tick early is rescheduled instead of prematurely reporting `budget_exhausted`; the configured limits and hard-limit multipliers are unchanged.
 
 - Desktop and Browser Ask Agent no longer label pending messages as **Remote**. Sends now acknowledge acceptance without waiting for the agent to finish, retry stalled delivery with the same message ID, and keep an unconfirmed draft available for a safe retry instead of leaving the composer waiting indefinitely. Healthy long-running turns are not cancelled or restarted.

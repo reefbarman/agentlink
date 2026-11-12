@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.54.0 — 2026-11-12
+
+- spawn_background_agent accepts an explicit reasoningEffort for native background agents, overriding configured review and task defaults, with reasoning_effort kept as a legacy alias and ACP agents rejecting it.
+- Reduces memory spikes in image-heavy chats by avoiding duplicate Codex history translation, rejecting oversized replay snapshots before serializing them, and loading background-agent images only in panes viewing that transcript.
+- Background agents no longer hit elapsed-time budget exhaustion early; the deadline is rechecked and the timer rescheduled if it fires before the hard limit.
+
 ## 0.53.0 — 2026-11-10
 
 - Background agent status now shows every running tool (longest-running first), redacted execute_command commands and terminal IDs, pending approvals, and a technical_blocker reason when a worker stops without a recorded denial.
