@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "f3aa9bd6f728db1ad1dc74e11e35dc37fea8ebb9",
-  "createdAt": "2026-11-12T04:09:57.065Z",
+  "sourceSha": "5346fc072139868291ba716a414a3f84cda8e187",
+  "createdAt": "2026-11-12T06:02:05.821Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,204 +10,58 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.92.0",
-      "baselineRef": "v1.92.0",
-      "reserved": "1.92.0",
-      "commits": [
-        "5ca95acccab2c0babeb6711f8b9d93526fae4534",
-        "21bd7c16a1eb7664a81e82ad9838d1b72c183adb",
-        "465e9befd9167f0fcbfa55fd937ee6314cef79da",
-        "b604eb35d1db62da6abd0590c29ac8e4f4e2e1ef",
-        "f3aa9bd6f728db1ad1dc74e11e35dc37fea8ebb9"
-      ],
+      "published": "1.93.0",
+      "baselineRef": "v1.93.0",
+      "reserved": "1.93.0",
+      "commits": ["5346fc072139868291ba716a414a3f84cda8e187"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.93.0",
+      "version": "1.94.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.93.0",
+      "tag": "v1.94.0",
       "notes": [
         {
-          "sha": "5ca95acccab2c0babeb6711f8b9d93526fae4534",
-          "subject": "feat(agent): allow explicit background reasoning effort",
-          "summary": "spawn_background_agent accepts an explicit reasoningEffort for native background agents, overriding configured review and task defaults, with reasoning_effort kept as a legacy alias and ACP agents rejecting it.",
-          "breaking": false
-        },
-        {
-          "sha": "21bd7c16a1eb7664a81e82ad9838d1b72c183adb",
-          "subject": "fix(agent): reduce image-history memory allocation spikes",
-          "summary": "Reduces memory spikes in image-heavy chats by avoiding duplicate Codex history translation, rejecting oversized replay snapshots before serializing them, and loading background-agent images only in panes viewing that transcript.",
-          "breaking": false
-        },
-        {
-          "sha": "465e9befd9167f0fcbfa55fd937ee6314cef79da",
-          "subject": "fix(browser-gateway): recover stalled Ask Agent sends safely",
-          "summary": "Ask Agent sends now confirm delivery on acceptance, retry once with the same message ID if stalled, and keep the draft with a 'Delivery not confirmed' error instead of hanging on 'Sending…' or risking duplicate turns.",
-          "breaking": false
-        },
-        {
-          "sha": "b604eb35d1db62da6abd0590c29ac8e4f4e2e1ef",
-          "subject": "fix(workspace-host): recheck elapsed budget deadlines",
-          "summary": "Background agents no longer hit elapsed-time budget exhaustion early; the deadline is rechecked and the timer rescheduled if it fires before the hard limit.",
-          "breaking": false
-        },
-        {
-          "sha": "f3aa9bd6f728db1ad1dc74e11e35dc37fea8ebb9",
-          "subject": "fix(tools): close feedback gaps in terminal, question and image tools",
-          "summary": "Adds protected-Git retry guidance to get_terminal_output, accepts Yes/No for background yes_no questions, reports generate_image size/quality mismatches, limits delegated ownership to output_path, and allows /tmp images.",
+          "sha": "5346fc072139868291ba716a414a3f84cda8e187",
+          "subject": "fix(tools): keep watcher network, filter MCP lists, add MCP cwd",
+          "summary": "MCP stdio servers can set a working directory via cwd, list_mcp_resources and list_mcp_prompts accept an optional server filter, and sandboxed commands timed out into the background keep their network review so watchers continue working.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.92.0",
-      "baselineRef": "desktop-v0.92.0",
-      "reserved": "0.92.0",
-      "commits": [
-        "5ca95acccab2c0babeb6711f8b9d93526fae4534",
-        "21bd7c16a1eb7664a81e82ad9838d1b72c183adb",
-        "465e9befd9167f0fcbfa55fd937ee6314cef79da",
-        "b604eb35d1db62da6abd0590c29ac8e4f4e2e1ef",
-        "f3aa9bd6f728db1ad1dc74e11e35dc37fea8ebb9"
-      ],
+      "published": "0.93.0",
+      "baselineRef": "desktop-v0.93.0",
+      "reserved": "0.93.0",
+      "commits": ["5346fc072139868291ba716a414a3f84cda8e187"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.93.0",
+      "version": "0.94.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.93.0",
+      "tag": "desktop-v0.94.0",
       "notes": [
         {
-          "sha": "5ca95acccab2c0babeb6711f8b9d93526fae4534",
-          "subject": "feat(agent): allow explicit background reasoning effort",
-          "summary": "spawn_background_agent accepts an explicit reasoningEffort for native background agents, overriding configured review and task defaults, with reasoning_effort kept as a legacy alias and ACP agents rejecting it.",
-          "breaking": false
-        },
-        {
-          "sha": "21bd7c16a1eb7664a81e82ad9838d1b72c183adb",
-          "subject": "fix(agent): reduce image-history memory allocation spikes",
-          "summary": "Reduces memory spikes in image-heavy chats by avoiding duplicate Codex history translation, rejecting oversized replay snapshots before serializing them, and loading background-agent images only in panes viewing that transcript.",
-          "breaking": false
-        },
-        {
-          "sha": "465e9befd9167f0fcbfa55fd937ee6314cef79da",
-          "subject": "fix(browser-gateway): recover stalled Ask Agent sends safely",
-          "summary": "Ask Agent sends now confirm delivery on acceptance, retry once with the same message ID if stalled, and keep the draft with a 'Delivery not confirmed' error instead of hanging on 'Sending…' or risking duplicate turns.",
-          "breaking": false
-        },
-        {
-          "sha": "b604eb35d1db62da6abd0590c29ac8e4f4e2e1ef",
-          "subject": "fix(workspace-host): recheck elapsed budget deadlines",
-          "summary": "Background agents no longer hit elapsed-time budget exhaustion early; the deadline is rechecked and the timer rescheduled if it fires before the hard limit.",
-          "breaking": false
-        },
-        {
-          "sha": "f3aa9bd6f728db1ad1dc74e11e35dc37fea8ebb9",
-          "subject": "fix(tools): close feedback gaps in terminal, question and image tools",
-          "summary": "Adds protected-Git retry guidance to get_terminal_output, accepts Yes/No for background yes_no questions, reports generate_image size/quality mismatches, limits delegated ownership to output_path, and allows /tmp images.",
+          "sha": "5346fc072139868291ba716a414a3f84cda8e187",
+          "subject": "fix(tools): keep watcher network, filter MCP lists, add MCP cwd",
+          "summary": "MCP stdio servers can set a working directory via cwd, list_mcp_resources and list_mcp_prompts accept an optional server filter, and sandboxed commands timed out into the background keep their network review so watchers continue working.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.63.0",
-      "baselineRef": "cli-v0.63.0",
-      "reserved": "0.63.0",
-      "commits": [
-        "5ca95acccab2c0babeb6711f8b9d93526fae4534",
-        "21bd7c16a1eb7664a81e82ad9838d1b72c183adb",
-        "b604eb35d1db62da6abd0590c29ac8e4f4e2e1ef"
-      ],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.64.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.64.0",
-      "notes": [
-        {
-          "sha": "5ca95acccab2c0babeb6711f8b9d93526fae4534",
-          "subject": "feat(agent): allow explicit background reasoning effort",
-          "summary": "spawn_background_agent accepts an explicit reasoningEffort for native background agents, overriding configured review and task defaults, with reasoning_effort kept as a legacy alias and ACP agents rejecting it.",
-          "breaking": false
-        },
-        {
-          "sha": "21bd7c16a1eb7664a81e82ad9838d1b72c183adb",
-          "subject": "fix(agent): reduce image-history memory allocation spikes",
-          "summary": "Reduces memory spikes in image-heavy chats by avoiding duplicate Codex history translation, rejecting oversized replay snapshots before serializing them, and loading background-agent images only in panes viewing that transcript.",
-          "breaking": false
-        },
-        {
-          "sha": "b604eb35d1db62da6abd0590c29ac8e4f4e2e1ef",
-          "subject": "fix(workspace-host): recheck elapsed budget deadlines",
-          "summary": "Background agents no longer hit elapsed-time budget exhaustion early; the deadline is rechecked and the timer rescheduled if it fires before the hard limit.",
-          "breaking": false
-        }
-      ]
-    },
-    "sdk": {
-      "published": "0.53.0",
-      "baselineRef": "sdk-v0.53.0",
-      "reserved": "0.53.0",
-      "commits": [
-        "5ca95acccab2c0babeb6711f8b9d93526fae4534",
-        "21bd7c16a1eb7664a81e82ad9838d1b72c183adb",
-        "b604eb35d1db62da6abd0590c29ac8e4f4e2e1ef"
-      ],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.54.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.54.0",
-      "notes": [
-        {
-          "sha": "5ca95acccab2c0babeb6711f8b9d93526fae4534",
-          "subject": "feat(agent): allow explicit background reasoning effort",
-          "summary": "spawn_background_agent accepts an explicit reasoningEffort for native background agents, overriding configured review and task defaults, with reasoning_effort kept as a legacy alias and ACP agents rejecting it.",
-          "breaking": false
-        },
-        {
-          "sha": "21bd7c16a1eb7664a81e82ad9838d1b72c183adb",
-          "subject": "fix(agent): reduce image-history memory allocation spikes",
-          "summary": "Reduces memory spikes in image-heavy chats by avoiding duplicate Codex history translation, rejecting oversized replay snapshots before serializing them, and loading background-agent images only in panes viewing that transcript.",
-          "breaking": false
-        },
-        {
-          "sha": "b604eb35d1db62da6abd0590c29ac8e4f4e2e1ef",
-          "subject": "fix(workspace-host): recheck elapsed budget deadlines",
-          "summary": "Background agents no longer hit elapsed-time budget exhaustion early; the deadline is rechecked and the timer rescheduled if it fires before the hard limit.",
-          "breaking": false
-        }
-      ]
-    },
-    "assistant": {
       "published": "0.64.0",
-      "baselineRef": "assistant-v0.64.0",
+      "baselineRef": "cli-v0.64.0",
       "reserved": "0.64.0",
-      "commits": [
-        "5ca95acccab2c0babeb6711f8b9d93526fae4534",
-        "21bd7c16a1eb7664a81e82ad9838d1b72c183adb",
-        "465e9befd9167f0fcbfa55fd937ee6314cef79da",
-        "b604eb35d1db62da6abd0590c29ac8e4f4e2e1ef",
-        "f3aa9bd6f728db1ad1dc74e11e35dc37fea8ebb9"
-      ],
+      "commits": ["5346fc072139868291ba716a414a3f84cda8e187"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
@@ -217,102 +71,70 @@
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.65.0",
+      "tag": "cli-v0.65.0",
       "notes": [
         {
-          "sha": "5ca95acccab2c0babeb6711f8b9d93526fae4534",
-          "subject": "feat(agent): allow explicit background reasoning effort",
-          "summary": "spawn_background_agent accepts an explicit reasoningEffort for native background agents, overriding configured review and task defaults, with reasoning_effort kept as a legacy alias and ACP agents rejecting it.",
+          "sha": "5346fc072139868291ba716a414a3f84cda8e187",
+          "subject": "fix(tools): keep watcher network, filter MCP lists, add MCP cwd",
+          "summary": "MCP stdio servers can set a working directory via cwd, list_mcp_resources and list_mcp_prompts accept an optional server filter, and sandboxed commands timed out into the background keep their network review so watchers continue working.",
           "breaking": false
-        },
+        }
+      ]
+    },
+    "sdk": {
+      "published": "0.54.0",
+      "baselineRef": "sdk-v0.54.0",
+      "reserved": "0.54.0",
+      "commits": ["5346fc072139868291ba716a414a3f84cda8e187"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.55.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.55.0",
+      "notes": [
         {
-          "sha": "21bd7c16a1eb7664a81e82ad9838d1b72c183adb",
-          "subject": "fix(agent): reduce image-history memory allocation spikes",
-          "summary": "Reduces memory spikes in image-heavy chats by avoiding duplicate Codex history translation, rejecting oversized replay snapshots before serializing them, and loading background-agent images only in panes viewing that transcript.",
+          "sha": "5346fc072139868291ba716a414a3f84cda8e187",
+          "subject": "fix(tools): keep watcher network, filter MCP lists, add MCP cwd",
+          "summary": "MCP stdio servers can set a working directory via cwd, list_mcp_resources and list_mcp_prompts accept an optional server filter, and sandboxed commands timed out into the background keep their network review so watchers continue working.",
           "breaking": false
-        },
+        }
+      ]
+    },
+    "assistant": {
+      "published": "0.65.0",
+      "baselineRef": "assistant-v0.65.0",
+      "reserved": "0.65.0",
+      "commits": ["5346fc072139868291ba716a414a3f84cda8e187"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.66.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.66.0",
+      "notes": [
         {
-          "sha": "465e9befd9167f0fcbfa55fd937ee6314cef79da",
-          "subject": "fix(browser-gateway): recover stalled Ask Agent sends safely",
-          "summary": "Ask Agent sends now confirm delivery on acceptance, retry once with the same message ID if stalled, and keep the draft with a 'Delivery not confirmed' error instead of hanging on 'Sending…' or risking duplicate turns.",
-          "breaking": false
-        },
-        {
-          "sha": "b604eb35d1db62da6abd0590c29ac8e4f4e2e1ef",
-          "subject": "fix(workspace-host): recheck elapsed budget deadlines",
-          "summary": "Background agents no longer hit elapsed-time budget exhaustion early; the deadline is rechecked and the timer rescheduled if it fires before the hard limit.",
-          "breaking": false
-        },
-        {
-          "sha": "f3aa9bd6f728db1ad1dc74e11e35dc37fea8ebb9",
-          "subject": "fix(tools): close feedback gaps in terminal, question and image tools",
-          "summary": "Adds protected-Git retry guidance to get_terminal_output, accepts Yes/No for background yes_no questions, reports generate_image size/quality mismatches, limits delegated ownership to output_path, and allows /tmp images.",
+          "sha": "5346fc072139868291ba716a414a3f84cda8e187",
+          "subject": "fix(tools): keep watcher network, filter MCP lists, add MCP cwd",
+          "summary": "MCP stdio servers can set a working directory via cwd, list_mcp_resources and list_mcp_prompts accept an optional server filter, and sandboxed commands timed out into the background keep their network review so watchers continue working.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "36e243913ac4e0fb83f039af9ecf7b95741cd647": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The chat activity shelf now releases temporary growth when switching tabs or when its content shrinks, instead of staying oversized.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "a29c678f93b7172a56095594d5af504be35fa164": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The chat activity shelf now measures its chrome directly so it can shrink back after growing for taller content.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "3ddb2396cc35e1df0a6d24efe7b750b8234128ce": {
+    "5346fc072139868291ba716a414a3f84cda8e187": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "The pencil on user messages now opens a menu to edit a past message by rewinding the chat, rewinding and restoring files (VS Code), or forking, and restores the message text and attachments to the composer.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "5ca95acccab2c0babeb6711f8b9d93526fae4534": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "spawn_background_agent accepts an explicit reasoningEffort for native background agents, overriding configured review and task defaults, with reasoning_effort kept as a legacy alias and ACP agents rejecting it.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "21bd7c16a1eb7664a81e82ad9838d1b72c183adb": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Reduces memory spikes in image-heavy chats by avoiding duplicate Codex history translation, rejecting oversized replay snapshots before serializing them, and loading background-agent images only in panes viewing that transcript.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "465e9befd9167f0fcbfa55fd937ee6314cef79da": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Ask Agent sends now confirm delivery on acceptance, retry once with the same message ID if stalled, and keep the draft with a 'Delivery not confirmed' error instead of hanging on 'Sending…' or risking duplicate turns.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "b604eb35d1db62da6abd0590c29ac8e4f4e2e1ef": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Background agents no longer hit elapsed-time budget exhaustion early; the deadline is rechecked and the timer rescheduled if it fires before the hard limit.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "f3aa9bd6f728db1ad1dc74e11e35dc37fea8ebb9": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Adds protected-Git retry guidance to get_terminal_output, accepts Yes/No for background yes_no questions, reports generate_image size/quality mismatches, limits delegated ownership to output_path, and allows /tmp images.",
+      "summary": "MCP stdio servers can set a working directory via cwd, list_mcp_resources and list_mcp_prompts accept an optional server filter, and sandboxed commands timed out into the background keep their network review so watchers continue working.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

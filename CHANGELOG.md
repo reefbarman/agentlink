@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.94.0
+
 - A sandboxed foreground command that reaches its `timeout` and keeps running in the background now keeps its managed network access. Before, every later connection was refused, so a watcher such as `gh pr checks --watch` failed with `Forbidden` right after the handoff. Closing the terminal or the command ending still cuts access off.
 
 - `close_terminals` now documents that `names` also takes terminal IDs, and the inactive-terminal warning from `execute_command` points the agent at the IDs it lists. Use IDs to close one idle terminal when several share a name, such as the pooled `AgentLink` terminals, without closing a busy one.
