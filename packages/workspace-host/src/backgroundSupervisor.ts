@@ -1288,8 +1288,24 @@ export class WorkspaceBackgroundSupervisor {
     const hardLimitMs = limit * getBudgetHardLimitRatio(record.taskClass);
     const remaining = hardLimitMs - this.elapsedSinceStart(record);
     live.elapsedTimer = setTimeout(
-      () => void this.exhaustBudget(childSessionId, "elapsed_time"),
-      Math.max(0, remaining),
+      () => {
+        live.elapsedTimer = undefined;
+        const current = this.records.get(childSessionId);
+        if (
+          this.live.get(childSessionId) !== live ||
+          !current ||
+          isTerminal(current)
+        )
+          return;
+        // Timer delivery can precede the deadline by a clock tick. Recheck the
+        // budget clock before stopping work, rather than recording early exhaustion.
+        if (this.elapsedSinceStart(current) < hardLimitMs) {
+          this.armElapsedBudget(childSessionId);
+          return;
+        }
+        void this.exhaustBudget(childSessionId, "elapsed_time");
+      },
+      Math.max(0, Math.ceil(remaining)),
     );
     live.elapsedTimer.unref?.();
   }

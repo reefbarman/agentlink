@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- CLI and Assistant background agents now recheck elapsed-time deadlines before stopping. A timer notification arriving one clock tick early is rescheduled instead of prematurely reporting `budget_exhausted`; the configured limits and hard-limit multipliers are unchanged.
+
 - Desktop and Browser Ask Agent no longer label pending messages as **Remote**. Sends now acknowledge acceptance without waiting for the agent to finish, retry stalled delivery with the same message ID, and keep an unconfirmed draft available for a safe retry instead of leaving the composer waiting indefinitely. Healthy long-running turns are not cancelled or restarted.
 
 - Image-heavy chats use less temporary memory: Codex reuses full-history translations, oversized WebSocket continuation snapshots are rejected before serializing their image data, and tool-result accounting no longer builds arrays of individual characters. VS Code chat panes receive background-agent images and documents only while viewing that agent's full transcript, and release their copy when it is closed. Reopening loads the latest history. Saved images and model-visible context are unchanged. This reduces extension-host out-of-memory risk, including when several background agents work with images, but does not cap total image-history memory.

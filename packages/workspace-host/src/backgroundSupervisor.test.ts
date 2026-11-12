@@ -78,6 +78,7 @@ async function fixture(
       decision: "allow" | "deny",
     ) => Promise<AgentTurnResult>;
     onAgentChanged?: (change: WorkspaceBackgroundChange) => void;
+    now?: () => number;
     createChildSession?: Parameters<
       typeof WorkspaceBackgroundSupervisor.create
     >[0]["createChildSession"];
@@ -100,6 +101,7 @@ async function fixture(
         ? await options.createChildSession(request)
         : { sessionId: `child-${++next}` },
     onAgentChanged: options.onAgentChanged,
+    now: options.now,
     runTurn: async (sessionId, message, runOptions) =>
       options.runTurn
         ? await options.runTurn(
@@ -130,6 +132,52 @@ function spawnRequest(pathValue: string) {
 }
 
 describe("WorkspaceBackgroundSupervisor", () => {
+  it("rearms an early elapsed-budget timer without stopping the child before its deadline", async () => {
+    let now = 1_000;
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const test = await fixture({
+      now: () => now,
+      runTurn: async (sessionId, _message, signal) => {
+        started();
+        await new Promise<void>((resolve) =>
+          signal.addEventListener("abort", () => resolve(), { once: true }),
+        );
+        return completed(sessionId, "stopped");
+      },
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const child = await test.supervisor.spawn({
+        ...spawnRequest("src/a.ts"),
+        taskClass: "review_code",
+        writeScopes: [],
+        budget: { maxElapsedMs: 40 },
+      });
+      await running;
+      // Deliver the 60 ms timer while the supervisor clock is still at 59 ms.
+      now = 1_059;
+      await vi.advanceTimersByTimeAsync(60);
+      expect(test.cancelSession).not.toHaveBeenCalled();
+      expect(test.supervisor.list("parent-a")[0]?.lifecycle).toBe("running");
+      now = 1_060;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(test.cancelSession).toHaveBeenCalledOnce();
+      expect(test.supervisor.list("parent-a")[0]).toMatchObject({
+        childSessionId: child.childSessionId,
+        resultState: "budget_exhausted",
+        terminalReason: "budget_exhausted:elapsed_time",
+        budgetUsage: { elapsedMs: 60 },
+      });
+    } finally {
+      await test.supervisor.close();
+      vi.useRealTimers();
+      await fs.rm(test.root, { recursive: true, force: true });
+    }
+  });
+
   it("forwards explicit reasoning effort to the terminal child model", async () => {
     const createChildSession = vi.fn<
       Parameters<
