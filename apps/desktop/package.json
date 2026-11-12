@@ -20,7 +20,7 @@
     "@napi-rs/keyring": "2.1.2"
   },
   "devDependencies": {
-    "electron": "44.7.0",
+    "electron": "45.2.3",
     "electron-builder": "26.18.0"
   },
   "engines": {
