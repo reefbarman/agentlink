@@ -508,11 +508,6 @@ async function withDirectoryLock<T>(
   while (true) {
     try {
       await fs.mkdir(lockPath, { mode: 0o700 });
-      await fs.writeFile(ownerPath, ownerToken, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-      break;
     } catch (error) {
       if (!isAlreadyExistsError(error)) throw error;
 
@@ -520,6 +515,20 @@ async function withDirectoryLock<T>(
         throw new Error("agentlink_keychain_mutation_lock_timeout");
       }
       await sleep(retryDelayMs);
+      continue;
+    }
+    try {
+      await fs.writeFile(ownerPath, ownerToken, {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+      break;
+    } catch (error) {
+      // We created this lock, so release it. Stale locks are never reclaimed,
+      // so leaving it (for example after ENOSPC left an empty owner file)
+      // would block every process until someone removed it by hand.
+      await fs.rm(lockPath, { recursive: true, force: true });
+      throw error;
     }
   }
 

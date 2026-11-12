@@ -25,6 +25,29 @@ let setPasswordCalls = 0;
 const constructorCalls: unknown[][] = [];
 let constructorError: Error | undefined;
 const failSetOnce = new Set<string>();
+let failWriteFile: ((file: unknown) => Error | undefined) | undefined;
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    writeFile: (async (file: unknown, ...rest: unknown[]) => {
+      const error = failWriteFile?.(file);
+      if (error) {
+        // Mirror ENOSPC: the file is created, then the write fails.
+        await (actual.writeFile as (...args: unknown[]) => Promise<void>)(
+          file,
+          "",
+        );
+        throw error;
+      }
+      return await (actual.writeFile as (...args: unknown[]) => Promise<void>)(
+        file,
+        ...rest,
+      );
+    }) as typeof actual.writeFile,
+  };
+});
 
 vi.mock("@napi-rs/keyring", () => ({
   AsyncEntry: class {
@@ -996,6 +1019,41 @@ process.stdout.write(JSON.stringify(reply));
       storage.withMutationLock(async () => undefined),
     ).rejects.toThrow("agentlink_keychain_mutation_lock_timeout");
     expect((await fs.stat(lockPath)).isDirectory()).toBe(true);
+  });
+
+  it("releases its own mutation lock when writing the owner record fails", async () => {
+    const lockRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-keychain-enospc-lock-"),
+    );
+    temporaryRoots.push(lockRoot);
+    const lockPath = path.join(lockRoot, "test-service--test-account.lock");
+    const storage = await createKeychainSecretStorage({
+      service: "test-service",
+      account: "test-account",
+      lockRoot,
+      lockTimeoutMs: 20,
+      retryDelayMs: 1,
+    });
+
+    failWriteFile = (file) =>
+      file === path.join(lockPath, "owner")
+        ? Object.assign(new Error("ENOSPC: no space left on device"), {
+            code: "ENOSPC",
+          })
+        : undefined;
+    try {
+      await expect(
+        storage.withMutationLock(async () => "unreachable"),
+      ).rejects.toThrow("ENOSPC");
+    } finally {
+      failWriteFile = undefined;
+    }
+    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    // Once space is available again the lock is usable without manual cleanup.
+    await expect(
+      storage.withMutationLock(async () => "acquired"),
+    ).resolves.toBe("acquired");
   });
 
   it("serializes mutation operations through the shared directory lock", async () => {
