@@ -16,6 +16,7 @@ import type {
 
 import type { CoreJsonValue } from "@agentlink/protocol/provider-replay";
 import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
+import { registerOpenAiCompatibleInlineMedia } from "./requestBody.js";
 
 export class OpenAiCompatibleCapabilityError extends Error {
   constructor(message: string) {
@@ -285,13 +286,18 @@ function toDocumentPart(
 function toFilePart(
   document: CoreModelDocumentBlock,
 ): OpenAiCompatibleWireContentPart {
-  return {
-    type: "file",
-    file: {
-      filename: document.title ?? "document.pdf",
-      file_data: `data:${document.source.media_type};base64,${document.source.data}`,
-    },
+  const filename = document.title ?? "document.pdf";
+  const file = {
+    filename,
+    file_data: `data:${document.source.media_type};base64,${document.source.data}`,
   };
+  registerOpenAiCompatibleInlineMedia(file, {
+    leadingFields: { filename },
+    dataUrlField: "file_data",
+    mediaType: document.source.media_type,
+    data: document.source.data,
+  });
+  return { type: "file", file };
 }
 
 function inlineTextDocument(document: CoreModelDocumentBlock): string {
@@ -324,12 +330,15 @@ function decodeBase64Utf8(data: string): string | undefined {
 function toImagePart(
   image: CoreModelImageBlock,
 ): OpenAiCompatibleWireContentPart {
-  return {
-    type: "image_url",
-    image_url: {
-      url: `data:${image.source.media_type};base64,${image.source.data}`,
-    },
+  const imageUrl = {
+    url: `data:${image.source.media_type};base64,${image.source.data}`,
   };
+  registerOpenAiCompatibleInlineMedia(imageUrl, {
+    dataUrlField: "url",
+    mediaType: image.source.media_type,
+    data: image.source.data,
+  });
+  return { type: "image_url", image_url: imageUrl };
 }
 
 function collectToolResultMedia(

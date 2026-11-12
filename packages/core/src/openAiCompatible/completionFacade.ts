@@ -31,6 +31,7 @@ import {
 
 import { CoreModelOutputLimitError } from "../modelRuntime.js";
 import { buildOpenAiCompatibleChatRequest } from "./translation.js";
+import { encodeOpenAiCompatibleRequestBody } from "./requestBody.js";
 import { parseOpenAiCompatibleSse } from "./sse.js";
 
 const DEFAULT_MAX_RETRIES = 2;
@@ -78,6 +79,9 @@ export async function* streamOpenAiCompatibleCompletion(
         : {}),
   };
   const estimatedInputTokens = estimateOpenAiCompatibleInputTokens(body);
+  // Encoded once and reused across retries; image-bearing bodies become an
+  // off-heap byte buffer instead of extra full-size strings.
+  const encodedBody = encodeOpenAiCompatibleRequestBody(body);
   const fetchImpl = args.fetch ?? globalThis.fetch;
   const maxRetries = Math.max(
     0,
@@ -100,7 +104,7 @@ export async function* streamOpenAiCompatibleCompletion(
         const response = await executeFetch({
           profile: args.profile,
           apiKey: args.apiKey,
-          body,
+          body: encodedBody,
           fetch: fetchImpl,
           signal: abort.signal,
           sessionId: args.request.providerHints?.sessionId,
@@ -287,7 +291,7 @@ export async function collectOpenAiCompatibleCompletion(
 async function executeFetch(args: {
   profile: OpenAiCompatibleRuntimeProfile;
   apiKey?: string;
-  body: unknown;
+  body: string | Uint8Array;
   fetch: OpenAiCompatibleFetch;
   signal: AbortSignal;
   sessionId?: string;
@@ -321,7 +325,7 @@ async function executeFetch(args: {
     {
       method: "POST",
       headers,
-      body: JSON.stringify(args.body),
+      body: args.body,
       signal: args.signal,
       redirect: "manual",
     },
