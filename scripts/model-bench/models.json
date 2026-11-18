@@ -1,0 +1,10 @@
+{
+  "models": [
+    {
+      "label": "opus-5.5",
+      "model": "claude-opus-5-5",
+      "baseUrl": "http://127.0.0.1:3456/v1",
+      "family": "anthropic"
+    }
+  ]
+}

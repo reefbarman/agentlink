@@ -18,7 +18,10 @@
  * - AGENTLINK_EVAL_RUNS      Runs per task (default 2)
  * - AGENTLINK_EVAL_TASKS     Comma-separated task ids to run (default all)
  * - AGENTLINK_EVAL_PASS_RATE Minimum overall pass rate, 0-1 (default 0.8)
+ * - AGENTLINK_EVAL_LABEL     Display label recorded in the report (default: model)
+ * - AGENTLINK_EVAL_REPORT_DIR Report directory (default telemetry-reports/evals)
  */
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -54,6 +57,18 @@ const selectedIds = env.AGENTLINK_EVAL_TASKS?.split(",").map((id) => id.trim());
 // Vitest runs from the repository root; the root tsconfig emits CommonJS, so
 // import.meta is unavailable here.
 const repoRoot = process.cwd();
+const label = env.AGENTLINK_EVAL_LABEL || model;
+
+function harnessRevision(): string | undefined {
+  try {
+    return execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    }).trim();
+  } catch {
+    return undefined;
+  }
+}
 
 interface RunResult extends GoldenTaskGrade {
   taskId: string;
@@ -210,7 +225,9 @@ describe.skipIf(!baseUrl || !model)("first-turn routing eval", () => {
 
       const passRate =
         results.filter((r) => r.pass).length / Math.max(1, results.length);
-      const reportDir = path.join(repoRoot, "telemetry-reports", "evals");
+      const reportDir = env.AGENTLINK_EVAL_REPORT_DIR
+        ? path.resolve(repoRoot, env.AGENTLINK_EVAL_REPORT_DIR)
+        : path.join(repoRoot, "telemetry-reports", "evals");
       await fs.mkdir(reportDir, { recursive: true });
       const reportPath = path.join(
         reportDir,
@@ -220,9 +237,13 @@ describe.skipIf(!baseUrl || !model)("first-turn routing eval", () => {
         reportPath,
         JSON.stringify(
           {
+            schemaVersion: 2,
+            generatedAt: new Date().toISOString(),
+            label,
             model,
             family,
             promptProfile: resolvedProfile,
+            harnessRevision: harnessRevision(),
             runs,
             passRate,
             rows,

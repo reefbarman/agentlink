@@ -1,0 +1,216 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { afterEach, test } from "node:test";
+import {
+  buildCharts,
+  median,
+  renderMarkdown,
+  summarizeAttempts,
+  summarizeRouting,
+  writeReport,
+} from "./report.mjs";
+import { calibrate, copyDir, loadTask, scoreWorkspace } from "./scoring.mjs";
+
+import assert from "node:assert/strict";
+import { parseArgs } from "./bench.mjs";
+
+const tempDirectories = [];
+
+function makeTempDirectory() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "model-bench-test-"));
+  tempDirectories.push(directory);
+  return directory;
+}
+
+afterEach(() => {
+  for (const directory of tempDirectories.splice(0)) {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("every control gets its expected verdict", () => {
+  const rows = calibrate();
+  assert.equal(rows.length, 9);
+  for (const row of rows) {
+    assert.equal(
+      row.solved,
+      row.expectedSolved,
+      `${row.taskId}/${row.control} failed: ${row.failedChecks.join(", ")}`,
+    );
+  }
+});
+
+test("edited tests cannot award a pass and are flagged", () => {
+  const dir = makeTempDirectory();
+  copyDir(loadTask("small-ts-bugfix").pristineDir, dir);
+  fs.writeFileSync(path.join(dir, "test", "cart.test.js"), "// gutted\n");
+  const verdict = scoreWorkspace("small-ts-bugfix", dir);
+  assert.equal(verdict.solved, false);
+  assert.deepEqual(verdict.integrity.protectedFilesChanged, [
+    "test/cart.test.js",
+  ]);
+});
+
+test("out-of-scope edits are flagged without failing a correct fix", () => {
+  const dir = makeTempDirectory();
+  copyDir(loadTask("small-ts-bugfix").pristineDir, dir);
+  const cart = path.join(dir, "src", "cart.js");
+  fs.writeFileSync(
+    cart,
+    fs
+      .readFileSync(cart, "utf8")
+      .replace(
+        "return taxedCents - discountCents;",
+        "return Math.max(0, taxedCents - discountCents);",
+      ),
+  );
+  fs.writeFileSync(path.join(dir, "NOTES.md"), "drive-by\n");
+  const verdict = scoreWorkspace("small-ts-bugfix", dir);
+  assert.equal(verdict.solved, true);
+  assert.deepEqual(verdict.integrity.outOfScopeChanges, ["NOTES.md"]);
+});
+
+test("a hanging or crashing workspace fails rather than throwing", () => {
+  const dir = makeTempDirectory();
+  copyDir(loadTask("small-ts-bugfix").pristineDir, dir);
+  fs.writeFileSync(path.join(dir, "src", "cart.js"), "export const = ;\n");
+  const verdict = scoreWorkspace("small-ts-bugfix", dir);
+  assert.equal(verdict.solved, false);
+  assert.ok(verdict.checks.some((check) => !check.pass));
+});
+
+test("parseArgs handles flags, inline values and positionals", () => {
+  assert.deepEqual(
+    parseArgs(["score", "--session", "abc", "--intervened", "--note=hi there"]),
+    { _: ["score"], session: "abc", intervened: true, note: "hi there" },
+  );
+});
+
+test("median ignores missing values", () => {
+  assert.equal(median([3, null, 1, undefined, 2]), 2);
+  assert.equal(median([4, 1]), 2.5);
+  assert.equal(median([null]), null);
+});
+
+const routingReport = (label, profile, results, generatedAt) => ({
+  label,
+  model: `${label}-id`,
+  promptProfile: profile,
+  generatedAt,
+  rows: [...new Set(results.map((result) => result.taskId))].map((task) => ({
+    task,
+  })),
+  results,
+});
+
+test("routing summary keeps the latest report per model and profile and excludes errors", () => {
+  const { rows, taskRows } = summarizeRouting([
+    routingReport("a", "compatibility", [{ taskId: "t1", pass: false }], "1"),
+    routingReport(
+      "a",
+      "compatibility",
+      [
+        { taskId: "t1", pass: true },
+        { taskId: "t1", pass: false, error: "HTTP 500" },
+        { taskId: "t2", pass: false },
+      ],
+      "2",
+    ),
+    routingReport("b", "reasoning", [{ taskId: "t1", pass: true }], "1"),
+  ]);
+  const a = rows.find((row) => row.label === "a");
+  assert.equal(rows.length, 2);
+  assert.equal(a.responses, 3);
+  assert.equal(a.errors, 1);
+  assert.equal(a.passRate, 0.5);
+  assert.deepEqual(
+    taskRows.find((row) => row.label === "a" && row.task === "t1"),
+    {
+      label: "a",
+      promptProfile: "compatibility",
+      task: "t1",
+      passed: 1,
+      valid: 1,
+      passRate: 1,
+    },
+  );
+});
+
+const attempt = (label, taskId, solved, extra = {}) => ({
+  label,
+  taskId,
+  scoredAt: "2026-11-18T00:00:00Z",
+  intervened: false,
+  elapsedMs: 60_000,
+  trace: { apiCalls: 4, toolCalls: 6, inputTokens: 100, outputTokens: 10 },
+  verdict: {
+    solved,
+    verifierVersion: "1",
+    integrity: { protectedFilesChanged: [], outOfScopeChanges: [] },
+  },
+  ...extra,
+});
+
+test("assisted solves do not count as unassisted solves", () => {
+  const [row] = summarizeAttempts([
+    attempt("a", "t", true),
+    attempt("a", "t", true, { intervened: true }),
+    attempt("a", "t", false, {
+      verdict: {
+        solved: false,
+        verifierVersion: "1",
+        integrity: {
+          protectedFilesChanged: ["test/x.js"],
+          outOfScopeChanges: [],
+        },
+      },
+    }),
+  ]);
+  assert.equal(row.attempts, 3);
+  assert.equal(row.unassistedSolved, 1);
+  assert.equal(row.interventions, 1);
+  assert.equal(row.integrityFlags, 1);
+  assert.equal(row.medianElapsedSec, 60);
+});
+
+test("report renders tables, vega-lite charts and HTML from bench output", () => {
+  const benchDir = makeTempDirectory();
+  fs.mkdirSync(path.join(benchDir, "routing"));
+  fs.writeFileSync(
+    path.join(benchDir, "routing", "routing-1.json"),
+    JSON.stringify(
+      routingReport("a", "compatibility", [{ taskId: "t1", pass: true }], "1"),
+    ),
+  );
+  const attemptDir = path.join(benchDir, "attempts", "one");
+  fs.mkdirSync(attemptDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(attemptDir, "attempt.json"),
+    JSON.stringify(attempt("a", "small-ts-bugfix", true)),
+  );
+
+  const { outDir, routing, endToEnd } = writeReport(benchDir);
+  assert.equal(routing.rows.length, 1);
+  assert.equal(endToEnd.length, 1);
+  assert.equal(buildCharts(routing, endToEnd).length, 4);
+  const markdown = fs.readFileSync(path.join(outDir, "summary.md"), "utf8");
+  assert.match(markdown, /\| small-ts-bugfix \| a \| 1\/1 \|/);
+  assert.equal(markdown.match(/```vega-lite/g)?.length, 4);
+  const html = fs.readFileSync(path.join(outDir, "index.html"), "utf8");
+  assert.match(html, /vegaEmbed\(/);
+  // Three CDN scripts plus the inline one: embedded data cannot close a tag.
+  assert.equal(html.match(/<\/script>/g)?.length, 4);
+});
+
+test("empty bench dir still produces a report with next steps", () => {
+  const markdown = renderMarkdown({
+    generatedAt: "now",
+    routing: { rows: [], taskRows: [] },
+    endToEnd: [],
+    charts: [],
+  });
+  assert.match(markdown, /bench:routing/);
+  assert.match(markdown, /bench:prepare/);
+});

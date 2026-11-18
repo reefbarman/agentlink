@@ -1,0 +1,34 @@
+# AgentLink model bench. Extra arguments are passed through, for example:
+#   mise run bench:prepare multi-file-refactor
+#   mise run bench:score --session <session-id>
+#   mise run bench:routing --only opus-5.5 --profiles compatibility,reasoning
+# See scripts/model-bench/README.md for the full workflow.
+
+[tasks."bench:calibrate"]
+description = "Check the fixture verifiers against no-change, partial and reference controls"
+run = "node scripts/model-bench/bench.mjs calibrate"
+
+[tasks."bench:prepare"]
+description = "Reset the fixture work dir for a task and print the prompt to paste into a fresh chat"
+run = "node scripts/model-bench/bench.mjs prepare"
+
+[tasks."bench:score"]
+description = "Verify the fixture work dir and record an attempt (pass --session <id>)"
+run = "node scripts/model-bench/bench.mjs score"
+
+[tasks."bench:routing"]
+description = "Run the live first-turn routing eval for each model in scripts/model-bench/models.json"
+run = "node scripts/model-bench/bench.mjs routing"
+
+[tasks."bench:report"]
+description = "Build the comparison report (HTML charts, Markdown summary, JSON data)"
+run = "node scripts/model-bench/bench.mjs report"
+
+[tasks."bench:open"]
+description = "Build and open the comparison report"
+depends = ["bench:report"]
+run = "open telemetry-reports/model-bench/report/index.html"
+
+[tasks."bench:test"]
+description = "Run the model bench's own tests"
+run = "node --test scripts/model-bench/model-bench.test.mjs"
