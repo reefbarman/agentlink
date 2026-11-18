@@ -20,10 +20,26 @@
  * - AGENTLINK_EVAL_PASS_RATE Minimum overall pass rate, 0-1 (default 0.8)
  * - AGENTLINK_EVAL_LABEL     Display label recorded in the report (default: model)
  * - AGENTLINK_EVAL_REPORT_DIR Report directory (default telemetry-reports/evals)
+ * - AGENTLINK_EVAL_TRANSPORT "chat-completions" (default) or "codex". Codex
+ *                            sends AgentLink's production Codex Responses
+ *                            request to the ChatGPT subscription backend with
+ *                            AGENTLINK_EVAL_API_KEY as the OAuth access token;
+ *                            AGENTLINK_EVAL_BASE_URL is not used.
+ * - AGENTLINK_EVAL_CODEX_ACCOUNT_ID ChatGPT account ID header for codex
+ * - AGENTLINK_EVAL_REASONING_EFFORT Reasoning effort for codex (default: the
+ *                            model's AgentLink default)
  */
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import {
+  createOpenAiResponsesClient,
+  executeCodexResolvedCompletion,
+  getCodexEndpointConfig,
+  translateCodexMessages,
+} from "@agentlink/core/codex";
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import { describe, expect, it } from "vitest";
 import {
   buildModeInstructionBlock,
@@ -44,7 +60,19 @@ import {
 const env = process.env;
 const baseUrl = env.AGENTLINK_EVAL_BASE_URL?.replace(/\/+$/, "");
 const model = env.AGENTLINK_EVAL_MODEL;
-const family = env.AGENTLINK_EVAL_FAMILY === "openai" ? "openai" : "anthropic";
+const transport =
+  env.AGENTLINK_EVAL_TRANSPORT === "codex" ? "codex" : "chat-completions";
+const family =
+  transport === "codex" || env.AGENTLINK_EVAL_FAMILY === "openai"
+    ? "openai"
+    : "anthropic";
+const reasoningEffort =
+  env.AGENTLINK_EVAL_REASONING_EFFORT?.trim() || undefined;
+const configured =
+  Boolean(model) &&
+  (transport === "codex"
+    ? Boolean(env.AGENTLINK_EVAL_API_KEY)
+    : Boolean(baseUrl));
 const forcedProfile =
   env.AGENTLINK_EVAL_PROMPT_PROFILE === "reasoning" ||
   env.AGENTLINK_EVAL_PROMPT_PROFILE === "compatibility"
@@ -80,12 +108,14 @@ interface RunResult extends GoldenTaskGrade {
   error?: string;
 }
 
-async function buildRequest(task: GoldenTask) {
+async function buildPromptAndTools(task: GoldenTask) {
   const { systemPrompt, promptProfile } = await buildPromptArtifacts(
     task.mode,
     repoRoot,
     {
-      providerId: "openai-compatible:eval",
+      // The real provider ID, so prompt profile and provider tuning match
+      // what a Codex session in VS Code gets.
+      providerId: transport === "codex" ? "codex" : "openai-compatible:eval",
       modelFamily: family,
       model,
       ...(forcedProfile && model
@@ -114,11 +144,20 @@ async function buildRequest(task: GoldenTask) {
     todoTool,
   ]).inlineTools;
   return {
+    systemPrompt,
+    userContent: `${modeBlock}\n\n${task.prompt}`,
+    tools,
+  };
+}
+
+async function buildRequest(task: GoldenTask) {
+  const { systemPrompt, userContent, tools } = await buildPromptAndTools(task);
+  return {
     model,
     max_tokens: 4096,
     messages: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: `${modeBlock}\n\n${task.prompt}` },
+      { role: "user", content: userContent },
     ],
     tools: tools.map((tool) => ({
       type: "function",
@@ -141,10 +180,56 @@ function parseArguments(raw: unknown): unknown {
   }
 }
 
+async function requestCodex(
+  task: GoldenTask,
+): Promise<{ calls: ObservedToolCall[]; text: string }> {
+  const { systemPrompt, userContent, tools } = await buildPromptAndTools(task);
+  const auth = {
+    method: "oauth" as const,
+    bearerToken: env.AGENTLINK_EVAL_API_KEY ?? "",
+    accountId: env.AGENTLINK_EVAL_CODEX_ACCOUNT_ID || undefined,
+    canRefresh: false,
+  };
+  const client = createOpenAiResponsesClient(
+    auth,
+    getCodexEndpointConfig(auth, randomUUID()),
+  );
+  const result = await executeCodexResolvedCompletion({
+    client,
+    authMethod: "oauth",
+    model,
+    instructions: systemPrompt,
+    input: translateCodexMessages([{ role: "user", content: userContent }]),
+    state: { store: false },
+    tools,
+    ...(reasoningEffort
+      ? { reasoningEffort: reasoningEffort as CoreReasoningEffort }
+      : {}),
+    maxRetries: 1,
+  });
+  return {
+    calls: result.toolCalls.map((call) => ({
+      name: call.name,
+      input: call.input,
+    })),
+    text: result.text,
+  };
+}
+
 async function runTask(task: GoldenTask, run: number): Promise<RunResult> {
   const startedAt = Date.now();
   const base = { taskId: task.id, run, text: "", calls: [] };
   try {
+    if (transport === "codex") {
+      const { calls, text } = await requestCodex(task);
+      return {
+        ...base,
+        ...gradeGoldenTask(task, calls),
+        calls,
+        text: text.slice(0, 300),
+        durationMs: Date.now() - startedAt,
+      };
+    }
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -194,7 +279,7 @@ async function runTask(task: GoldenTask, run: number): Promise<RunResult> {
   }
 }
 
-describe.skipIf(!baseUrl || !model)("first-turn routing eval", () => {
+describe.skipIf(!configured)("first-turn routing eval", () => {
   it(
     "routes golden tasks to the expected tools",
     async () => {
@@ -242,6 +327,8 @@ describe.skipIf(!baseUrl || !model)("first-turn routing eval", () => {
             label,
             model,
             family,
+            transport,
+            reasoningEffort: reasoningEffort ?? null,
             promptProfile: resolvedProfile,
             harnessRevision: harnessRevision(),
             runs,

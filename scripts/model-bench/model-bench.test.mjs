@@ -12,9 +12,47 @@ import {
   writeReport,
 } from "./report.mjs";
 import { calibrate, copyDir, loadTask, scoreWorkspace } from "./scoring.mjs";
+import { findTaskSessions, listSessions } from "./sessions.mjs";
 
 import assert from "node:assert/strict";
 import { parseArgs } from "./bench.mjs";
+
+function writeSession(historyDir, id, summary, firstMessage) {
+  const dir = path.join(historyDir, id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "metadata.json"),
+    JSON.stringify({ summary: { id, ...summary } }),
+  );
+  fs.writeFileSync(
+    path.join(dir, "messages.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      messages: [{ role: "user", content: firstMessage }],
+    }),
+  );
+}
+
+test("finds the foreground chat started after prepare with the task prompt", () => {
+  const history = makeTempDirectory();
+  const prompt = "Rename formatCents to formatCurrency.";
+  writeSession(history, "old", { createdAt: 100 }, prompt);
+  writeSession(history, "bg", { createdAt: 300, background: true }, prompt);
+  writeSession(history, "other", { createdAt: 300 }, "unrelated");
+  writeSession(history, "match", { createdAt: 400, model: "gpt-6.2-sol" }, [
+    { type: "text", text: `<mode>code</mode>\n\n${prompt}` },
+  ]);
+  const matches = findTaskSessions(history, prompt, 200);
+  assert.deepEqual(
+    matches.map((session) => session.id),
+    ["match"],
+  );
+  assert.equal(matches[0].model, "gpt-6.2-sol");
+  assert.deepEqual(
+    listSessions(history, { limit: 2 }).map((session) => session.id),
+    ["match", "other"],
+  );
+});
 
 const tempDirectories = [];
 

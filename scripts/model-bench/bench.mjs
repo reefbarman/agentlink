@@ -11,9 +11,14 @@
 //   score [--session <id>] [--model <label>] [--task <id>]
 //         [--summary <path>] [--intervened] [--note <text>]
 //                                     Snapshot work/, verify it and record an attempt.
+//                                     Without --session, finds the chat started after
+//                                     prepare whose first message is the task prompt.
+//   sessions [--limit n]              List recent VS Code chat sessions and their IDs.
 //   routing [--models <file>] [--only a,b] [--runs n]
 //           [--profiles compatibility,reasoning] [--tasks a,b]
 //                                     Run the first-turn routing eval per model.
+//   codex-login [--force]             Check or add the Codex (ChatGPT subscription)
+//                                     sign-in shared with AgentLink in VS Code.
 //   report [--out <dir>]              Write report/index.html, summary.md, data.json.
 //
 // Output lives in telemetry-reports/model-bench (ignored), or MODEL_BENCH_DIR.
@@ -31,6 +36,7 @@ import {
   loadTask,
   scoreWorkspace,
 } from "./scoring.mjs";
+import { findTaskSessions, listSessions } from "./sessions.mjs";
 
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -41,6 +47,7 @@ const BENCH_DIR = path.resolve(
   process.env.MODEL_BENCH_DIR ?? path.join("telemetry-reports", "model-bench"),
 );
 const STATE_FILE = path.join(BENCH_DIR, "current.json");
+const HISTORY_DIR = path.join(REPO_ROOT, ".agentlink", "history");
 const DEFAULT_MODELS_FILE = path.join(
   REPO_ROOT,
   "scripts",
@@ -68,14 +75,16 @@ export function parseArgs(argv) {
   return args;
 }
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args._.shift() ?? "help";
   const commands = {
     calibrate: runCalibrate,
     prepare: runPrepare,
     score: runScore,
+    sessions: runSessions,
     routing: runRouting,
+    "codex-login": runCodexLogin,
     report: runReport,
   };
   const handler = commands[command];
@@ -84,7 +93,7 @@ function main() {
     process.exitCode = command === "help" ? 0 : 1;
     return;
   }
-  handler(args);
+  await handler(args);
 }
 
 function runCalibrate(args) {
@@ -139,12 +148,50 @@ function runPrepare(args) {
 
 ${task.prompt}
 
-3. When it finishes (or hits your cap), score it with the chat's session ID:
+3. When it finishes (or hits your cap), score it:
 
-   mise run bench:score --session <session-id>
+   mise run bench:score
 
-   The model label defaults to the session's model; add --model <label> to
-   override, and --intervened if you had to step in.`);
+   The chat is found automatically and labelled with its model. Add
+   --intervened if you had to step in, or --session <id> if detection
+   picks the wrong chat (mise run bench:sessions lists IDs).`);
+}
+
+function runSessions(args) {
+  const sessions = listSessions(HISTORY_DIR, {
+    limit: Number(args.limit ?? 10) || 10,
+  });
+  if (!sessions.length) {
+    console.log(`No sessions under ${path.relative(REPO_ROOT, HISTORY_DIR)}.`);
+    return;
+  }
+  console.table(
+    sessions.map((session) => ({
+      id: session.id,
+      created: session.createdAt
+        ? new Date(session.createdAt).toLocaleString()
+        : "?",
+      model: session.model,
+      mode: session.mode,
+      title: session.title.slice(0, 50),
+    })),
+  );
+}
+
+/** The chat started after `prepare` whose first message is the task prompt. */
+function detectSessionId(taskId, state) {
+  if (!state?.preparedAt || state.taskId !== taskId) return undefined;
+  const matches = findTaskSessions(
+    HISTORY_DIR,
+    loadTask(taskId).prompt,
+    state.preparedAt,
+  );
+  if (matches.length > 1) {
+    console.warn(
+      `Warning: ${matches.length} chats used this prompt since prepare; scoring the newest (${matches[0].id}). Pass --session to pick another.`,
+    );
+  }
+  return matches[0]?.id;
 }
 
 function runScore(args) {
@@ -158,14 +205,22 @@ function runScore(args) {
       `Warning: work/ was prepared for ${state.taskId}, scoring as ${taskId}.`,
     );
   }
-  const session = args.session ? loadSession(String(args.session)) : undefined;
+  const sessionId = args.session
+    ? String(args.session)
+    : args.summary
+      ? undefined
+      : detectSessionId(taskId, state);
+  if (sessionId && !args.session) {
+    console.log(`Using session ${sessionId}`);
+  }
+  const session = sessionId ? loadSession(sessionId) : undefined;
   const traceSummary = args.summary
     ? readJson(path.resolve(REPO_ROOT, String(args.summary)))
     : session?.traceSummary;
   const label = String(args.model ?? session?.metadata?.model ?? "");
   if (!label) {
     throw new Error(
-      "Pass --model <label> or --session <id> to name the model.",
+      "Could not find the chat for this attempt. Pass --session <id> (see mise run bench:sessions) or --model <label>.",
     );
   }
 
@@ -187,7 +242,7 @@ function runScore(args) {
     reasoningEffort: session?.metadata?.reasoningEffort ?? null,
     promptProfile: session?.metadata?.promptProfile?.profile ?? null,
     providerId: session?.metadata?.promptProfile?.providerId ?? null,
-    sessionId: args.session ? String(args.session) : null,
+    sessionId: sessionId ?? null,
     harnessRevision: gitRevision(),
     fixtureDigest: fixtureDigest(loadTask(taskId).pristineDir),
     preparedFixtureDigest: state?.fixtureDigest ?? null,
@@ -235,13 +290,52 @@ function runScore(args) {
   }
   if (!traceSummary) {
     console.log(
-      "  no trace attached (pass --session <id> for requests and tokens)",
+      "  no trace attached (no matching chat found; pass --session <id> for requests and tokens)",
     );
   }
   console.log(`Recorded ${path.relative(REPO_ROOT, attemptDir)}`);
 }
 
-function runRouting(args) {
+async function codexRuntime() {
+  const { createCodexOAuthRuntime } = await import("@agentlink/node-host");
+  const runtime = createCodexOAuthRuntime({ log: () => {} });
+  await runtime.ready();
+  return runtime;
+}
+
+/** Bearer token and account for the active Codex sign-in, refreshed if stale. */
+async function resolveCodexAuth() {
+  const runtime = await codexRuntime();
+  const auth = await runtime.provider.resolveAuth();
+  if (!auth?.bearerToken) {
+    throw new Error(
+      "No Codex sign-in found. Sign in to Codex in AgentLink's model picker in VS Code, or run: mise run bench:codex-login",
+    );
+  }
+  return auth;
+}
+
+async function runCodexLogin(args) {
+  const runtime = await codexRuntime();
+  const active = await runtime.manager.getActiveAccount();
+  if (active && !args.force) {
+    console.log(
+      `Signed in to Codex as ${active.label}. This is the sign-in AgentLink in VS Code uses, so routing can use it already. Pass --force to add another account.`,
+    );
+    return;
+  }
+  const url = runtime.manager.startAuthorizationFlow();
+  const { callback } = await runtime.manager.listenForCallback();
+  if (process.platform === "darwin") spawnSync("open", [url]);
+  console.log(`Complete sign-in in your browser. If it did not open:\n${url}`);
+  const credentials = await callback;
+  const result = await runtime.manager.saveOAuthAccount(credentials, {
+    makeActive: true,
+  });
+  console.log(`Signed in as ${result.account.label}.`);
+}
+
+async function runRouting(args) {
   const modelsFile = path.resolve(
     REPO_ROOT,
     String(
@@ -267,6 +361,10 @@ function runRouting(args) {
   });
   if (build.status !== 0) throw new Error("build:workspaces failed");
 
+  const codexAuth = models.some((entry) => entry.transport === "codex")
+    ? await resolveCodexAuth()
+    : undefined;
+
   const failures = [];
   for (const entry of models) {
     for (const profile of profiles) {
@@ -278,11 +376,24 @@ function runRouting(args) {
         failures.push(name);
         continue;
       }
+      const codex = entry.transport === "codex";
       const env = {
         ...process.env,
-        AGENTLINK_EVAL_BASE_URL: entry.baseUrl,
+        AGENTLINK_EVAL_TRANSPORT: codex ? "codex" : "chat-completions",
+        ...(entry.baseUrl ? { AGENTLINK_EVAL_BASE_URL: entry.baseUrl } : {}),
         AGENTLINK_EVAL_MODEL: entry.model,
-        AGENTLINK_EVAL_FAMILY: entry.family ?? "anthropic",
+        AGENTLINK_EVAL_FAMILY: entry.family ?? (codex ? "openai" : "anthropic"),
+        ...(entry.reasoningEffort
+          ? { AGENTLINK_EVAL_REASONING_EFFORT: entry.reasoningEffort }
+          : {}),
+        ...(codex
+          ? {
+              AGENTLINK_EVAL_API_KEY: codexAuth.bearerToken,
+              ...(codexAuth.accountId
+                ? { AGENTLINK_EVAL_CODEX_ACCOUNT_ID: codexAuth.accountId }
+                : {}),
+            }
+          : {}),
         AGENTLINK_EVAL_LABEL: entry.label,
         AGENTLINK_EVAL_REPORT_DIR: reportDir,
         AGENTLINK_EVAL_RUNS: String(args.runs ?? entry.runs ?? 2),
@@ -374,5 +485,8 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  main();
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
 }

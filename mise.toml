@@ -2,7 +2,7 @@
 #   mise run bench:prepare multi-file-refactor
 #   mise run bench:score --session <session-id>
 #   mise run bench:routing --only opus-5.5 --profiles compatibility,reasoning
-# See scripts/model-bench/README.md for the full workflow.
+# Step-by-step guide: scripts/model-bench/README.md
 
 [tasks."bench:calibrate"]
 description = "Check the fixture verifiers against no-change, partial and reference controls"
@@ -13,8 +13,16 @@ description = "Reset the fixture work dir for a task and print the prompt to pas
 run = "node scripts/model-bench/bench.mjs prepare"
 
 [tasks."bench:score"]
-description = "Verify the fixture work dir and record an attempt (pass --session <id>)"
+description = "Verify the fixture work dir and record an attempt (finds the chat automatically)"
 run = "node scripts/model-bench/bench.mjs score"
+
+[tasks."bench:sessions"]
+description = "List recent AgentLink chat sessions and their IDs"
+run = "node scripts/model-bench/bench.mjs sessions"
+
+[tasks."bench:codex-login"]
+description = "Check or add the Codex subscription sign-in shared with AgentLink in VS Code"
+run = "node scripts/model-bench/bench.mjs codex-login"
 
 [tasks."bench:routing"]
 description = "Run the live first-turn routing eval for each model in scripts/model-bench/models.json"

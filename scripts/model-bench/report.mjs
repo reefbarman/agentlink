@@ -49,6 +49,8 @@ export function summarizeRouting(reports) {
       label,
       model: report.model,
       promptProfile: report.promptProfile ?? "default",
+      transport: report.transport ?? "chat-completions",
+      reasoningEffort: report.reasoningEffort ?? null,
       harnessRevision: report.harnessRevision ?? null,
       generatedAt: report.generatedAt ?? null,
       tasks: report.rows?.length ?? 0,
@@ -270,6 +272,7 @@ export function renderMarkdown({ generatedAt, routing, endToEnd, charts }) {
         [
           "Model",
           "Profile",
+          "Transport",
           "Pass rate",
           "Passed",
           "Responses",
@@ -279,6 +282,7 @@ export function renderMarkdown({ generatedAt, routing, endToEnd, charts }) {
         routing.rows.map((row) => [
           row.label,
           row.promptProfile,
+          transportLabel(row),
           percent(row.passRate),
           row.passed,
           row.responses,
@@ -379,6 +383,7 @@ ${htmlTable(
   [
     "Model",
     "Profile",
+    "Transport",
     "Pass rate",
     "Passed",
     "Responses",
@@ -388,6 +393,7 @@ ${htmlTable(
   routing.rows.map((row) => [
     row.label,
     row.promptProfile,
+    transportLabel(row),
     percent(row.passRate),
     row.passed,
     row.responses,
@@ -467,6 +473,12 @@ function htmlTable(title, headers, rows) {
         `<tr>${row.map((cell) => `<td>${escapeHtml(String(cell))}</td>`).join("")}</tr>`,
     )
     .join("")}</tbody></table>`;
+}
+
+function transportLabel(row) {
+  return row.reasoningEffort
+    ? `${row.transport} (${row.reasoningEffort})`
+    : row.transport;
 }
 
 function percent(value) {
