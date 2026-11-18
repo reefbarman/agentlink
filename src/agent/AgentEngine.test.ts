@@ -1265,6 +1265,75 @@ describe("AgentEngine", () => {
     );
   });
 
+  it("completes todo_write before slow sibling tools in the same batch settle", async () => {
+    const provider = makeMockProvider();
+    let calls = 0;
+    provider.stream = async function* () {
+      yield {
+        type: "content_blocks",
+        blocks:
+          calls++ === 0
+            ? [
+                {
+                  type: "tool_use",
+                  id: "call_todos",
+                  name: "todo_write",
+                  input: { todos: [] },
+                },
+                {
+                  type: "tool_use",
+                  id: "call_slow",
+                  name: "execute_command",
+                  input: { command: "npm test" },
+                },
+              ]
+            : [{ type: "text", text: "done" }],
+      };
+      yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+      yield { type: "done" };
+    };
+    const session = await makeSession();
+    session.addUserMessage("run tests");
+    const engine = new AgentEngine(makeRegistry(provider));
+    let releaseSlowTool!: () => void;
+    const slowToolGate = new Promise<void>((resolve) => {
+      releaseSlowTool = resolve;
+    });
+    let slowToolReleased = false;
+    engine.setToolRuntime({
+      listTools: () => [
+        {
+          name: "execute_command",
+          description: "run a command",
+          input_schema: { type: "object", properties: {} },
+        },
+      ],
+      isParallelSafe: () => false,
+      executeTool: vi.fn(async () => {
+        // Deadlock breaker only: the assertion below checks event order.
+        const fallback = setTimeout(() => releaseSlowTool(), 1_000);
+        await slowToolGate;
+        clearTimeout(fallback);
+        slowToolReleased = true;
+        return { content: [{ type: "text" as const, text: "ok" }] };
+      }),
+    });
+
+    const resultOrder: string[] = [];
+    let todoCompletedWhileSlowToolRunning: boolean | undefined;
+    for await (const event of engine.run(session)) {
+      if (event.type !== "tool_result") continue;
+      resultOrder.push(event.toolCallId);
+      if (event.toolCallId === "call_todos") {
+        todoCompletedWhileSlowToolRunning = !slowToolReleased;
+        releaseSlowTool();
+      }
+    }
+
+    expect(todoCompletedWhileSlowToolRunning).toBe(true);
+    expect(resultOrder).toEqual(["call_todos", "call_slow"]);
+  });
+
   // Soft threshold applies to projected request input. For fixed-envelope models,
   // usable input is contextWindow - maxOutputTokens.
   describe("auto-condense threshold behavior", () => {

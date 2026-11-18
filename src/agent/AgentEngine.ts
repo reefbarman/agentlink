@@ -3322,6 +3322,26 @@ export class AgentEngine {
         const toolUseBlocksById = new Map(
           resolvedToolUseBlocks.map((block) => [block.id, block]),
         );
+
+        // Internal tools (todo_write) complete synchronously above, so emit
+        // their completion events now rather than after sibling dispatch tools
+        // settle. Otherwise the UI keeps showing todo_write as running until
+        // every parallel call (e.g. a long execute_command) finishes.
+        for (const tr of internalResults) {
+          const toolUseBlock = toolUseBlocksById.get(tr.tool_use_id);
+          yield {
+            type: "tool_result" as const,
+            toolCallId: tr.tool_use_id,
+            toolName: tr.toolName,
+            result: tr.result.content,
+            durationMs: tr.durationMs,
+            input: toolUseBlock?.input,
+            humanQuestionAnswer: tr.humanQuestionAnswer,
+            mcpApprovalPromotion: tr.mcpApprovalPromotion,
+            authorizationAudit: tr.authorizationAudit,
+          };
+        }
+
         let dispatchResults: ToolCallResult[] = [];
         if (dispatchBlocks.length > 0) {
           const toolExecutionStartedAt = Date.now();
@@ -3608,24 +3628,6 @@ export class AgentEngine {
             measurement.estimatedTokens,
           );
         });
-
-        // Internal tools (todo_write) don't flow through executeToolCalls, so emit
-        // their completion events now. Dispatch-tool completion events are emitted
-        // by executeToolCalls as each call finishes.
-        for (const tr of internalResults) {
-          const toolUseBlock = toolUseBlocksById.get(tr.tool_use_id);
-          yield {
-            type: "tool_result" as const,
-            toolCallId: tr.tool_use_id,
-            toolName: tr.toolName,
-            result: tr.result.content,
-            durationMs: tr.durationMs,
-            input: toolUseBlock?.input,
-            humanQuestionAnswer: tr.humanQuestionAnswer,
-            mcpApprovalPromotion: tr.mcpApprovalPromotion,
-            authorizationAudit: tr.authorizationAudit,
-          };
-        }
 
         const successfulModeSwitch = toolResults.find((tr) =>
           getSuccessfulModeSwitch(tr),
