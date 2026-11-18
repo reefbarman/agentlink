@@ -29,6 +29,12 @@ export interface SearchReplaceBlock {
   search: string;
   replace: string;
   index: number;
+  /**
+   * Match only exactly. Set for blocks converted from apply_patch-style
+   * hunks, where an unprefixed indented context line would lose one space:
+   * whitespace-flexible matching could then apply a mis-indented replacement.
+   */
+  exactOnly?: true;
 }
 
 export interface TrackedSpan {
@@ -281,6 +287,277 @@ export function parseUnifiedDiff(diff: string): ApplyDiffParseResult {
   };
 }
 
+// ── apply_patch-style hunk support ─────────────────────────────────────────
+//
+// Models trained on Codex-style `apply_patch` often send hunks whose lines
+// carry space/-/+ prefixes, separated by bare `@@` (or `@@ <context>`) lines
+// with no line numbers, optionally wrapped in `*** Begin Patch` /
+// `*** End Patch`. These hunks are accepted as whole input and inside a
+// SEARCH block that has no divider. Matching stays exact, so tolerance never
+// widens what an edit can touch.
+
+const PATCH_WRAPPER_LINE = /^\*\*\* (?:Begin Patch|End Patch|End of File)\s*$/;
+const PATCH_UPDATE_FILE_LINE = /^\*\*\* Update File:\s*(.+?)\s*$/;
+const PATCH_UNSUPPORTED_LINE = /^\*\*\* (?:Add File|Delete File|Move to):/;
+const PATCH_HUNK_SEPARATOR = /^@@(?:\s.*)?$/;
+const NO_NEWLINE_MARKER = "\\ No newline at end of file";
+
+function isPatchFileHeaderPair(lines: readonly string[], i: number): boolean {
+  return lines[i].startsWith("--- ") && !!lines[i + 1]?.startsWith("+++ ");
+}
+
+/**
+ * Detect Codex `apply_patch`-style input: a `*** Begin Patch` wrapper or a
+ * bare/context-only `@@` separator opens the input before any SEARCH marker.
+ * Numbered unified hunks are detected first by {@link isUnifiedDiff}.
+ */
+export function isApplyPatchDiff(diff: string): boolean {
+  for (const line of diff.split("\n")) {
+    if (isSearchMarkerLine(line)) return false;
+    if (line.trim() === "*** Begin Patch") return true;
+    if (PATCH_HUNK_SEPARATOR.test(line)) return true;
+  }
+  return false;
+}
+
+type PatchLine =
+  | { readonly kind: " " | "+" | "-"; readonly text: string }
+  | { readonly kind: "blank" };
+
+/**
+ * Whether lines read as a prefixed patch: every line is a recognised patch
+ * line and at least one adds or removes content. `lenient` also accepts
+ * unprefixed lines (treated as context) for conversion hints.
+ */
+function looksLikePrefixedPatch(
+  lines: readonly string[],
+  lenient = false,
+): boolean {
+  let changes = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (isPatchFileHeaderPair(lines, i)) {
+      i++;
+      continue;
+    }
+    if (line.startsWith("+") || line.startsWith("-")) {
+      changes++;
+      continue;
+    }
+    if (
+      line === "" ||
+      line.startsWith(" ") ||
+      line === NO_NEWLINE_MARKER ||
+      PATCH_HUNK_SEPARATOR.test(line) ||
+      PATCH_WRAPPER_LINE.test(line) ||
+      PATCH_UPDATE_FILE_LINE.test(line)
+    ) {
+      continue;
+    }
+    if (!lenient) return false;
+  }
+  return changes > 0;
+}
+
+/**
+ * Parse prefixed hunks into blocks. Each `@@` separator starts a new hunk;
+ * content before the first separator forms an implicit hunk. Blank lines are
+ * blank context, except leading/trailing blanks, which are dropped. Hunks
+ * without changes are skipped without consuming a block index.
+ */
+function parsePatchHunks(
+  lines: readonly string[],
+  firstLineNumber: number,
+  startIndex: number,
+  options: { readonly lenient?: boolean } = {},
+): ApplyDiffParseResult & { readonly nextIndex: number } {
+  const blocks: SearchReplaceBlock[] = [];
+  const malformedBlockDetails: MalformedApplyDiffBlock[] = [];
+  let blockIndex = startIndex;
+  let hunk: PatchLine[] = [];
+  let hunkMalformed: MalformedApplyDiffBlock | undefined;
+  let updateFile: string | undefined;
+
+  const flush = (): void => {
+    if (hunkMalformed) {
+      malformedBlockDetails.push(hunkMalformed);
+      blockIndex++;
+    } else {
+      let start = 0;
+      let end = hunk.length;
+      while (start < end && hunk[start].kind === "blank") start++;
+      while (end > start && hunk[end - 1].kind === "blank") end--;
+      const body = hunk.slice(start, end);
+      if (body.some((line) => line.kind === "+" || line.kind === "-")) {
+        const search: string[] = [];
+        const replace: string[] = [];
+        for (const line of body) {
+          const text = line.kind === "blank" ? "" : line.text;
+          if (line.kind !== "+") search.push(text);
+          if (line.kind !== "-") replace.push(text);
+        }
+        blocks.push({
+          search: search.join("\n"),
+          replace: replace.join("\n"),
+          index: blockIndex,
+          exactOnly: true,
+        });
+        blockIndex++;
+      }
+    }
+    hunk = [];
+    hunkMalformed = undefined;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNumber = firstLineNumber + i;
+    if (PATCH_HUNK_SEPARATOR.test(line)) {
+      flush();
+      continue;
+    }
+    if (hunkMalformed) continue;
+    if (PATCH_WRAPPER_LINE.test(line) || line === NO_NEWLINE_MARKER) continue;
+    const update = PATCH_UPDATE_FILE_LINE.exec(line);
+    if (update) {
+      // One apply_diff call edits one file; hunks for another file in the
+      // same patch must not be applied here.
+      if (updateFile !== undefined && updateFile !== update[1]) {
+        hunkMalformed = {
+          index: blockIndex,
+          line: lineNumber,
+          reason: "unsupported_patch_operation",
+        };
+      }
+      updateFile = update[1];
+      continue;
+    }
+    if (PATCH_UNSUPPORTED_LINE.test(line)) {
+      hunkMalformed = {
+        index: blockIndex,
+        line: lineNumber,
+        reason: "unsupported_patch_operation",
+      };
+      continue;
+    }
+    if (isPatchFileHeaderPair(lines, i)) {
+      i++;
+      continue;
+    }
+    if (line === "") {
+      hunk.push({ kind: "blank" });
+    } else if (line[0] === " " || line[0] === "+" || line[0] === "-") {
+      hunk.push({ kind: line[0] as " " | "+" | "-", text: line.slice(1) });
+    } else if (options.lenient) {
+      hunk.push({ kind: " ", text: line });
+    } else {
+      hunkMalformed = {
+        index: blockIndex,
+        line: lineNumber,
+        reason: "invalid_patch_line",
+      };
+    }
+  }
+  flush();
+
+  return {
+    blocks,
+    malformedBlocks: malformedBlockDetails.length,
+    malformedBlockDetails,
+    nextIndex: blockIndex,
+  };
+}
+
+/** Parse whole-input Codex `apply_patch`-style hunks. */
+export function parseApplyPatchDiff(diff: string): ApplyDiffParseResult {
+  const { blocks, malformedBlocks, malformedBlockDetails } = parsePatchHunks(
+    diff.split("\n"),
+    1,
+    0,
+  );
+  return { blocks, malformedBlocks, malformedBlockDetails };
+}
+
+function isToolMarkerLine(line: string): boolean {
+  const trimmed = line.trim();
+  return (
+    trimmed === SEARCH_MARKER ||
+    trimmed === TOLERATED_SEARCH_MARKER ||
+    trimmed === DIVIDER_MARKER ||
+    trimmed === REPLACE_MARKER
+  );
+}
+
+function canonicalBlockText(block: SearchReplaceBlock): string | undefined {
+  const lines = [...block.search.split("\n"), ...block.replace.split("\n")];
+  if (lines.some(isToolMarkerLine)) return undefined;
+  return [
+    SEARCH_MARKER,
+    block.search,
+    DIVIDER_MARKER,
+    block.replace,
+    REPLACE_MARKER,
+  ].join("\n");
+}
+
+/**
+ * Best-effort conversion of a SEARCH block body that never reached a divider
+ * but carries patch prefixes. Used only for hints, never applied.
+ */
+function convertMalformedPatchBody(
+  searchLines: readonly string[],
+): string | undefined {
+  if (!looksLikePrefixedPatch(searchLines, true)) return undefined;
+  const { blocks } = parsePatchHunks(searchLines, 1, 0, { lenient: true });
+  const texts = blocks.map(canonicalBlockText);
+  if (texts.length === 0 || texts.some((text) => text === undefined)) {
+    return undefined;
+  }
+  return texts.join("\n");
+}
+
+function stripPatchSide(lines: readonly string[], keep: "+" | "-"): string[] {
+  const out: string[] = [];
+  for (const line of lines) {
+    if (
+      PATCH_HUNK_SEPARATOR.test(line) ||
+      PATCH_WRAPPER_LINE.test(line) ||
+      PATCH_UPDATE_FILE_LINE.test(line) ||
+      line === NO_NEWLINE_MARKER
+    ) {
+      continue;
+    }
+    if (line === "") out.push("");
+    else if (line[0] === " " || line[0] === keep) out.push(line.slice(1));
+    // Lines with the opposite prefix belong to the other side.
+  }
+  return out;
+}
+
+/**
+ * Convert a parsed SEARCH/DIVIDER/REPLACE block whose search side still
+ * carries patch +/- prefixes into the block the model most likely meant.
+ * Returns undefined when the block does not look like patch syntax.
+ */
+export function convertPatchPrefixedBlock(
+  block: SearchReplaceBlock,
+): SearchReplaceBlock | undefined {
+  const searchLines = block.search.split("\n");
+  if (!looksLikePrefixedPatch(searchLines)) return undefined;
+  const search = stripPatchSide(searchLines, "-").join("\n");
+  if (search.trim() === "" || search === block.search) return undefined;
+
+  const replaceLines = block.replace.split("\n");
+  let replace = block.replace;
+  if (looksLikePrefixedPatch(replaceLines)) {
+    replace = stripPatchSide(replaceLines, "+").join("\n");
+  } else if (block.replace === "" && searchLines.some((l) => l[0] === "+")) {
+    // The whole patch landed in SEARCH; its + side is the intended result.
+    replace = stripPatchSide(searchLines, "+").join("\n");
+  }
+  return { search, replace, index: block.index };
+}
+
 // ── Search/replace block support ───────────────────────────────────────────
 
 /**
@@ -302,7 +579,14 @@ export interface MalformedApplyDiffBlock {
     | "replace_before_divider"
     | "unexpected_search_marker"
     | "invalid_unified_line"
-    | "invalid_unified_hunk_counts";
+    | "invalid_unified_hunk_counts"
+    | "invalid_patch_line"
+    | "unsupported_patch_operation";
+  /**
+   * Canonical SEARCH/DIVIDER/REPLACE text converted from a block that looked
+   * like patch syntax but could not be applied safely. Reported, never applied.
+   */
+  patchConversion?: string;
 }
 
 export interface ApplyDiffParseResult {
@@ -407,12 +691,31 @@ export function parseSearchReplaceBlocks(diff: string): ApplyDiffParseResult {
       }
 
       if (!foundReplace) {
+        // A SEARCH block that never reached a divider but whose body is a
+        // prefixed patch (Codex apply_patch habit) is converted to hunks.
+        if (!inReplace && looksLikePrefixedPatch(searchLines)) {
+          const hunks = parsePatchHunks(
+            searchLines,
+            searchMarkerLine + 1,
+            blockIndex,
+          );
+          if (hunks.blocks.length > 0 || hunks.malformedBlocks > 0) {
+            blocks.push(...hunks.blocks);
+            malformedBlockDetails.push(...hunks.malformedBlockDetails);
+            blockIndex = hunks.nextIndex;
+            continue;
+          }
+        }
+        const detail: MalformedApplyDiffBlock = malformed ?? {
+          index: blockIndex,
+          line: Math.max(searchMarkerLine, lines.length),
+          reason: inReplace ? "missing_replace_marker" : "missing_divider",
+        };
+        const patchConversion = inReplace
+          ? undefined
+          : convertMalformedPatchBody(searchLines);
         malformedBlockDetails.push(
-          malformed ?? {
-            index: blockIndex,
-            line: Math.max(searchMarkerLine, lines.length),
-            reason: inReplace ? "missing_replace_marker" : "missing_divider",
-          },
+          patchConversion ? { ...detail, patchConversion } : detail,
         );
         blockIndex++;
       }
@@ -430,16 +733,21 @@ export function parseSearchReplaceBlocks(diff: string): ApplyDiffParseResult {
 
 /**
  * Parse `apply_diff` input with VS Code's grammar selection: unified diff when
- * an `@@` hunk opens the input, otherwise canonical SEARCH/REPLACE blocks.
+ * a numbered `@@` hunk opens the input, Codex apply_patch-style hunks when a
+ * bare `@@` separator or `*** Begin Patch` opens it, otherwise canonical
+ * SEARCH/REPLACE blocks. `unified` is true for both prefixed grammars, where
+ * tool-marker lines are representable payload.
  */
 export function parseApplyDiff(
   diff: string,
 ): ApplyDiffParseResult & { readonly unified: boolean } {
-  const unified = isUnifiedDiff(diff);
-  return {
-    unified,
-    ...(unified ? parseUnifiedDiff(diff) : parseSearchReplaceBlocks(diff)),
-  };
+  if (isUnifiedDiff(diff)) {
+    return { unified: true, ...parseUnifiedDiff(diff) };
+  }
+  if (isApplyPatchDiff(diff)) {
+    return { unified: true, ...parseApplyPatchDiff(diff) };
+  }
+  return { unified: false, ...parseSearchReplaceBlocks(diff) };
 }
 
 /**
@@ -637,6 +945,17 @@ export function applyBlocks(
         selectedOccurrence === undefined ? "unique" : "occurrence",
         selectedOccurrence,
       );
+      continue;
+    }
+
+    if (block.exactOnly) {
+      failedBlocks.push(block.index);
+      blockResults.push({
+        index: block.index,
+        status: "failed",
+        reason: "not_found",
+        exactOccurrences: 0,
+      });
       continue;
     }
 
@@ -1242,7 +1561,11 @@ export function describeMalformedBlock(
               ? `Found a new ${SEARCH_MARKER} before the current block was closed.`
               : detail.reason === "invalid_unified_line"
                 ? "Unified-diff hunk body lines must begin with a space, +, or -, and only the exact standard \\ No newline at end of file marker may be unprefixed."
-                : "Unified-diff hunk body line counts did not match the @@ header.";
+                : detail.reason === "invalid_patch_line"
+                  ? "Patch-style hunk lines must begin with a space, +, or -, or be blank; @@ lines separate hunks."
+                  : detail.reason === "unsupported_patch_operation"
+                    ? "apply_diff edits one existing file; patch Add File, Delete File, Move to, and hunks for a second file are not supported."
+                    : "Unified-diff hunk body line counts did not match the @@ header.";
   return {
     index: detail.index,
     line: detail.line,
@@ -1250,6 +1573,50 @@ export function describeMalformedBlock(
     violated_marker_rule: violatedRule,
     recovery:
       "Use the canonical SEARCH/DIVIDER/REPLACE order. Bare ======= is literal payload in DIVIDER mode; for standalone tool-marker payload lines, use a unified-diff @@ hunk.",
+    ...(detail.patchConversion && {
+      patch_syntax_conversion: detail.patchConversion,
+    }),
+  };
+}
+
+/**
+ * Build the "looks like patch syntax" hint for blocks that failed because
+ * their lines kept patch +/- prefixes. Not-found conversions are offered only
+ * when the converted search text exists in `content` (when known), so
+ * legitimate diff-file edits are not second-guessed.
+ */
+function buildPatchSyntaxHint(
+  blocks: readonly SearchReplaceBlock[],
+  blockResults: readonly BlockApplyResult[],
+  malformedBlockDetails: readonly MalformedApplyDiffBlock[],
+  content?: string,
+): { patch_syntax: Record<string, unknown> } | undefined {
+  const converted: Array<{ index: number; text: string }> = [];
+  for (const result of blockResults) {
+    if (result.status !== "failed" || result.reason !== "not_found") continue;
+    const block = blocks.find((candidate) => candidate.index === result.index);
+    const conversion = block && convertPatchPrefixedBlock(block);
+    if (!conversion) continue;
+    if (content !== undefined && !content.includes(conversion.search)) {
+      continue;
+    }
+    const text = canonicalBlockText(conversion);
+    if (text) converted.push({ index: result.index, text });
+  }
+  for (const detail of malformedBlockDetails) {
+    if (detail.patchConversion) {
+      converted.push({ index: detail.index, text: detail.patchConversion });
+    }
+  }
+  if (converted.length === 0) return undefined;
+  converted.sort((a, b) => a.index - b.index);
+  const indices = converted.map((entry) => entry.index);
+  return {
+    patch_syntax: {
+      message: `Block${indices.length === 1 ? "" : "s"} ${indices.join(", ")} look${indices.length === 1 ? "s" : ""} like patch syntax: lines kept +/- (and space) prefixes. In SEARCH/REPLACE form, write the file's exact lines without prefixes: old content before ${DIVIDER_MARKER}, new content after it. Check converted_diff against the file and retry with it if it matches your intent.`,
+      block_indices: indices,
+      converted_diff: converted.map((entry) => entry.text).join("\n"),
+    },
   };
 }
 
@@ -1281,6 +1648,12 @@ export function buildFailedBlocksPayload(
     failed_blocks: failedSearches,
     failed_block_details: failedDetails,
     path: paramsPath,
+    ...buildPatchSyntaxHint(
+      blocks,
+      blockResults,
+      malformedBlockDetails,
+      preEditContent,
+    ),
     ...(malformedBlockDetails.length > 0
       ? {
           malformed_blocks: malformedBlockDetails.length,
@@ -1346,14 +1719,21 @@ export function buildNoValidBlocksPayload(
   parsed: ApplyDiffParseResult,
   atomic?: boolean,
 ): ApplyDiffFailurePayload {
+  const patchSyntax = buildPatchSyntaxHint(
+    [],
+    [],
+    parsed.malformedBlockDetails,
+  );
   return {
     error: "No valid search/replace blocks found in diff",
     path: paramsPath,
-    hint:
-      parsed.malformedBlocks > 0
+    hint: patchSyntax
+      ? "One or more blocks look like patch syntax rather than SEARCH/REPLACE. See patch_syntax for converted blocks and malformed_block_details for the exact line and rule."
+      : parsed.malformedBlocks > 0
         ? "One or more blocks violated the marker grammar. Use malformed_block_details for the exact line and rule."
         : APPLY_DIFF_INPUT_GRAMMAR,
     expected_format: APPLY_DIFF_SEARCH_REPLACE_FORMAT,
+    ...patchSyntax,
     ...(parsed.malformedBlocks > 0 && {
       malformed_blocks: parsed.malformedBlocks,
       malformed_block_details: parsed.malformedBlockDetails.map(

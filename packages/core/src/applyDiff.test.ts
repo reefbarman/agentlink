@@ -95,3 +95,222 @@ describe("planApplyDiff", () => {
     });
   });
 });
+
+describe("apply_patch-style input", () => {
+  const source = [
+    "export interface Handle {",
+    "  on(): void",
+    "  send(options: { prompt: string }): Promise<unknown>",
+    "  abort(): void",
+    "}",
+    "",
+  ].join("\n");
+  const expected = [
+    "export interface Handle {",
+    "  on(): void",
+    "  send(options: { prompt: string; attachments?: A[] }): Promise<unknown>",
+    "  abort(): void",
+    "}",
+    "",
+    "export interface A { data: string }",
+    "",
+  ].join("\n");
+  // Two hunks in Codex apply_patch form: prefixed lines, bare @@ separator.
+  const hunks = [
+    " export interface Handle {",
+    "   on(): void",
+    "-  send(options: { prompt: string }): Promise<unknown>",
+    "+  send(options: { prompt: string; attachments?: A[] }): Promise<unknown>",
+    "@@",
+    "   abort(): void",
+    " }",
+    "+",
+    "+export interface A { data: string }",
+  ];
+
+  it("applies whole-input hunks wrapped in *** Begin/End Patch", () => {
+    const diff = [
+      "*** Begin Patch",
+      "*** Update File: src/handle.ts",
+      "@@ export interface Handle {",
+      ...hunks,
+      "*** End Patch",
+    ].join("\n");
+    expect(parseApplyDiff(diff)).toMatchObject({
+      unified: true,
+      malformedBlocks: 0,
+    });
+    expect(planApplyDiff("f.ts", source, { diff })).toMatchObject({
+      status: "ready",
+      content: expected,
+    });
+  });
+
+  it("applies bare @@ hunks without a wrapper", () => {
+    expect(
+      planApplyDiff("f.ts", source, { diff: ["@@", ...hunks].join("\n") }),
+    ).toMatchObject({ status: "ready", content: expected });
+  });
+
+  it.each([
+    ["closed by REPLACE", ">>>>>>> REPLACE"],
+    ["ended by *** End Patch", "*** End Patch"],
+  ])(
+    "converts a divider-less SEARCH block of prefixed hunks %s",
+    (_label, closer) => {
+      const diff = ["<<<<<<< SEARCH", ...hunks, closer].join("\n");
+      const parsed = parseApplyDiff(diff);
+      expect(parsed).toMatchObject({ unified: false, malformedBlocks: 0 });
+      expect(parsed.blocks.map((b) => b.index)).toEqual([0, 1]);
+      expect(planApplyDiff("f.ts", source, { diff })).toMatchObject({
+        status: "ready",
+        content: expected,
+      });
+    },
+  );
+
+  it("numbers converted hunks positionally alongside canonical blocks", () => {
+    const diff = [
+      "<<<<<<< SEARCH",
+      ...hunks,
+      ">>>>>>> REPLACE",
+      block("export interface Handle {", "export interface Handle2 {"),
+    ].join("\n");
+    expect(parseApplyDiff(diff).blocks.map((b) => b.index)).toEqual([0, 1, 2]);
+  });
+
+  it("keeps an indented SEARCH block without changes malformed", () => {
+    const diff = "<<<<<<< SEARCH\n  on(): void\n  abort(): void";
+    const parsed = parseApplyDiff(diff);
+    expect(parsed.blocks).toHaveLength(0);
+    expect(parsed.malformedBlockDetails).toEqual([
+      { index: 0, line: 3, reason: "missing_divider" },
+    ]);
+  });
+
+  it("matches converted hunks exactly, never whitespace-flexibly", () => {
+    // Unprefixed indented context loses one space when converted; a
+    // flexible match would then write a mis-indented replacement.
+    const diff = [
+      "<<<<<<< SEARCH",
+      "   on(): void",
+      "-  send(options: { prompt: string }): Promise<unknown>",
+      "+  send(): void",
+      "  abort(): void",
+      ">>>>>>> REPLACE",
+    ].join("\n");
+    expect(planApplyDiff("f.ts", source, { diff })).toMatchObject({
+      status: "failed",
+      payload: {
+        failed_block_details: [
+          expect.objectContaining({ reason: "not_found" }),
+        ],
+      },
+    });
+  });
+
+  it("rejects patch operations other than updating one file", () => {
+    const addFile = planApplyDiff("f.ts", source, {
+      diff: "*** Begin Patch\n*** Add File: new.ts\n+hello\n*** End Patch",
+    });
+    expect(addFile).toMatchObject({
+      status: "failed",
+      payload: {
+        malformed_block_details: [
+          expect.objectContaining({ reason: "unsupported_patch_operation" }),
+        ],
+      },
+    });
+    const secondFile = parseApplyDiff(
+      [
+        "*** Begin Patch",
+        "*** Update File: a.ts",
+        "@@",
+        "-  on(): void",
+        "+  on(): number",
+        "*** Update File: b.ts",
+        "-  abort(): void",
+        "+  abort(): number",
+      ].join("\n"),
+    );
+    expect(secondFile.blocks).toHaveLength(0);
+    expect(secondFile.malformedBlockDetails).toEqual([
+      expect.objectContaining({ reason: "unsupported_patch_operation" }),
+    ]);
+  });
+
+  it("offers converted blocks when a SEARCH/DIVIDER block kept +/- prefixes", () => {
+    const diff = block(
+      [
+        "   on(): void",
+        "-  send(options: { prompt: string }): Promise<unknown>",
+        "+  send(options: { prompt: string; x?: 1 }): Promise<unknown>",
+      ].join("\n"),
+      [
+        "   on(): void",
+        "+  send(options: { prompt: string; x?: 1 }): Promise<unknown>",
+      ].join("\n"),
+    );
+    const plan = planApplyDiff("f.ts", source, { diff });
+    expect(plan).toMatchObject({
+      status: "failed",
+      payload: {
+        failed_block_details: [
+          expect.objectContaining({ reason: "not_found" }),
+        ],
+        patch_syntax: {
+          message: expect.stringContaining("like patch syntax"),
+          block_indices: [0],
+        },
+      },
+    });
+    if (plan.status !== "failed") throw new Error("expected failure");
+    const converted = (plan.payload.patch_syntax as { converted_diff: string })
+      .converted_diff;
+    expect(planApplyDiff("f.ts", source, { diff: converted })).toMatchObject({
+      status: "ready",
+      content: source.replace("prompt: string }", "prompt: string; x?: 1 }"),
+    });
+  });
+
+  it("does not offer a conversion whose search text is absent from the file", () => {
+    const diff = block("-missing line\n+other line", "replacement");
+    const plan = planApplyDiff("f.ts", source, { diff });
+    expect(plan.status).toBe("failed");
+    if (plan.status !== "failed") throw new Error("expected failure");
+    expect(plan.payload).not.toHaveProperty("patch_syntax");
+  });
+
+  it("hints a conversion for a malformed block with unprefixed patch lines", () => {
+    // "}" lacks a prefix, so the block is not converted automatically.
+    const diff = [
+      "<<<<<<< SEARCH",
+      "-  abort(): void",
+      "+  abort(): number",
+      "}",
+      ">>>>>>> REPLACE",
+    ].join("\n");
+    const plan = planApplyDiff("f.ts", source, { diff });
+    expect(plan).toMatchObject({
+      status: "failed",
+      payload: {
+        error: "No valid search/replace blocks found in diff",
+        hint: expect.stringContaining("patch syntax"),
+        malformed_block_details: [
+          expect.objectContaining({
+            reason: "replace_before_divider",
+            patch_syntax_conversion: expect.any(String),
+          }),
+        ],
+        patch_syntax: { block_indices: [0] },
+      },
+    });
+    if (plan.status !== "failed") throw new Error("expected failure");
+    const converted = (plan.payload.patch_syntax as { converted_diff: string })
+      .converted_diff;
+    expect(planApplyDiff("f.ts", source, { diff: converted })).toMatchObject({
+      status: "ready",
+      content: source.replace("abort(): void", "abort(): number"),
+    });
+  });
+});

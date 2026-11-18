@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `apply_diff` now accepts Codex `apply_patch`-style hunks (space/-/+ prefixed lines separated by bare `@@` lines, optionally wrapped in `*** Begin Patch`/`*** End Patch`), as whole input or inside a SEARCH block that has no divider. These hunks must match exactly. When a block fails because its lines kept patch prefixes, the error now includes `patch_syntax` with a converted SEARCH/REPLACE diff to retry. MAI Code 2 failed about a third of its edits by mixing these formats.
+
 ## 1.101.1
 
 - The todo_write tool now shows as complete immediately instead of appearing to spin until long-running sibling tool calls in the same batch finish.

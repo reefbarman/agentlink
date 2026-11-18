@@ -1077,11 +1077,13 @@ world
     expect(parseUnifiedDiff(input).malformedBlocks).toBe(0);
   });
 
-  it("keeps malformed SEARCH blocks with hunk payload in their own grammar", () => {
+  it("converts a divider-less SEARCH block of prefixed hunk payload", () => {
     const input = "<<<<<<< SEARCH\n@@ -1 +1 @@\n-old\n+new";
     expect(isUnifiedDiff(input)).toBe(false);
-    expect(parseSearchReplaceBlocks(input).malformedBlockDetails).toEqual([
-      { index: 0, line: 4, reason: "missing_divider" },
+    const parsed = parseSearchReplaceBlocks(input);
+    expect(parsed.malformedBlocks).toBe(0);
+    expect(parsed.blocks).toEqual([
+      { search: "old", replace: "new", index: 0, exactOnly: true },
     ]);
   });
 
