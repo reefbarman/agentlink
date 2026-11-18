@@ -63,6 +63,7 @@ import {
   ResponsesTransportPolicy,
   type ResponsesWebSocketConnector,
   getEndpointCaps,
+  usesCodexInputPrefix,
   usesCodexResponsesLite,
   isCodexBodylessBadRequest,
   isCodexModelNotFoundError,
@@ -460,6 +461,7 @@ export class CodexProvider implements ModelProvider {
           hostedTools,
           caps: getEndpointCaps(auth),
           useResponsesLite: usesCodexResponsesLite(effectiveModel, auth.method),
+          useInputPrefix: usesCodexInputPrefix(effectiveModel, auth.method),
         };
         const requestBody = buildCodexEndpointRequestBody(requestOptions);
         const fullBody = !state?.previousResponseId
@@ -684,6 +686,7 @@ export class CodexProvider implements ModelProvider {
         reasoningMode,
         caps: getEndpointCaps(auth),
         useResponsesLite: usesCodexResponsesLite(effectiveModel, auth.method),
+        useInputPrefix: usesCodexInputPrefix(effectiveModel, auth.method),
       };
       const requestBody = buildCodexEndpointRequestBody(requestOptions);
       const fullBody = !state?.previousResponseId

@@ -17,6 +17,7 @@ import {
   resolveCodexReasoningEffort,
   supportsCodexServiceTier,
   toCodexServiceTierWireValue,
+  usesCodexInputPrefix,
   usesCodexResponsesLite,
   type CodexAuthMethod,
   type CodexTextVerbosity,
@@ -464,6 +465,10 @@ export function buildCodexResolvedRequestBody(args: {
       modelResolution.model,
       args.authMethod,
     ),
+    useInputPrefix: usesCodexInputPrefix(
+      modelResolution.model,
+      args.authMethod,
+    ),
   });
   return {
     configuredModel,
@@ -490,6 +495,12 @@ export function buildCodexEndpointRequestBody(args: {
   hostedTools?: readonly CoreHostedToolDefinition[];
   caps: ResponsesCaps;
   useResponsesLite?: boolean;
+  /**
+   * Full Responses with tools and instructions as leading `input` items (the
+   * Lite layout) instead of the `tools` and `instructions` fields. Parallel
+   * tool calls stay allowed. Ignored for Lite and hosted-tool turns.
+   */
+  useInputPrefix?: boolean;
 }): CodexRequestBody {
   if (args.hostedTools?.length && !args.caps.supportsHostedWebSearch) {
     throw new Error(
@@ -505,6 +516,10 @@ export function buildCodexEndpointRequestBody(args: {
   const useResponsesLite = Boolean(
     args.useResponsesLite && !args.hostedTools?.length,
   );
+  // Hosted web tools also keep the normal field layout.
+  const useInputPrefix =
+    useResponsesLite ||
+    Boolean(args.useInputPrefix && !args.hostedTools?.length);
   const hostedTools = args.hostedTools?.length
     ? translateCodexHostedTools(args.hostedTools)
     : undefined;
@@ -512,16 +527,18 @@ export function buildCodexEndpointRequestBody(args: {
   const include = hostedTools?.length
     ? (["web_search_call.action.sources"] as CodexRequestBody["include"])
     : undefined;
-  const input = useResponsesLite
+  const input = useInputPrefix
     ? [
         ...buildCodexResponsesLitePrefix(args.instructions, tools),
-        ...stripCodexResponsesLiteImageDetails(args.input),
+        ...(useResponsesLite
+          ? stripCodexResponsesLiteImageDetails(args.input)
+          : args.input),
       ]
     : args.input;
   return buildCodexStreamRequestBody({
     model: args.model,
     input,
-    instructions: useResponsesLite ? undefined : args.instructions,
+    instructions: useInputPrefix ? undefined : args.instructions,
     store: args.state?.store ?? false,
     maxTokens: args.caps.supportsMaxOutputTokens ? args.maxTokens : undefined,
     reasoning: args.reasoningEffort
@@ -548,7 +565,7 @@ export function buildCodexEndpointRequestBody(args: {
       ? args.textVerbosity
       : undefined,
     outputFormat: args.outputFormat,
-    tools: useResponsesLite ? undefined : tools,
+    tools: useInputPrefix ? undefined : tools,
     parallelToolCalls: useResponsesLite ? false : undefined,
     include,
     promptCacheKey: args.caps.supportsPromptCacheKey

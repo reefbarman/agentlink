@@ -117,6 +117,21 @@ const GPT_6_1_SOL_OAUTH_REASONING_EFFORTS = [
  */
 const CODEX_OAUTH_RESPONSES_LITE_MODELS = new Set<string>();
 
+/**
+ * OAuth models that send tools and instructions as the leading `input` items
+ * (the Responses Lite layout) on full Responses.
+ *
+ * With the separate `tools` and `instructions` fields, the ChatGPT backend
+ * reuses only about half of the fixed prompt from cache for GPT-6.2, so every
+ * turn re-reads the tool definitions (~55% cached against ~92% for GPT-6.1 in
+ * the model bench, checked 2026-11-18). The leading-input layout restores
+ * full-prefix caching and still allows parallel tool calls.
+ */
+const CODEX_OAUTH_INPUT_PREFIX_MODELS = new Set<string>([
+  "gpt-6.2-astra",
+  "gpt-6.2-sol",
+]);
+
 /** OAuth models whose Codex catalog exposes the local `ultra` preset. */
 const CODEX_OAUTH_ULTRA_PRESET_MODELS = new Set<string>([
   "gpt-6.2-astra",
@@ -343,6 +358,17 @@ export function usesCodexResponsesLite(
   return (
     authMethod === "oauth" && CODEX_OAUTH_RESPONSES_LITE_MODELS.has(modelId)
   );
+}
+
+/**
+ * Whether full-Responses requests for this model carry tools and instructions
+ * as leading `input` items instead of the `tools` and `instructions` fields.
+ */
+export function usesCodexInputPrefix(
+  modelId: string,
+  authMethod?: CodexAuthMethod,
+): boolean {
+  return authMethod === "oauth" && CODEX_OAUTH_INPUT_PREFIX_MODELS.has(modelId);
 }
 
 export function supportsCodexServiceTier(

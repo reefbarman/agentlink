@@ -705,6 +705,122 @@ describe("Codex translation", () => {
     },
   );
 
+  describe("full Responses with the input prefix layout", () => {
+    const oauthCaps = {
+      supportsPreviousResponseId: false,
+      supportsPersistedReasoning: false,
+      supportsProMode: false,
+      supportsPromptCacheKey: true,
+      supportsPromptCacheRetention: false,
+      supportsMaxOutputTokens: false,
+      supportsHostedWebSearch: true,
+      supportsTextVerbosity: true,
+    };
+    const tools = translateCodexTools([
+      {
+        name: "prefix_tool",
+        description: "Prefix tool",
+        input_schema: { type: "object" },
+      },
+    ]);
+    const image = {
+      type: "input_image",
+      image_url: "data:image/png;base64,abc",
+      detail: "auto",
+    } as const;
+
+    it("leads input with tools and instructions but keeps full Responses behaviour", () => {
+      const body = buildCodexEndpointRequestBody({
+        model: "gpt-6.2-sol",
+        input: [{ role: "user", content: [image] }],
+        instructions: "distinctive prefix instructions",
+        reasoningEffort: "medium",
+        tools,
+        useInputPrefix: true,
+        caps: oauthCaps,
+      }) as unknown as Record<string, unknown>;
+
+      expect(body).not.toHaveProperty("instructions");
+      expect(body).not.toHaveProperty("tools");
+      // Unlike Lite, parallel tool calls stay at the backend default (on).
+      expect(body).not.toHaveProperty("parallel_tool_calls");
+      expect(body.reasoning).toEqual({ effort: "medium", summary: "detailed" });
+      expect(body.input).toEqual([
+        expect.objectContaining({
+          type: "additional_tools",
+          role: "developer",
+          tools: [
+            expect.objectContaining({
+              type: "namespace",
+              name: "functions",
+              tools: [expect.objectContaining({ name: "prefix_tool" })],
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          type: "message",
+          role: "developer",
+          content: [
+            { type: "input_text", text: "distinctive prefix instructions" },
+          ],
+        }),
+        // Full Responses accepts image detail, so it is not stripped.
+        { role: "user", content: [image] },
+      ]);
+    });
+
+    it("keeps the field layout for hosted web search turns", () => {
+      const input = [{ role: "user", content: "search" }] as const;
+      const body = buildCodexEndpointRequestBody({
+        model: "gpt-6.2-sol",
+        input: [...input],
+        instructions: "hosted instructions",
+        tools,
+        hostedTools: [{ type: "web_search" }],
+        useInputPrefix: true,
+        caps: oauthCaps,
+      });
+      expect(body).toMatchObject({
+        input,
+        instructions: "hosted instructions",
+        tools: [...tools, { type: "web_search" }],
+      });
+    });
+
+    it.each([
+      ["gpt-6.2-sol", "oauth", true],
+      ["gpt-6.2-astra", "oauth", true],
+      ["gpt-6.1-sol", "oauth", false],
+      ["gpt-6.2-sol", "apiKey", false],
+    ] as const)(
+      "resolves the layout for %s over %s (prefix: %s)",
+      (model, authMethod, prefixed) => {
+        const { body } = buildCodexResolvedRequestBody({
+          authMethod,
+          model,
+          input: [{ role: "user", content: "hi" }],
+          instructions: "resolved instructions",
+          tools,
+        });
+        const record = body as unknown as Record<string, unknown>;
+        expect(record).not.toHaveProperty("parallel_tool_calls");
+        if (prefixed) {
+          expect(record).not.toHaveProperty("instructions");
+          expect(record).not.toHaveProperty("tools");
+          expect((record.input as Array<{ type?: string }>)[0]?.type).toBe(
+            "additional_tools",
+          );
+        } else {
+          expect(record).toMatchObject({
+            instructions: "resolved instructions",
+            tools,
+            input: [{ role: "user", content: "hi" }],
+          });
+        }
+      },
+    );
+  });
+
   it("sends premium service tiers only for models that support them", () => {
     const caps = {
       supportsPreviousResponseId: true,

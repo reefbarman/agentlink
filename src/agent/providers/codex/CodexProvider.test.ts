@@ -1921,13 +1921,41 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
         // drain
       }
 
-      expect(captured.current).toMatchObject({
-        model,
-        instructions: "system",
-        tools: [{ type: "function", name: "read_file" }],
-        reasoning: { effort: "xhigh", summary: "detailed" },
-        input: [{ role: "user" }],
-      });
+      if (model.startsWith("gpt-6.2-")) {
+        // GPT-6.2 sends tools and instructions as leading input items so the
+        // backend caches the whole prompt prefix.
+        expect(captured.current).not.toHaveProperty("instructions");
+        expect(captured.current).not.toHaveProperty("tools");
+        expect(captured.current).toMatchObject({
+          model,
+          reasoning: { effort: "xhigh", summary: "detailed" },
+          input: [
+            {
+              type: "additional_tools",
+              tools: [
+                {
+                  type: "namespace",
+                  tools: [{ type: "function", name: "read_file" }],
+                },
+              ],
+            },
+            {
+              type: "message",
+              role: "developer",
+              content: [{ type: "input_text", text: "system" }],
+            },
+            { role: "user" },
+          ],
+        });
+      } else {
+        expect(captured.current).toMatchObject({
+          model,
+          instructions: "system",
+          tools: [{ type: "function", name: "read_file" }],
+          reasoning: { effort: "xhigh", summary: "detailed" },
+          input: [{ role: "user" }],
+        });
+      }
       // Responses Lite forces this to false; full Responses leaves the
       // default (parallel calls allowed).
       expect(captured.current).not.toHaveProperty("parallel_tool_calls");
