@@ -208,10 +208,12 @@ describe("requestImageGenerationApprovalForTest", () => {
     [{ quality: "max" as const }],
     [{ outputSize: "3840x2160" }],
   ])(
-    "asks per call without a session option for costly controls %o",
+    "asks costly controls %o despite a standard grant and offers a costly session grant",
     async (options) => {
       const approvalManager = {
-        isBuiltInToolApproved: vi.fn().mockReturnValue(true),
+        isBuiltInToolApproved: vi.fn(
+          (_sessionId: string, key: string) => key === "generate_image",
+        ),
         approveBuiltInTool: vi.fn(),
       };
       const onApprovalRequest = vi.fn<OnApprovalRequest>(async () => ({
@@ -233,11 +235,45 @@ describe("requestImageGenerationApprovalForTest", () => {
       const request = onApprovalRequest.mock.calls[0]![0];
       expect(request.choices?.map((choice) => choice.value)).toEqual([
         "accept",
+        "accept-session",
         "reject",
       ]);
-      expect(approvalManager.approveBuiltInTool).not.toHaveBeenCalled();
+      expect(request.writeChoices?.map((choice) => choice.value)).toEqual([
+        "accept",
+        "accept-session",
+        "reject",
+      ]);
+      expect(approvalManager.approveBuiltInTool).toHaveBeenCalledWith(
+        "session-1",
+        "generate_image:advanced",
+      );
     },
   );
+
+  it("lets a costly session grant cover later costly and standard calls", async () => {
+    const approvalManager = {
+      isBuiltInToolApproved: vi.fn(
+        (_sessionId: string, key: string) => key === "generate_image:advanced",
+      ),
+      approveBuiltInTool: vi.fn(),
+    };
+    const onApprovalRequest = vi.fn<OnApprovalRequest>();
+
+    for (const options of [{ quality: "max" as const }, {}]) {
+      const result = await requestImageGenerationApprovalForTest({
+        approvalManager: approvalManager as never,
+        sessionId: "session-1",
+        onApprovalRequest,
+        prompt: "Create an icon.",
+        count: 1,
+        imageModel: "gpt-image-2.5-flare",
+        options,
+        billing: "OpenAI API key billing",
+      });
+      expect(result).toEqual({ approved: true });
+    }
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+  });
 
   it("rejects unadvertised accept-prefixed decisions", async () => {
     const approvalManager = {
@@ -329,7 +365,7 @@ describe("handleGenerateImage", () => {
     );
 
     for (const [result, expectedModel] of [
-      [defaultResult, "gpt-image-2.5-flare"],
+      [defaultResult, "gpt-image-2.6-flare"],
       [explicitResult, "gpt-image-2.5-sunburst"],
     ] as const) {
       const text =
@@ -342,7 +378,7 @@ describe("handleGenerateImage", () => {
         const body = JSON.parse(String((call[1] as RequestInit).body));
         return body.tools[0].model;
       }),
-    ).toEqual(["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"]);
+    ).toEqual(["gpt-image-2.6-flare", "gpt-image-2.5-sunburst"]);
   });
 
   it("forwards Image 2.5 output controls and saves the requested format", async () => {
@@ -390,7 +426,6 @@ describe("handleGenerateImage", () => {
           output_format: "jpeg",
           output_compression: 70,
           action: "generate",
-          input_fidelity: "high",
         },
         { isBuiltInToolApproved: vi.fn().mockReturnValue(false) } as never,
         "session-1",
@@ -409,8 +444,8 @@ describe("handleGenerateImage", () => {
         output_format: "jpeg",
         output_compression: 70,
         action: "generate",
-        input_fidelity: "high",
       });
+      expect(body.tools[0]).not.toHaveProperty("input_fidelity");
       const text =
         result.content[0]?.type === "text" ? result.content[0].text : "";
       expect(JSON.parse(text)).toMatchObject({
@@ -424,7 +459,6 @@ describe("handleGenerateImage", () => {
           output_format: "jpeg",
           output_compression: 70,
           action: "generate",
-          input_fidelity: "high",
         },
         images: [
           {
@@ -493,6 +527,140 @@ describe("handleGenerateImage", () => {
     });
   });
 
+  it("reports the image tool the backend served from response.created", async () => {
+    vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+      method: "oauth",
+      bearerToken: "oauth-token",
+      accountId: "account-1",
+      oauthAccountPoolId: "pool-1",
+      canRefresh: false,
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      sseResponse([
+        {
+          type: "response.created",
+          response: {
+            id: "resp-served",
+            tools: [
+              {
+                type: "image_generation",
+                model: "gpt-image-2-codex",
+                size: "auto",
+                quality: "auto",
+                background: "auto",
+                output_format: "png",
+                n: 1,
+              },
+            ],
+          },
+        },
+        {
+          type: "response.image_generation_call.completed",
+          item_id: "ig_served",
+          output_index: 0,
+          result: tinyPngBase64,
+          size: "1254x1254",
+        },
+      ]),
+    );
+
+    const result = await handleGenerateImage(
+      { prompt: "A teal circle", output_size: "1024x1536" },
+      { isBuiltInToolApproved: vi.fn().mockReturnValue(true) } as never,
+      "session-1",
+    );
+
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+    const parsed = JSON.parse(text);
+    expect(parsed).toMatchObject({
+      status: "accepted",
+      image_model: "gpt-image-2.6-flare",
+      served_image_tool: {
+        model: "gpt-image-2-codex",
+        size: "auto",
+        quality: "auto",
+        background: "auto",
+        output_format: "png",
+      },
+    });
+    expect(parsed.warning).toContain(
+      "served gpt-image-2-codex with size auto, quality auto instead of gpt-image-2.6-flare",
+    );
+    expect(parsed.warning).toContain("did not honour");
+  });
+
+  it("uses the OpenAI API key for images when the credential setting asks for it", async () => {
+    const resolveModelAuth = vi.spyOn(
+      openAiCodexAuthManager,
+      "resolveModelAuth",
+    );
+    vi.spyOn(openAiCodexAuthManager, "getApiKeyCredential").mockResolvedValue({
+      apiKey: "embeddings-key",
+      source: "secret",
+      scope: "embeddings-only",
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      sseResponse([
+        {
+          type: "response.image_generation_call.completed",
+          item_id: "ig_key",
+          output_index: 0,
+          result: tinyPngBase64,
+        },
+      ]),
+    );
+
+    const result = await handleGenerateImage(
+      { prompt: "A teal circle" },
+      { isBuiltInToolApproved: vi.fn().mockReturnValue(true) } as never,
+      "session-1",
+      undefined,
+      undefined,
+      { credentialPreference: "openaiApiKey" },
+    );
+
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(JSON.parse(text)).toMatchObject({
+      status: "accepted",
+      billing: "OpenAI API key billing",
+    });
+    expect(resolveModelAuth).not.toHaveBeenCalled();
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.openai.com/v1/responses");
+    expect((init.headers as Record<string, string>).authorization).toBe(
+      "Bearer embeddings-key",
+    );
+  });
+
+  it("fails instead of falling back when the image credential setting has no key", async () => {
+    const resolveModelAuth = vi.spyOn(
+      openAiCodexAuthManager,
+      "resolveModelAuth",
+    );
+    vi.spyOn(openAiCodexAuthManager, "getApiKeyCredential").mockResolvedValue(
+      null,
+    );
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const result = await handleGenerateImage(
+      { prompt: "A teal circle" },
+      { isBuiltInToolApproved: vi.fn().mockReturnValue(true) } as never,
+      "session-1",
+      undefined,
+      undefined,
+      { credentialPreference: "openaiApiKey" },
+    );
+
+    expect(result.isError).toBe(true);
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("imageGeneration.credential is set to openaiApiKey");
+    expect(resolveModelAuth).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("returns paid image bytes inline when the requested file format mismatches", async () => {
     vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
       method: "apiKey",
@@ -552,6 +720,36 @@ describe("handleGenerateImage", () => {
     }
   });
 
+  it("rejects input_fidelity on an API key before approval or generation", async () => {
+    vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+      method: "apiKey",
+      bearerToken: "test-key",
+      canRefresh: false,
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const onApprovalRequest = vi.fn<OnApprovalRequest>();
+
+    const result = await handleGenerateImage(
+      {
+        prompt: "Create an image",
+        image_model: "gpt-image-2.6-sunburst",
+        input_fidelity: "high",
+      },
+      { isBuiltInToolApproved: vi.fn().mockReturnValue(false) } as never,
+      "session-1",
+      onApprovalRequest,
+    );
+
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(text).error).toContain(
+      "input_fidelity is not supported by the GPT-Image 2.5 or 2.6 models",
+    );
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("rejects OAuth-unsupported input_fidelity before approval or generation", async () => {
     vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
       method: "oauth",
@@ -574,7 +772,7 @@ describe("handleGenerateImage", () => {
 
     expect(result.isError).toBe(true);
     expect(JSON.parse(text).error).toContain(
-      "ChatGPT/Codex OAuth does not support the image option input_fidelity",
+      "input_fidelity is not supported by the GPT-Image 2.5 or 2.6 models",
     );
     expect(onApprovalRequest).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
@@ -852,7 +1050,7 @@ describe("handleGenerateImage", () => {
     const resolveAuth = vi.spyOn(openAiCodexAuthManager, "resolveModelAuth");
 
     const result = await handleGenerateImage(
-      { prompt: "Create an image", image_model: "gpt-image-2" },
+      { prompt: "Create an image", image_model: "gpt-image-1" },
       {} as never,
       "session-1",
     );
@@ -861,9 +1059,125 @@ describe("handleGenerateImage", () => {
 
     expect(result.isError).toBe(true);
     expect(JSON.parse(text).error).toContain(
-      "image_model must be one of: gpt-image-2.5-flare, gpt-image-2.5-sunburst",
+      "image_model must be one of: gpt-image-2.6-flare, gpt-image-2.6-sunburst, gpt-image-2.5-flare, gpt-image-2.5-sunburst, gpt-image-2",
     );
     expect(resolveAuth).not.toHaveBeenCalled();
+  });
+
+  it("forwards complexity for GPT-Image-2.6 models", async () => {
+    vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+      method: "apiKey",
+      bearerToken: "test-key",
+      canRefresh: false,
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      sseResponse([
+        {
+          type: "response.completed",
+          response: {
+            id: "response-complexity",
+            status: "completed",
+            output: [
+              {
+                id: "ig_complexity",
+                type: "image_generation_call",
+                status: "completed",
+                result: Buffer.from("png").toString("base64"),
+              },
+            ],
+          },
+        },
+      ]),
+    );
+    const onApprovalRequest = vi.fn<OnApprovalRequest>(async () => ({
+      decision: "accept",
+    }));
+
+    const result = await handleGenerateImage(
+      {
+        prompt: "Create a dense city map",
+        image_model: "gpt-image-2.6-sunburst",
+        complexity: "high",
+      },
+      { isBuiltInToolApproved: vi.fn().mockReturnValue(false) } as never,
+      "session-1",
+      onApprovalRequest,
+    );
+
+    const body = JSON.parse(
+      String((fetchMock.mock.calls[0]![1] as RequestInit).body),
+    );
+    expect(body.tools[0]).toMatchObject({
+      model: "gpt-image-2.6-sunburst",
+      complexity: "high",
+    });
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(JSON.parse(text).requested_options).toMatchObject({
+      complexity: "high",
+    });
+    expect(JSON.stringify(onApprovalRequest.mock.calls[0])).toContain(
+      "Complexity: high",
+    );
+  });
+
+  it.each(["gpt-image-2.5-flare", "gpt-image-2"] as const)(
+    "rejects complexity on %s before approval",
+    async (imageModel) => {
+      vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+        method: "apiKey",
+        bearerToken: "test-key",
+        canRefresh: false,
+      });
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      const onApprovalRequest = vi.fn<OnApprovalRequest>();
+
+      const result = await handleGenerateImage(
+        {
+          prompt: "Create an image",
+          image_model: imageModel,
+          complexity: "low",
+        },
+        { isBuiltInToolApproved: vi.fn().mockReturnValue(false) } as never,
+        "session-1",
+        onApprovalRequest,
+      );
+
+      const text =
+        result.content[0]?.type === "text" ? result.content[0].text : "";
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(text).error).toContain(
+        `${imageModel} does not support complexity`,
+      );
+      expect(onApprovalRequest).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects gpt-image-2 with xhigh or max quality before approval", async () => {
+    vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+      method: "apiKey",
+      bearerToken: "test-key",
+      canRefresh: false,
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const onApprovalRequest = vi.fn<OnApprovalRequest>();
+
+    const result = await handleGenerateImage(
+      { prompt: "Create an image", image_model: "gpt-image-2", quality: "max" },
+      { isBuiltInToolApproved: vi.fn().mockReturnValue(false) } as never,
+      "session-1",
+      onApprovalRequest,
+    );
+
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(text).error).toContain(
+      "gpt-image-2 does not support quality max",
+    );
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("preserves classified metadata when the post-refresh attempt fails", async () => {

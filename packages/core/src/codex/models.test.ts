@@ -17,8 +17,12 @@ import { describe, expect, it } from "vitest";
 
 describe("Codex routing tiers", () => {
   it("prefers the strongest current model first in each tier", () => {
-    expect(CODEX_ROUTING_TIER_GROUPS.deep_reasoning[0]).toBe("gpt-6-astra");
-    expect(CODEX_ROUTING_TIER_GROUPS.balanced.slice(0, 2)).toEqual([
+    expect(CODEX_ROUTING_TIER_GROUPS.deep_reasoning.slice(0, 2)).toEqual([
+      "gpt-6.2-astra",
+      "gpt-6-astra",
+    ]);
+    expect(CODEX_ROUTING_TIER_GROUPS.balanced.slice(0, 3)).toEqual([
+      "gpt-6.2-sol",
       "gpt-6.1-sol",
       "gpt-6-sol",
     ]);
@@ -44,6 +48,8 @@ describe("Codex routing tiers", () => {
 describe("Codex-aligned condense", () => {
   it("matches flagged models and their dated snapshots only", () => {
     expect(usesCodexAlignedCondense("gpt-6.1-terra")).toBe(true);
+    expect(usesCodexAlignedCondense("gpt-6.2-astra")).toBe(true);
+    expect(usesCodexAlignedCondense("gpt-6.2-sol")).toBe(true);
     expect(usesCodexAlignedCondense("GPT-5.6-Sol-2026-06-25")).toBe(true);
     expect(usesCodexAlignedCondense("gpt-6-luna")).toBe(false);
     expect(usesCodexAlignedCondense("gpt-6-astra")).toBe(false);
@@ -207,6 +213,66 @@ describe("Codex model resolution", () => {
     expect(getCodexUnavailableModelFallback("gpt-6.1-terra")).toBeUndefined();
   });
 
+  it("uses GPT-6.2's documented API limits and Codex catalog OAuth shape", () => {
+    for (const model of ["gpt-6.2-astra", "gpt-6.2-sol"]) {
+      expect(getCodexModelCapabilities(model, "apiKey")).toMatchObject({
+        contextWindow: 1_050_000,
+        maxInputTokens: 922_000,
+        maxOutputTokens: 128_000,
+        reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        defaultReasoningEffort: "medium",
+        serviceTiers: ["fast", "ultrafast"],
+      });
+      const oauth = getCodexModelCapabilities(model, "oauth");
+      expect(oauth).toMatchObject({
+        contextWindow: 872_000,
+        reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        defaultReasoningEffort: "low",
+      });
+      expect(oauth.maxInputTokens).toBeUndefined();
+      expect(getCodexResponsesRequestHeaders(model, "oauth")).toEqual({
+        "x-openai-internal-codex-responses-lite": "true",
+      });
+      expect(getCodexResponsesRequestHeaders(model, "apiKey")).toBeUndefined();
+      expect(
+        resolveCodexReasoningEffort({
+          modelId: model,
+          authMethod: "oauth",
+          requestedEffort: "ultra",
+        }),
+      ).toBe("xhigh");
+      expect(
+        resolveCodexReasoningEffort({
+          modelId: model,
+          authMethod: "apiKey",
+          requestedEffort: "none",
+        }),
+      ).toBeUndefined();
+      expect(resolveCodexTextVerbosity(model)).toBe("low");
+      expect(resolveCodexEffectiveModel(model, "oauth")).toEqual({
+        model,
+        remapped: false,
+      });
+      expect(getCodexModelMigration(model)).toBeUndefined();
+    }
+    // Codex defaults Sol to a 500K window; Astra keeps the host default target.
+    expect(
+      getCodexModelCapabilities("gpt-6.2-sol", "oauth")
+        .condenseTargetInputTokens,
+    ).toBe(500_000);
+    expect(
+      getCodexModelCapabilities("gpt-6.2-astra", "oauth")
+        .condenseTargetInputTokens,
+    ).toBeUndefined();
+    const names = listCodexModels("codex");
+    expect(names.find(({ id }) => id === "gpt-6.2-astra")?.displayName).toBe(
+      "GPT-6.2 Astra",
+    );
+    expect(names.find(({ id }) => id === "gpt-6.2-sol")?.displayName).toBe(
+      "GPT-6.2 Sol",
+    );
+  });
+
   it("advertises the service tiers the Codex catalog lists per model", () => {
     for (const auth of ["apiKey", "oauth"] as const) {
       expect(
@@ -318,8 +384,10 @@ describe("Codex model resolution", () => {
     );
   });
 
-  it("shows the same official eight models in order for both auth methods", () => {
+  it("shows the same official ten models in order for both auth methods", () => {
     const expected = [
+      "gpt-6.2-astra",
+      "gpt-6.2-sol",
       "gpt-6-astra",
       "gpt-6.1-sol",
       "gpt-6.1-terra",

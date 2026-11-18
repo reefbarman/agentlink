@@ -85,6 +85,16 @@ const BROWSER_GATEWAY_ASK_AGENT_FALLBACK_MODELS: WebviewModelInfo[] = [
   },
   {
     // ChatGPT-backend window and efforts (Ask Agent leases OAuth credentials).
+    id: "gpt-6.2-sol",
+    displayName: "GPT-6.2 Sol",
+    provider: "browser-gateway",
+    contextWindow: 872_000,
+    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    defaultReasoningEffort: "low",
+    authenticated: true,
+  },
+  {
+    // ChatGPT-backend window and efforts (Ask Agent leases OAuth credentials).
     id: "gpt-6.1-sol",
     displayName: "GPT-6.1 Sol",
     provider: "browser-gateway",
@@ -320,6 +330,8 @@ export interface BrowserGatewayAskAgentPersistedSession {
   nextMessageSequence: number;
   queuedMessages?: BrowserGatewayAskAgentQueuedMessage[];
   generateImageApproved?: boolean;
+  /** Session grant that also covers xhigh/max quality and large output sizes. */
+  generateImageAdvancedApproved?: boolean;
   /** Server-only exact model replay. Never include this in browser snapshots. */
   privateModelHistory?: BrowserGatewayAskAgentPrivateModelHistory;
 }
@@ -495,13 +507,23 @@ export class BrowserGatewayAskAgentSessionStore {
     return this.getActiveSession().id;
   }
 
-  isGenerateImageApproved(): boolean {
-    return this.getActiveSession().generateImageApproved === true;
+  /**
+   * Whether generate_image is approved for the active session. Costly calls
+   * (`advanced`) need the advanced grant; ordinary calls accept either grant.
+   */
+  isGenerateImageApproved(advanced = false): boolean {
+    const session = this.getActiveSession();
+    if (session.generateImageAdvancedApproved === true) return true;
+    return !advanced && session.generateImageApproved === true;
   }
 
-  approveGenerateImageForSession(now = Date.now()): void {
+  approveGenerateImageForSession({
+    advanced = false,
+    now = Date.now(),
+  }: { advanced?: boolean; now?: number } = {}): void {
     const session = this.getActiveSession(now);
     session.generateImageApproved = true;
+    if (advanced) session.generateImageAdvancedApproved = true;
     session.lastActiveAt = now;
   }
 

@@ -6,6 +6,8 @@ import {
 } from "./config.js";
 import { describe, expect, it } from "vitest";
 
+import { CODEX_PICKER_MODEL_IDS } from "@agentlink/core/codex";
+
 const base = {
   schemaVersion: 1,
   defaultModel: { providerId: "codex", modelId: "gpt-5.6-sol" },
@@ -39,7 +41,7 @@ describe("parseCliConfig", () => {
     expect(DEFAULT_CODEX_MODELS).toEqual(
       expect.arrayContaining(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]),
     );
-    expect(DEFAULT_CODEX_MODELS).toHaveLength(8);
+    expect(DEFAULT_CODEX_MODELS).toHaveLength(CODEX_PICKER_MODEL_IDS.length);
     expect(DEFAULT_OPENAI_MODELS).toEqual(DEFAULT_CODEX_MODELS);
   });
 

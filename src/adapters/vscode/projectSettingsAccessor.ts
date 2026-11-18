@@ -82,6 +82,7 @@ export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "autoContinueMaxTurns",
   "codex.textVerbosity",
   "codex.useWebSocket",
+  "imageGeneration.credential",
   "voiceInput.autoStopAfterSilenceMs",
   "voiceInput.autoSend",
 ] as const;

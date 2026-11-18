@@ -841,16 +841,16 @@
     {
       "mode": "code",
       "toolCount": 67,
-      "chars": 107556,
-      "estimatedTokens": 26889,
-      "sha256": "a5793854f07f5259040b56b2bb19dc3ad9554ec8ee0753dbe2a5c00f6c894f9b"
+      "chars": 108923,
+      "estimatedTokens": 27231,
+      "sha256": "9be4b10ded6c301c833032e673009301c0e8bc70339a17461c73a748ce2753cc"
     },
     {
       "mode": "architect",
       "toolCount": 62,
-      "chars": 100928,
-      "estimatedTokens": 25232,
-      "sha256": "7589f0a07341270cd6c17e8a6821aba859d2cc5c71de66a23b9ea36b4a3beb3f"
+      "chars": 102295,
+      "estimatedTokens": 25574,
+      "sha256": "2ac607c57c105a7ee8aabf021e6092bd379173beeab5be83bcfb1a5c97047a7e"
     },
     {
       "mode": "orchestrate",

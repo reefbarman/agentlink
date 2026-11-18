@@ -69,7 +69,8 @@ export interface CodexModelDef {
   /**
    * Premium service tiers the model accepts, per the Codex model catalog.
    * Fast is sent as `service_tier: "priority"`; Ultrafast is generally
-   * available on the API for GPT-6 Astra. The ChatGPT backend gates both by plan.
+   * available on the API for GPT-6 Astra and GPT-6.2 Astra/Sol. The ChatGPT
+   * backend gates both by plan.
    */
   serviceTiers?: readonly CoreModelServiceTier[];
 }
@@ -86,6 +87,7 @@ const GPT_6_API_REASONING_EFFORTS = [
   "max",
 ] as const satisfies readonly CoreReasoningEffort[];
 
+/** GPT-6.1 Sol and GPT-6.2 Astra/Sol: the API rejects `none`. */
 const GPT_6_1_SOL_REASONING_EFFORTS = [
   "low",
   "medium",
@@ -106,6 +108,8 @@ const GPT_6_1_SOL_OAUTH_REASONING_EFFORTS = [
 
 /** OAuth models that Codex's bundled catalog marks `use_responses_lite`. */
 const CODEX_OAUTH_RESPONSES_LITE_MODELS = new Set<string>([
+  "gpt-6.2-astra",
+  "gpt-6.2-sol",
   "gpt-6-astra",
   "gpt-6.1-sol",
 ]);
@@ -180,6 +184,8 @@ export interface ResponsesCaps {
 
 /** Models shown in both Codex OAuth and OpenAI API-key pickers. */
 export const CODEX_PICKER_MODEL_IDS = [
+  "gpt-6.2-astra",
+  "gpt-6.2-sol",
   "gpt-6-astra",
   "gpt-6.1-sol",
   "gpt-6.1-terra",
@@ -209,7 +215,9 @@ export const CODEX_PICKER_MODEL_IDS = [
  * added from OpenAI's 2026-09-22 launch announcement while their gradual Codex
  * rollout was still in progress. GPT-6.1 Sol replaced GPT-6 Sol in the picker
  * on 2026-09-30 from OpenAI's DevDay announcement. GPT-6.1 Terra was added
- * on 2026-10-27 from OpenAI's launch announcement (Codex and API).
+ * on 2026-10-27 from OpenAI's launch announcement (Codex and API). GPT-6.2
+ * Astra and Sol were added on 2026-11-18 from OpenAI's launch announcement and
+ * Codex's bundled catalog (Plus, Pro, Enterprise and Edu at launch).
  */
 export const CODEX_CHATGPT_BACKEND_MODEL_IDS = [
   ...CODEX_PICKER_MODEL_IDS,
@@ -401,6 +409,23 @@ const CODEX_OAUTH_GPT_6_1_SOL_DEFAULT_WINDOW_TOKENS = 500_000;
 export const CODEX_MODELS: CodexModelDef[] = [
   // Current models, strongest first within each tier.
   {
+    // Documented 1.05M window with a 922K input cap; no none/minimal effort.
+    id: "gpt-6.2-astra",
+    displayName: "GPT-6.2 Astra",
+    routingTier: "deep_reasoning",
+    promptProfile: "reasoning",
+    codexAlignedCondense: true,
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
+    maxInputTokens: 922_000,
+    maxOutputTokens: 128_000,
+    supportsImages: true,
+    supportsThinking: true,
+    defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_6_1_SOL_REASONING_EFFORTS],
+    defaultTextVerbosity: "low",
+    serviceTiers: CODEX_FAST_AND_ULTRAFAST_TIERS,
+  },
+  {
     id: "gpt-6-astra",
     displayName: "GPT-6 Astra",
     routingTier: "deep_reasoning",
@@ -411,6 +436,23 @@ export const CODEX_MODELS: CodexModelDef[] = [
     supportsThinking: true,
     defaultReasoningEffort: "low",
     reasoningEfforts: [...GPT_6_API_REASONING_EFFORTS],
+    defaultTextVerbosity: "low",
+    serviceTiers: CODEX_FAST_AND_ULTRAFAST_TIERS,
+  },
+  {
+    // Documented 1.05M window with a 922K input cap; no none/minimal effort.
+    id: "gpt-6.2-sol",
+    displayName: "GPT-6.2 Sol",
+    routingTier: "balanced",
+    promptProfile: "reasoning",
+    codexAlignedCondense: true,
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
+    maxInputTokens: 922_000,
+    maxOutputTokens: 128_000,
+    supportsImages: true,
+    supportsThinking: true,
+    defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_6_1_SOL_REASONING_EFFORTS],
     defaultTextVerbosity: "low",
     serviceTiers: CODEX_FAST_AND_ULTRAFAST_TIERS,
   },
@@ -778,6 +820,23 @@ const CODEX_OAUTH_MODEL_OVERRIDES: Record<
     >
   >
 > = {
+  // Codex's bundled catalog: Responses Lite, 872K max window (272K default,
+  // so the host's default condense target already fits), `ultra` preset, and
+  // a low default effort over the ChatGPT backend.
+  "gpt-6.2-astra": {
+    contextWindow: CODEX_OAUTH_GPT_6_ASTRA_CONTEXT_TOKENS,
+    maxInputTokens: undefined,
+    reasoningEfforts: [...GPT_6_1_SOL_OAUTH_REASONING_EFFORTS],
+    defaultReasoningEffort: "low",
+  },
+  // Same Codex catalog shape as GPT-6.1 Sol, including the 500K default window.
+  "gpt-6.2-sol": {
+    contextWindow: CODEX_OAUTH_GPT_6_ASTRA_CONTEXT_TOKENS,
+    maxInputTokens: undefined,
+    condenseTargetInputTokens: CODEX_OAUTH_GPT_6_1_SOL_DEFAULT_WINDOW_TOKENS,
+    reasoningEfforts: [...GPT_6_1_SOL_OAUTH_REASONING_EFFORTS],
+    defaultReasoningEffort: "low",
+  },
   "gpt-6-astra": {
     contextWindow: CODEX_OAUTH_GPT_6_ASTRA_CONTEXT_TOKENS,
     reasoningEfforts: [...GPT_6_ASTRA_OAUTH_REASONING_EFFORTS],

@@ -1066,6 +1066,7 @@ describe("tool usage telemetry project attribution", () => {
         "test-session",
         mockCtx.onApprovalRequest,
         mockCtx.getSessionImages,
+        { credentialPreference: "auto" },
       );
     },
   );

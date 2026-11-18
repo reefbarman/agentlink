@@ -821,10 +821,16 @@ export const generateImageSchema = {
     .string()
     .describe("Prompt describing the image or images to generate."),
   image_model: z
-    .enum(["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"])
+    .enum([
+      "gpt-image-2.6-flare",
+      "gpt-image-2.6-sunburst",
+      "gpt-image-2.5-flare",
+      "gpt-image-2.5-sunburst",
+      "gpt-image-2",
+    ])
     .optional()
     .describe(
-      "Image model. Default: gpt-image-2.5-flare. Use Flare for fast exploration and user alignment. After the direction is approved, use Sunburst with the selected image as a reference for polished assets, concepts, or final images. Go directly to Sunburst when the direction is already settled, and honor an explicit user preference.",
+      "Image model. Default: gpt-image-2.6-flare. Applies with an OpenAI API key; ChatGPT/Codex OAuth serves its own model (see served_image_tool). Prefer GPT-Image-2.6; use 2.5 or gpt-image-2 only when the user asks for it (gpt-image-2 supports quality up to high). Use Flare for fast exploration and user alignment. After the direction is approved, use Sunburst with the selected image as a reference for polished assets, concepts, or final images. Go directly to Sunburst when the direction is already settled, and honor an explicit user preference.",
     ),
   output_path: z
     .string()
@@ -842,7 +848,7 @@ export const generateImageSchema = {
     .string()
     .optional()
     .describe(
-      "Structured output dimensions: auto or WIDTHxHEIGHT. Each edge must be a multiple of 16 and at most 3840 px, aspect ratio 1:3 to 3:1, and total pixels 655360 to 8294400.",
+      'Structured output dimensions: auto or WIDTHxHEIGHT. Each edge must be a multiple of 16 and at most 3840 px, aspect ratio 1:3 to 3:1, and total pixels 655360 to 8294400. Honoured only with an OpenAI API key; on ChatGPT/Codex OAuth describe the shape in the prompt instead (for example "Aspect ratio: 16:9").',
     ),
   quality: z
     .enum(["auto", "low", "medium", "high", "xhigh", "max"])
@@ -879,7 +885,13 @@ export const generateImageSchema = {
     .enum(["low", "high"])
     .optional()
     .describe(
-      "How strongly to preserve style and features from input images. Requires an OpenAI API key; ChatGPT/Codex OAuth rejects it.",
+      "Not supported by any current image_model (GPT-Image 2.5/2.6 reject it); omit it. Retained for compatibility and rejected before generation.",
+    ),
+  complexity: z
+    .enum(["low", "medium", "high"])
+    .optional()
+    .describe(
+      "GPT-Image-2.6 only: how much computation the image model spends. Lower is faster and cheaper; higher suits dense or detailed scenes. Omit for the model default. Rejected before approval for 2.5 and gpt-image-2. Applies with an OpenAI API key; ChatGPT/Codex OAuth ignores it.",
     ),
   edit_image_path: z
     .string()
@@ -897,13 +909,13 @@ export const generateImageSchema = {
     .string()
     .optional()
     .describe(
-      "Workspace-local PNG mask for the explicit edit target. Requires an alpha channel, matching target dimensions, and action edit. Mutually exclusive with mask_image_id.",
+      "Workspace-local PNG mask for the explicit edit target. Requires an alpha channel, matching target dimensions, and action edit. Applied by the provider only with an OpenAI API key; ChatGPT/Codex OAuth ignores it. Mutually exclusive with mask_image_id.",
     ),
   mask_image_id: z
     .string()
     .optional()
     .describe(
-      "Prior session PNG image ID to use as the edit mask. Requires an alpha channel, matching target dimensions, and action edit. Mutually exclusive with mask_image_path.",
+      "Prior session PNG image ID to use as the edit mask. Requires an alpha channel, matching target dimensions, and action edit. Applied by the provider only with an OpenAI API key; ChatGPT/Codex OAuth ignores it. Mutually exclusive with mask_image_path.",
     ),
   mask_composite: z
     .boolean()

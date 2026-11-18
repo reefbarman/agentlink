@@ -74,13 +74,22 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     });
 
     expect(store.isGenerateImageApproved()).toBe(false);
-    store.approveGenerateImageForSession(110);
+    store.approveGenerateImageForSession({ now: 110 });
     expect(store.isGenerateImageApproved()).toBe(true);
+    expect(store.isGenerateImageApproved(true)).toBe(false);
 
     const history = store.getHistorySnapshot();
     const reloaded = createStore();
     reloaded.loadHistory(history);
     expect(reloaded.isGenerateImageApproved()).toBe(true);
+    expect(reloaded.isGenerateImageApproved(true)).toBe(false);
+
+    reloaded.approveGenerateImageForSession({ advanced: true, now: 120 });
+    expect(reloaded.isGenerateImageApproved(true)).toBe(true);
+    const advancedReloaded = createStore();
+    advancedReloaded.loadHistory(reloaded.getHistorySnapshot());
+    expect(advancedReloaded.isGenerateImageApproved(true)).toBe(true);
+    expect(advancedReloaded.isGenerateImageApproved()).toBe(true);
 
     reloaded.createSession(200);
     reloaded.sendMessage({
@@ -1547,6 +1556,7 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(store.getAvailableModels().map((model) => model.id)).toEqual([
       "gpt-6-luna",
       "gpt-6.1-terra",
+      "gpt-6.2-sol",
       "gpt-6.1-sol",
     ]);
     expect(
@@ -1557,6 +1567,7 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     ).toEqual([
       { contextWindow: 1_050_000, maxInputTokens: undefined },
       { contextWindow: 1_050_000, maxInputTokens: undefined },
+      { contextWindow: 872_000, maxInputTokens: undefined },
       { contextWindow: 872_000, maxInputTokens: undefined },
     ]);
     expect(store.setReasoningEffort("high")).toBe(true);

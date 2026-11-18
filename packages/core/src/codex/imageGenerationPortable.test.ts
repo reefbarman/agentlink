@@ -44,7 +44,7 @@ describe("buildCodexImageGenerationRequest", () => {
     expect(
       buildCodexImageGenerationRequest({ prompt: "x".repeat(16_000) }).tools[0]
         .model,
-    ).toBe("gpt-image-2.5-flare");
+    ).toBe("gpt-image-2.6-flare");
     expect(
       buildCodexImageGenerationRequest({
         prompt: "x",

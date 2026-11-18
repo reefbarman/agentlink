@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- GPT-6.2 Astra (`gpt-6.2-astra`) and GPT-6.2 Sol (`gpt-6.2-sol`) are now in the Codex/OpenAI model picker for both ChatGPT sign-in and API keys, at the top of the list. GPT-6 Astra and GPT-6.1 Sol stay available and the default model is unchanged, because OpenAI's launch covers Plus, Pro, Enterprise and Edu plans but not Business. With an API key both use OpenAI's documented 1.05M window, 922K input cap, 128K output, `low` through `max` reasoning (default `medium`), and Fast and Ultrafast. With ChatGPT sign-in they follow Codex's catalog: Responses Lite, the `ultra` preset, a `low` default effort and an 872K window, with GPT-6.2 Sol condensing at Codex's 500K default like GPT-6.1 Sol. Background agents now prefer GPT-6.2 Astra for deep reasoning and GPT-6.2 Sol for balanced work.
+
+- `generate_image` now defaults to GPT-Image-2.6 Flare, and `image_model` accepts `gpt-image-2.6-flare` and `gpt-image-2.6-sunburst`. The GPT-Image-2.5 models are still available. This only changes which model runs with an OpenAI API key: on the ChatGPT/Codex login the backend serves its own image model. GPT-Image-2.6's SVG, GIF and markup options aren't available through `generate_image` yet. This applies in VS Code and Browser Ask Agent.
+- `generate_image` has a new `complexity` option (`low`, `medium` or `high`) for the GPT-Image-2.6 models, which sets how much work the image model puts in. Leave it out to get the model's default. It's rejected before approval for the 2.5 models and `gpt-image-2`. It only takes effect with an OpenAI API key: on the ChatGPT/Codex login the result's warning says it had no effect.
+
+- `generate_image` results now include `served_image_tool`: the image model, size and quality the backend reported running. On the ChatGPT/Codex login the backend replaces the request with `gpt-image-2-codex` at automatic size and quality and ignores masks, whatever `image_model`, `output_size`, `quality` or mask was asked for. The result now says so in a `warning` instead of implying the request was honoured. Those options only take effect with an OpenAI API key. Applies in VS Code and Browser Ask Agent.
+
+- New setting `agentlink.imageGeneration.credential`. Set it to `openaiApiKey` to generate images with your OpenAI API key (billed to the key) while chat keeps using the ChatGPT/Codex login. A key saved as embeddings only works too. If no key is available, `generate_image` fails instead of falling back to the ChatGPT login. The default, `auto`, keeps today's behaviour. VS Code only for now; Browser Ask Agent still uses its shared chat credential.
+
+- `generate_image` now rejects `input_fidelity` before approval with an OpenAI API key too, not only on the ChatGPT/Codex login. None of the GPT-Image 2.5 or 2.6 models accept it, so the call used to fail at OpenAI with `invalid_input_fidelity_model`.
+- `generate_image` accepts `image_model: "gpt-image-2"` again for anyone who wants the older model. It only takes effect with an OpenAI API key, and `xhigh` or `max` quality is rejected before approval because that model stops at `high`.
+
+- `generate_image` approval cards for `xhigh`/`max` quality or output sizes above 2560x1440 now offer **Generate for Session** too. Before, those calls only had **Generate** and asked every time. Choosing it on one of those cards approves all later image generations in that chat, costly ones included. A session approval from an ordinary card still covers only ordinary calls, so costly calls keep asking until you approve one for the session. This applies in VS Code and Browser Ask Agent.
+
 ## 1.94.1
 
 - The command approval reviewer now sees the whole of an inline script the command runs, such as `python3 "$AL_FILE(check.py)"` or `node $AL_FILE(stage.mjs)`, up to 64 KB. Before, only scripts given mode `755` were shown in full and everything else was cut to 40 lines, so the reviewer often refused to judge a script it could only partly see and asked you instead. Data files such as commit messages or PR bodies still show a 40-line excerpt.

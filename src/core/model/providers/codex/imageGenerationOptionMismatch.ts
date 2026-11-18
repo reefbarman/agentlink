@@ -1,4 +1,7 @@
-import type { CodexImageGenerationOptions } from "./imageGeneration.js";
+import type {
+  CodexImageGenerationOptions,
+  CodexServedImageTool,
+} from "./imageGeneration.js";
 
 export interface ImageGenerationOptionMismatch {
   image_index: number;
@@ -52,26 +55,69 @@ export function imageGenerationOptionMismatches(
   return mismatches;
 }
 
-/** Result fields to merge into a generate_image success payload. */
+export interface ImageGenerationServedTool {
+  /** The image model the caller asked for. */
+  requestedImageModel: string;
+  /** The tool settings the backend echoed, when it reported them. */
+  tool?: CodexServedImageTool;
+}
+
+/**
+ * Result fields to merge into a generate_image success payload: per-image
+ * size/quality mismatches plus the image tool the backend actually served.
+ */
 export function imageGenerationOptionMismatchFields(
-  options: Pick<CodexImageGenerationOptions, "outputSize" | "quality">,
+  options: Pick<
+    CodexImageGenerationOptions,
+    "outputSize" | "quality" | "maskImage" | "complexity"
+  >,
   images: ReadonlyArray<{ size?: string; quality?: string }>,
+  served?: ImageGenerationServedTool,
 ): {
+  served_image_tool?: CodexServedImageTool;
   option_mismatches?: ImageGenerationOptionMismatch[];
   warning?: string;
 } {
   const mismatches = imageGenerationOptionMismatches(options, images);
-  if (mismatches.length === 0) return {};
-  const summary = [
-    ...new Set(
-      mismatches.map(
-        (item) =>
-          `${item.option} requested ${item.requested}, returned ${item.actual}`,
+  const servedTool = served?.tool;
+  const servedModel = servedTool?.model?.trim();
+  const modelReplaced = Boolean(
+    servedModel && served && servedModel !== served.requestedImageModel,
+  );
+  const warnings: string[] = [];
+  if (modelReplaced && served && servedTool) {
+    const settings = [
+      servedTool.size ? `size ${servedTool.size}` : undefined,
+      servedTool.quality ? `quality ${servedTool.quality}` : undefined,
+    ].filter(Boolean);
+    const settingsText =
+      settings.length > 0 ? ` with ${settings.join(", ")}` : "";
+    const maskText = options.maskImage
+      ? " The mask was sent but this backend does not apply it, so the edit may land outside the masked area."
+      : "";
+    const complexityText = options.complexity
+      ? ` complexity ${options.complexity} was sent but has no effect on this backend.`
+      : "";
+    warnings.push(
+      `The image backend served ${servedModel}${settingsText} instead of ${served.requestedImageModel}. On ChatGPT/Codex OAuth the backend chooses the image model, size and quality itself and ignores masks; the image model, exact sizes, quality, complexity and masks need an OpenAI API key. Describe the shape in the prompt (for example "Aspect ratio: 16:9") instead.${maskText}${complexityText ? ` The${complexityText}` : ""}`.trimEnd(),
+    );
+  }
+  if (mismatches.length > 0) {
+    const summary = [
+      ...new Set(
+        mismatches.map(
+          (item) =>
+            `${item.option} requested ${item.requested}, returned ${item.actual}`,
+        ),
       ),
-    ),
-  ].join("; ");
+    ].join("; ");
+    warnings.push(
+      `The image backend did not honour every requested option (${summary}). Use images[].size and images[].quality, not requested_options, when exact dimensions or quality matter.`,
+    );
+  }
   return {
-    option_mismatches: mismatches,
-    warning: `The image backend did not honour every requested option (${summary}). Use images[].size and images[].quality, not requested_options, when exact dimensions or quality matter.`,
+    ...(servedTool ? { served_image_tool: servedTool } : {}),
+    ...(mismatches.length > 0 ? { option_mismatches: mismatches } : {}),
+    ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
   };
 }

@@ -1,6 +1,9 @@
 export type CodexPortableImageModel =
+  | "gpt-image-2.6-flare"
+  | "gpt-image-2.6-sunburst"
   | "gpt-image-2.5-flare"
-  | "gpt-image-2.5-sunburst";
+  | "gpt-image-2.5-sunburst"
+  | "gpt-image-2";
 
 export interface CodexPortableImageReference {
   label: string;
@@ -35,8 +38,11 @@ const MAX_IMAGE_URL_LENGTH = 20 * 1024 * 1024;
 const IMAGE_DATA_URL =
   /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/;
 const SUPPORTED_MODELS: readonly CodexPortableImageModel[] = [
+  "gpt-image-2.6-flare",
+  "gpt-image-2.6-sunburst",
   "gpt-image-2.5-flare",
   "gpt-image-2.5-sunburst",
+  "gpt-image-2",
 ];
 
 /** Builds only the credential-free OAuth request body. The host owns auth, approval, and transport. */
@@ -62,7 +68,7 @@ export function buildCodexImageGenerationRequest(
     );
   }
   const imageModel =
-    params.imageModel === undefined ? "gpt-image-2.5-flare" : params.imageModel;
+    params.imageModel === undefined ? "gpt-image-2.6-flare" : params.imageModel;
   if (!SUPPORTED_MODELS.includes(imageModel)) {
     throw new Error("Unsupported Codex image generation model");
   }

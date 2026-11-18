@@ -15,13 +15,16 @@ export const CODEX_IMAGE_GENERATION_MAX_COUNT = 4;
 export const CODEX_IMAGE_GENERATION_MAX_REFERENCE_IMAGES = 8;
 export const CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS = 300_000;
 export const CODEX_IMAGE_GENERATION_MODELS = [
+  "gpt-image-2.6-flare",
+  "gpt-image-2.6-sunburst",
   "gpt-image-2.5-flare",
   "gpt-image-2.5-sunburst",
+  "gpt-image-2",
 ] as const;
 export type CodexImageGenerationModel =
   (typeof CODEX_IMAGE_GENERATION_MODELS)[number];
 export const CODEX_IMAGE_GENERATION_DEFAULT_MODEL: CodexImageGenerationModel =
-  "gpt-image-2.5-flare";
+  "gpt-image-2.6-flare";
 
 export const CODEX_IMAGE_GENERATION_QUALITIES = [
   "auto",
@@ -57,6 +60,16 @@ export type CodexImageGenerationAction =
 export const CODEX_IMAGE_GENERATION_INPUT_FIDELITIES = ["low", "high"] as const;
 export type CodexImageGenerationInputFidelity =
   (typeof CODEX_IMAGE_GENERATION_INPUT_FIDELITIES)[number];
+export const CODEX_IMAGE_GENERATION_COMPLEXITIES = [
+  "low",
+  "medium",
+  "high",
+] as const;
+export type CodexImageGenerationComplexity =
+  (typeof CODEX_IMAGE_GENERATION_COMPLEXITIES)[number];
+/** Image models that accept the `complexity` tool option. */
+export const CODEX_IMAGE_GENERATION_COMPLEXITY_MODELS: readonly CodexImageGenerationModel[] =
+  ["gpt-image-2.6-flare", "gpt-image-2.6-sunburst"];
 
 export interface CodexImageGenerationOptions {
   outputSize?: string;
@@ -66,6 +79,8 @@ export interface CodexImageGenerationOptions {
   outputCompression?: number;
   action?: CodexImageGenerationAction;
   inputFidelity?: CodexImageGenerationInputFidelity;
+  /** GPT-Image-2.6 only: how much computation the image model spends. */
+  complexity?: CodexImageGenerationComplexity;
   maskImage?: CodexImageReferenceImage;
   /**
    * Masked edits only. Unset: fit PNG results to the edit target and restore
@@ -275,12 +290,26 @@ export interface CodexImageGenerationFailure {
   eventTypes: string[];
 }
 
+/**
+ * The image_generation tool settings the backend echoes in its response
+ * events. ChatGPT/Codex OAuth rewrites the requested tool (for example to
+ * `gpt-image-2-codex` with `size: "auto"`), so this is what actually ran.
+ */
+export interface CodexServedImageTool {
+  model?: string;
+  size?: string;
+  quality?: string;
+  background?: string;
+  output_format?: string;
+}
+
 export interface CodexImageGenerationSseResult {
   images: CodexGeneratedImage[];
   partialImages: CodexGeneratedImage[];
   eventTypes: string[];
   responseId?: string;
   usage?: Record<string, unknown>;
+  servedImageTool?: CodexServedImageTool;
   terminalFailure?: Omit<CodexImageGenerationFailure, "eventTypes">;
 }
 
@@ -320,19 +349,48 @@ export function getCodexImageGenerationModel(
 }
 
 /**
- * The ChatGPT/Codex OAuth backend honours size, quality, background, output
- * format/compression, action and input_image_mask on the Responses
- * image_generation tool (verified live 2026-11). It rejects input_fidelity
- * with `invalid_input_fidelity_model`, so fail before approval instead.
+ * The ChatGPT/Codex OAuth backend does not honour the requested image tool.
+ * Its `response.created` echo rewrites the tool to `gpt-image-2-codex` with
+ * `size: "auto"` and `quality: "auto"` whatever model, size or quality was
+ * asked for, and `input_image_mask` has no effect (verified live 2026-11-12;
+ * see openai/codex#59180). The image model, explicit sizes, quality and masks
+ * therefore only apply with an OpenAI API key; on OAuth the canvas shape
+ * follows the prompt.
+ *
+ * input_fidelity is only accepted by gpt-image-1.5 and gpt-image-1-mini.
+ * Every GPT-Image 2.5/2.6 model this tool offers, and OAuth's
+ * `gpt-image-2-codex`, rejects it with `invalid_input_fidelity_model`
+ * (verified live on an API key 2026-11-12), so fail before approval on
+ * every credential instead of spending a request.
  */
 export function assertCodexImageGenerationOptionsSupported(
-  auth: CodexImageGenerationAuth,
+  _auth: CodexImageGenerationAuth,
   options: CodexImageGenerationOptions,
+  imageModel?: CodexImageGenerationModel,
 ): void {
-  if (auth.method !== "oauth") return;
+  // gpt-image-2 predates the 2.5 quality tiers: low, medium, high and auto.
+  if (
+    imageModel === "gpt-image-2" &&
+    (options.quality === "xhigh" || options.quality === "max")
+  ) {
+    throw new Error(
+      `gpt-image-2 does not support quality ${options.quality}. Use low, medium, high or auto, or choose a GPT-Image 2.5/2.6 model.`,
+    );
+  }
+  // complexity arrived with GPT-Image-2.6. When imageModel is unknown the
+  // caller resolves the default (2.6 Flare), which accepts it.
+  if (
+    options.complexity &&
+    imageModel &&
+    !CODEX_IMAGE_GENERATION_COMPLEXITY_MODELS.includes(imageModel)
+  ) {
+    throw new Error(
+      `${imageModel} does not support complexity. Use gpt-image-2.6-flare or gpt-image-2.6-sunburst, or omit complexity.`,
+    );
+  }
   if (options.inputFidelity) {
     throw new Error(
-      "ChatGPT/Codex OAuth does not support the image option input_fidelity. Omit it, or configure an OpenAI API key with model access.",
+      "input_fidelity is not supported by the GPT-Image 2.5 or 2.6 models (OpenAI only accepts it on gpt-image-1.5 and gpt-image-1-mini). Omit it; these models already preserve input-image detail.",
     );
   }
 }
@@ -341,9 +399,10 @@ export function assertCodexImageGenerationOptionsSupported(
 export const CODEX_IMAGE_GENERATION_SESSION_MAX_PIXELS = 2560 * 1440;
 
 /**
- * Whether a call must be approved individually even after "Generate for
- * Session": the costly xhigh/max qualities and experimental sizes above
- * 2560x1440. Other controls, edits and masks are covered by session approval.
+ * Whether a call is costly enough to need its own session grant: the xhigh/max
+ * qualities and experimental sizes above 2560x1440. A session grant from an
+ * ordinary call covers other controls, edits and masks but not these; a session
+ * grant from one of these calls covers everything.
  */
 export function codexImageGenerationRequiresPerCallApproval(
   options: CodexImageGenerationOptions,
@@ -386,6 +445,7 @@ export function buildCodexImageGenerationRequestBody(params: {
       : {}),
     ...(options.action ? { action: options.action } : {}),
     ...(options.inputFidelity ? { input_fidelity: options.inputFidelity } : {}),
+    ...(options.complexity ? { complexity: options.complexity } : {}),
     ...(options.maskImage
       ? {
           input_image_mask: {
@@ -459,6 +519,7 @@ export async function parseCodexImageGenerationSse(params: {
   let observedQuotaConsumed: boolean | "unknown" = "unknown";
   let responseId: string | undefined;
   let usage: Record<string, unknown> | undefined;
+  let servedImageTool: CodexServedImageTool | undefined;
   let fallbackImageEventIndex = 0;
 
   function handleLine(line: string): void {
@@ -477,6 +538,7 @@ export async function parseCodexImageGenerationSse(params: {
     const response = isRecord(event.response) ? event.response : undefined;
     responseId = firstString(response?.id) ?? responseId;
     usage = isRecord(response?.usage) ? response.usage : usage;
+    servedImageTool = servedImageToolFromResponse(response) ?? servedImageTool;
     const explicitQuota = explicitQuotaConsumed(event, response);
     if (explicitQuota !== "unknown") observedQuotaConsumed = explicitQuota;
     const classifiedFailure = classifyImageGenerationTerminalEvent(event);
@@ -551,11 +613,35 @@ export async function parseCodexImageGenerationSse(params: {
     eventTypes,
     ...(responseId ? { responseId } : {}),
     ...(usage ? { usage } : {}),
+    ...(servedImageTool ? { servedImageTool } : {}),
     terminalFailure:
       terminalFailure && observedQuotaConsumed !== "unknown"
         ? { ...terminalFailure, quotaConsumed: observedQuotaConsumed }
         : terminalFailure,
   };
+}
+
+function servedImageToolFromResponse(
+  response: Record<string, unknown> | undefined,
+): CodexServedImageTool | undefined {
+  if (!Array.isArray(response?.tools)) return undefined;
+  const tool = response.tools.find(
+    (item): item is Record<string, unknown> =>
+      isRecord(item) && item.type === "image_generation",
+  );
+  if (!tool) return undefined;
+  const served: CodexServedImageTool = {};
+  for (const key of [
+    "model",
+    "size",
+    "quality",
+    "background",
+    "output_format",
+  ] as const) {
+    const value = firstString(tool[key]);
+    if (value) served[key] = value;
+  }
+  return Object.keys(served).length > 0 ? served : undefined;
 }
 
 export function createCodexImageGenerationResultError(
@@ -875,6 +961,7 @@ async function callCodexImageGeneration(params: {
   eventTypes: string[];
   responseId?: string;
   usage?: Record<string, unknown>;
+  servedImageTool?: CodexServedImageTool;
   model: string;
   imageModel: CodexImageGenerationModel;
 }> {
@@ -970,6 +1057,7 @@ export async function generateCodexImages(params: {
   eventTypes: string[];
   responseId?: string;
   usage?: Record<string, unknown>;
+  servedImageTool?: CodexServedImageTool;
   model: string;
   imageModel: CodexImageGenerationModel;
 }> {
@@ -977,7 +1065,11 @@ export async function generateCodexImages(params: {
   const generatedImages = params.generatedImages ?? [];
   const partialImages: CodexGeneratedImage[] = [];
   const options = params.options ?? {};
-  assertCodexImageGenerationOptionsSupported(params.auth, options);
+  assertCodexImageGenerationOptionsSupported(
+    params.auth,
+    options,
+    params.imageModel,
+  );
   let lastError: unknown;
   for (let attempt = 0; attempt <= TRANSIENT_RETRIES; attempt++) {
     try {

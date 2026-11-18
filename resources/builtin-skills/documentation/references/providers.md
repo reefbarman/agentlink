@@ -10,7 +10,7 @@ Desktop and Browser Ask Agent retain the saved model and thinking level while pr
 
 ## Codex thinking summaries
 
-AgentLink requests detailed reasoning summaries for reasoning-enabled OpenAI/Codex requests, including GPT-6 Astra and GPT-6.1 Sol through the subscription Responses Lite endpoint. Summaries appear as thinking blocks when the provider returns them, over both WebSocket and HTTP/SSE transport. These are provider-supplied summaries, not the model's full internal reasoning; a request can reason without returning a visible summary.
+AgentLink requests detailed reasoning summaries for reasoning-enabled OpenAI/Codex requests, including GPT-6.2 Astra/Sol, GPT-6 Astra and GPT-6.1 Sol through the subscription Responses Lite endpoint. Summaries appear as thinking blocks when the provider returns them, over both WebSocket and HTTP/SSE transport. These are provider-supplied summaries, not the model's full internal reasoning; a request can reason without returning a visible summary.
 
 This is separate from OpenAI-compatible connections such as Meridian. Those connections display visible thinking text returned in streamed `reasoning` or `reasoning_content` fields; reasoning-effort configuration alone does not guarantee visible thinking text.
 
@@ -84,7 +84,7 @@ For a background task on that model, use the returned local `id` in `spawn_backg
 
 For example, add `"promptProfile": "reasoning"` to a Claude model's object to try the compact profile through Meridian. `modelFamily`, thinking support, effort, and transport do not automatically select it. Keep `"compatibility"` as a rollback if a model needs more guidance. Shorter instructions do not by themselves establish better behaviour.
 
-Selection precedence is: VS Code's exact local model-ID override in `agentlink.modelPromptProfiles`, then the model's JSON `promptProfile`, then the maintained automatic policy, then `compatibility`. Automatic compact defaults cover Codex GPT-6 Astra, GPT-6.1 Sol, GPT-6.1 Terra, GPT-5.6 Sol/Terra, and GPT-5.5. Astra, Sol, and GPT-6.1 Terra are maintained defaults, not claims of completed behavioural evaluation. Unknown models, Claude/other compatible models without an explicit choice, Luna, and Spark stay on compatibility.
+Selection precedence is: VS Code's exact local model-ID override in `agentlink.modelPromptProfiles`, then the model's JSON `promptProfile`, then the maintained automatic policy, then `compatibility`. Automatic compact defaults cover Codex GPT-6.2 Astra/Sol, GPT-6 Astra, GPT-6.1 Sol, GPT-6.1 Terra, GPT-5.6 Sol/Terra, and GPT-5.5. Astra, Sol, and GPT-6.1 Terra are maintained defaults, not claims of completed behavioural evaluation. Unknown models, Claude/other compatible models without an explicit choice, Luna, and Spark stay on compatibility.
 
 VS Code workspace, projectless and native background sessions, Browser Ask Agent, Desktop, and the CLI apply the shared selection policy to their own capability-appropriate instructions. The CLI uses its separate `cli/config.json` model objects, not the shared connection file. Browser/Desktop publications keep choices scoped to the selected model's owner even when credentials are borrowed. ACP/external agents own their own prompts. Model changes and native Codex cross-model fallback rebuild instructions before the next request; caller-authored auxiliary completion prompts remain unchanged.
 

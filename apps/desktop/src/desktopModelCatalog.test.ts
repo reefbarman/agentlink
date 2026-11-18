@@ -1,12 +1,13 @@
 import {
+  CODEX_PICKER_MODEL_IDS,
+  isCodexModelServedOnChatgptBackend,
+  listCodexModels,
+} from "@agentlink/core/codex";
+import {
   buildDesktopCodexCatalog,
   buildDesktopOpenAiCompatibleCatalog,
 } from "./desktopModelCatalog.js";
 import { describe, expect, it } from "vitest";
-import {
-  isCodexModelServedOnChatgptBackend,
-  listCodexModels,
-} from "@agentlink/core/codex";
 
 describe("desktop model catalog", () => {
   it("matches the ChatGPT/Codex OAuth model filter used by VS Code", () => {
@@ -55,7 +56,7 @@ describe("desktop model catalog", () => {
     ).toMatchObject({ authenticated: true, readiness: { status: "ready" } });
   });
 
-  it("shows the same eight models for OpenAI API keys", () => {
+  it("shows the same picker models for OpenAI API keys", () => {
     const modelIds = buildDesktopCodexCatalog("apiKey").map(
       (model) => model.id,
     );
@@ -63,7 +64,7 @@ describe("desktop model catalog", () => {
     expect(modelIds).toEqual(
       buildDesktopCodexCatalog("oauth").map((model) => model.id),
     );
-    expect(modelIds).toHaveLength(8);
+    expect(modelIds).toHaveLength(CODEX_PICKER_MODEL_IDS.length);
     expect(modelIds).not.toContain("gpt-5.4-pro");
     expect(modelIds).not.toContain("gpt-5.3-codex-spark");
   });

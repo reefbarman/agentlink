@@ -4301,6 +4301,14 @@ async function dispatchToolCallWithTrackedApprovals(
         sessionId,
         onApprovalRequest,
         ctx.getSessionImages,
+        {
+          credentialPreference:
+            vscode.workspace
+              .getConfiguration("agentlink")
+              .get<string>("imageGeneration.credential") === "openaiApiKey"
+              ? "openaiApiKey"
+              : "auto",
+        },
       );
     case "present_images": {
       const webImageContext = {

@@ -22,6 +22,9 @@ export type OpenAiApiKeyScope = "models+embeddings" | "embeddings-only";
 
 export type OpenAiCodexAuthMethod = "oauth" | "apiKey";
 
+/** Values of the `agentlink.imageGeneration.credential` setting. */
+export type OpenAiImageGenerationCredentialPreference = "auto" | "openaiApiKey";
+
 export interface OpenAiApiKeyCredential {
   apiKey: string;
   source: "secret" | "env";
@@ -111,6 +114,24 @@ export class OpenAiCodexAuthManager {
     }
 
     return null;
+  }
+
+  /**
+   * Image generation credential. `auto` follows model auth (ChatGPT login
+   * first). `openaiApiKey` always uses the API key, including one saved as
+   * embeddings only, because choosing it is explicit consent to bill the key.
+   */
+  async resolveImageGenerationAuth(
+    preference: OpenAiImageGenerationCredentialPreference,
+  ): Promise<OpenAiCodexResolvedAuth | null> {
+    if (preference !== "openaiApiKey") return this.resolveModelAuth();
+    const apiKeyCred = await this.getApiKeyCredential();
+    if (!apiKeyCred?.apiKey) return null;
+    return {
+      method: "apiKey",
+      bearerToken: apiKeyCred.apiKey,
+      canRefresh: false,
+    };
   }
 
   async resolveEmbeddingAuth(): Promise<OpenAiCodexResolvedAuth | null> {

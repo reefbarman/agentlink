@@ -184,6 +184,7 @@
       "parameters": [
         "action",
         "background",
+        "complexity",
         "count",
         "edit_image_id",
         "edit_image_path",
@@ -940,5 +941,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "e6bbbf17b2a6c860a9c379e62c3c5d0b7d8b168824d3bdf076d4fda0e22366fc"
+  "revision": "7c0548e496f26a236e7f52d537ac032b7e5e4905695ac03adf683a646adec9d2"
 }

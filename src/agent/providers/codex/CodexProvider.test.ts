@@ -1,4 +1,8 @@
-import { CODEX_DEFAULT_MODEL, CodexTurnState } from "@agentlink/core/codex";
+import {
+  CODEX_DEFAULT_MODEL,
+  CODEX_PICKER_MODEL_IDS,
+  CodexTurnState,
+} from "@agentlink/core/codex";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AgentEngine } from "../../AgentEngine.js";
@@ -2090,17 +2094,9 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     expect(createMock).toHaveBeenCalledOnce();
   });
 
-  it("lists only the official eight models for OAuth and API key", async () => {
-    const expected = [
-      "gpt-6-astra",
-      "gpt-6.1-sol",
-      "gpt-6.1-terra",
-      "gpt-6-luna",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.5",
-    ];
+  it("lists only the official picker models for OAuth and API key", async () => {
+    // The exact roster and order are pinned in packages/core models.test.ts.
+    const expected = [...CODEX_PICKER_MODEL_IDS];
     const oauthProvider = new CodexProvider(makeAuthManager() as never);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(oauthProvider.listModels().map((m) => m.id)).toEqual(expected);

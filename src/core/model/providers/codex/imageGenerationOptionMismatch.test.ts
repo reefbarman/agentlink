@@ -35,6 +35,52 @@ describe("imageGenerationOptionMismatches", () => {
     });
   });
 
+  it("reports the served tool and warns when the backend replaced the model", () => {
+    const fields = imageGenerationOptionMismatchFields(
+      { maskImage: {} as never },
+      [{ size: "1254x1254" }],
+      {
+        requestedImageModel: "gpt-image-2.6-flare",
+        tool: { model: "gpt-image-2-codex", size: "auto" },
+      },
+    );
+    expect(fields.served_image_tool).toEqual({
+      model: "gpt-image-2-codex",
+      size: "auto",
+    });
+    expect(fields.option_mismatches).toBeUndefined();
+    expect(fields.warning).toContain(
+      "served gpt-image-2-codex with size auto instead of gpt-image-2.6-flare",
+    );
+    expect(fields.warning).toContain("The mask was sent");
+    expect(fields.warning).not.toContain("complexity low");
+  });
+
+  it("warns that complexity had no effect when the backend replaced the model", () => {
+    const fields = imageGenerationOptionMismatchFields(
+      { complexity: "low" },
+      [{}],
+      {
+        requestedImageModel: "gpt-image-2.6-flare",
+        tool: { model: "gpt-image-2-codex" },
+      },
+    );
+    expect(fields.warning).toContain(
+      "The complexity low was sent but has no effect on this backend.",
+    );
+  });
+
+  it("reports the served tool without a warning when the model matches", () => {
+    expect(
+      imageGenerationOptionMismatchFields({}, [{}], {
+        requestedImageModel: "gpt-image-2.6-flare",
+        tool: { model: "gpt-image-2.6-flare", size: "1024x1024" },
+      }),
+    ).toEqual({
+      served_image_tool: { model: "gpt-image-2.6-flare", size: "1024x1024" },
+    });
+  });
+
   it("stays silent when options match, are auto, or are not reported", () => {
     expect(
       imageGenerationOptionMismatchFields(

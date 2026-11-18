@@ -188,6 +188,7 @@ import {
   assertCodexMaskCompositeSupported,
   CODEX_IMAGE_GENERATION_ACTIONS,
   CODEX_IMAGE_GENERATION_BACKGROUNDS,
+  CODEX_IMAGE_GENERATION_COMPLEXITIES,
   CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS,
   CODEX_IMAGE_GENERATION_INPUT_FIDELITIES,
   CODEX_IMAGE_GENERATION_MAX_COUNT,
@@ -204,6 +205,7 @@ import {
   type CodexGeneratedImage,
   type CodexImageGenerationAction,
   type CodexImageGenerationBackground,
+  type CodexImageGenerationComplexity,
   type CodexImageGenerationInputFidelity,
   type CodexImageGenerationModel,
   type CodexImageGenerationOptions,
@@ -8074,6 +8076,12 @@ export class BrowserGatewayHelper {
         CODEX_IMAGE_GENERATION_INPUT_FIDELITIES,
         "input_fidelity",
       );
+    const complexity =
+      this.normalizeAskAgentImageEnum<CodexImageGenerationComplexity>(
+        input.complexity,
+        CODEX_IMAGE_GENERATION_COMPLEXITIES,
+        "complexity",
+      );
     const editImage = this.resolveAskAgentSessionImage(
       input.edit_image_id,
       "edit_image_id",
@@ -8127,6 +8135,7 @@ export class BrowserGatewayHelper {
       ...(outputCompression !== undefined ? { outputCompression } : {}),
       ...(action ? { action } : {}),
       ...(inputFidelity ? { inputFidelity } : {}),
+      ...(complexity ? { complexity } : {}),
       ...(maskImage ? { maskImage } : {}),
       ...(maskComposite !== undefined ? { maskComposite } : {}),
     };
@@ -8506,6 +8515,9 @@ export class BrowserGatewayHelper {
       params.options.inputFidelity
         ? `Input fidelity: ${params.options.inputFidelity}`
         : undefined,
+      params.options.complexity
+        ? `Complexity: ${params.options.complexity}`
+        : undefined,
       params.editImage ? `Edit target: ${params.editImage.label}` : undefined,
       params.options.maskImage
         ? `Mask: ${params.options.maskImage.label}`
@@ -8522,8 +8534,8 @@ export class BrowserGatewayHelper {
       "",
       "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before images are returned to chat.",
       params.advanced
-        ? "xhigh/max quality and output sizes above 2560x1440 require approval for each call."
-        : "Generate for Session authorizes later display-only generate_image calls in this Ask Agent chat, including edits and masks. Calls using xhigh/max quality or output sizes above 2560x1440 still ask each time.",
+        ? "This call uses xhigh/max quality or an output size above 2560x1440. Generate for Session authorizes all later display-only generate_image calls in this Ask Agent chat, including other xhigh/max quality and large-size calls, edits and masks."
+        : "Generate for Session authorizes later display-only generate_image calls in this Ask Agent chat, including edits and masks. Calls using xhigh/max quality or output sizes above 2560x1440 still ask until one of them is approved for the session.",
     ]
       .filter((line): line is string => line !== undefined)
       .join("\n");
@@ -8533,16 +8545,11 @@ export class BrowserGatewayHelper {
       filePath: `Generate ${params.count} image${params.count === 1 ? "" : "s"}?`,
       writeOperation: "modify",
       detail,
-      writeChoices: params.advanced
-        ? [
-            { label: "Generate", value: "accept", isPrimary: true },
-            { label: "Deny", value: "reject", isDanger: true },
-          ]
-        : [
-            { label: "Generate", value: "accept", isPrimary: true },
-            { label: "Generate for Session", value: "accept-session" },
-            { label: "Deny", value: "reject", isDanger: true },
-          ],
+      writeChoices: [
+        { label: "Generate", value: "accept", isPrimary: true },
+        { label: "Generate for Session", value: "accept-session" },
+        { label: "Deny", value: "reject", isDanger: true },
+      ],
     };
     const decisionPromise = this.askAgentController.requestApproval(
       request,
@@ -8597,19 +8604,24 @@ export class BrowserGatewayHelper {
           "generate_image requires refreshed Codex/OpenAI credentials from AgentLink's shared account store or a connected owner",
         );
       }
-      assertCodexImageGenerationOptionsSupported(credential, input.options);
+      assertCodexImageGenerationOptionsSupported(
+        credential,
+        input.options,
+        input.imageModel,
+      );
       const billing =
         credential.method === "oauth"
           ? `ChatGPT/Codex OAuth quota (${credential.accountLabel ?? "active account"})`
           : "OpenAI API key billing";
-      const approval =
-        !input.advanced && this.askAgentSessionStore.isGenerateImageApproved()
-          ? ({ decision: "accept" } as DecisionMessage)
-          : await this.requestAskAgentGenerateImageApproval({
-              ...input,
-              billing,
-              signal,
-            });
+      const approval = this.askAgentSessionStore.isGenerateImageApproved(
+        input.advanced,
+      )
+        ? ({ decision: "accept" } as DecisionMessage)
+        : await this.requestAskAgentGenerateImageApproval({
+            ...input,
+            billing,
+            signal,
+          });
       const approved =
         approval.decision === "accept" ||
         approval.decision === "accept-session";
@@ -8631,8 +8643,10 @@ export class BrowserGatewayHelper {
           ),
         };
       }
-      if (approval.decision === "accept-session" && !input.advanced) {
-        this.askAgentSessionStore.approveGenerateImageForSession();
+      if (approval.decision === "accept-session") {
+        this.askAgentSessionStore.approveGenerateImageForSession({
+          advanced: input.advanced,
+        });
         await this.persistAskAgentHistory();
       }
       const result = await generateCodexImages({
@@ -8682,6 +8696,9 @@ export class BrowserGatewayHelper {
                 ...(input.options.inputFidelity
                   ? { input_fidelity: input.options.inputFidelity }
                   : {}),
+                ...(input.options.complexity
+                  ? { complexity: input.options.complexity }
+                  : {}),
                 ...(input.options.maskImage
                   ? {
                       mask_image: {
@@ -8705,6 +8722,10 @@ export class BrowserGatewayHelper {
               ...imageGenerationOptionMismatchFields(
                 input.options,
                 result.images,
+                {
+                  requestedImageModel: result.imageModel,
+                  tool: result.servedImageTool,
+                },
               ),
               ...(result.responseId ? { response_id: result.responseId } : {}),
               ...(result.usage ? { usage: result.usage } : {}),

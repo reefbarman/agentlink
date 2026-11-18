@@ -8229,7 +8229,6 @@ describe("BrowserGatewayHelper proxy routing", () => {
                       output_format: "webp",
                       output_compression: 80,
                       action: "edit",
-                      input_fidelity: "high",
                       edit_image_id: "image_1",
                       mask_image_id: "image_2",
                     },
@@ -8286,7 +8285,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
           expect(body.snapshot.ui.approval?.detail).toContain("Mask: image_2");
           expect(
             body.snapshot.ui.approval?.writeChoices?.map(({ value }) => value),
-          ).toEqual(["accept", "reject"]);
+          ).toEqual(["accept", "accept-session", "reject"]);
         }
       });
       const response = await fetch(
@@ -8341,7 +8340,6 @@ describe("BrowserGatewayHelper proxy routing", () => {
           output_format: "webp",
           output_compression: 80,
           action: "edit",
-          input_fidelity: "high",
           input_image_mask: {
             image_url: expect.stringContaining("data:image/png;base64,"),
           },
@@ -8417,7 +8415,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(body.snapshot.ui.approval).toBeNull();
     expect(providerRequests).toEqual([]);
     expect(JSON.stringify(toolResults)).toContain(
-      "ChatGPT/Codex OAuth does not support the image option input_fidelity",
+      "input_fidelity is not supported by the GPT-Image 2.5 or 2.6 models",
     );
   });
 

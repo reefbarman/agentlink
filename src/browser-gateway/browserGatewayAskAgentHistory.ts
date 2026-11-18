@@ -154,6 +154,7 @@ function normalizeHistorySnapshot(
             nextMessageSequence?: unknown;
             queuedMessages?: unknown;
             generateImageApproved?: unknown;
+            generateImageAdvancedApproved?: unknown;
             privateModelHistory?: unknown;
           };
           const id = typeof item.id === "string" ? item.id.trim() : "";
@@ -193,6 +194,9 @@ function normalizeHistorySnapshot(
             ...(queuedMessages ? { queuedMessages } : {}),
             ...(item.generateImageApproved === true
               ? { generateImageApproved: true }
+              : {}),
+            ...(item.generateImageAdvancedApproved === true
+              ? { generateImageAdvancedApproved: true }
               : {}),
             ...(privateModelHistory ? { privateModelHistory } : {}),
           };

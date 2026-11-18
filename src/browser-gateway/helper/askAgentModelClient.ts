@@ -44,6 +44,7 @@ import { agentLinkFetch } from "../../util/httpDispatcher.js";
 import {
   CODEX_IMAGE_GENERATION_ACTIONS,
   CODEX_IMAGE_GENERATION_BACKGROUNDS,
+  CODEX_IMAGE_GENERATION_COMPLEXITIES,
   CODEX_IMAGE_GENERATION_INPUT_FIDELITIES,
   CODEX_IMAGE_GENERATION_MODELS,
   CODEX_IMAGE_GENERATION_OUTPUT_FORMATS,
@@ -278,7 +279,7 @@ const ASK_AGENT_GENERATE_IMAGE_SCHEMA = {
     .enum(CODEX_IMAGE_GENERATION_MODELS)
     .optional()
     .describe(
-      "Image model. Default: gpt-image-2.5-flare. Use Flare for fast exploration and alignment, then Sunburst with the selected session image as a reference for polished output. Go directly to Sunburst when the direction is settled.",
+      "Image model. Default: gpt-image-2.6-flare. Applies with an OpenAI API key; ChatGPT/Codex OAuth serves its own model, size and quality and ignores masks (see served_image_tool). Prefer GPT-Image-2.6; use 2.5 or gpt-image-2 only when the user asks for it (gpt-image-2 supports quality up to high). Use Flare for fast exploration and alignment, then Sunburst with the selected session image as a reference for polished output. Go directly to Sunburst when the direction is settled.",
     ),
   size: z
     .string()
@@ -298,6 +299,12 @@ const ASK_AGENT_GENERATE_IMAGE_SCHEMA = {
   output_compression: z.coerce.number().int().min(0).max(100).optional(),
   action: z.enum(CODEX_IMAGE_GENERATION_ACTIONS).optional(),
   input_fidelity: z.enum(CODEX_IMAGE_GENERATION_INPUT_FIDELITIES).optional(),
+  complexity: z
+    .enum(CODEX_IMAGE_GENERATION_COMPLEXITIES)
+    .optional()
+    .describe(
+      "GPT-Image-2.6 only: image-model computation level. Omit for the default; rejected for other models. Ignored on ChatGPT/Codex OAuth.",
+    ),
   edit_image_id: z
     .string()
     .min(1)
@@ -526,7 +533,7 @@ export const ASK_AGENT_SAFE_PROJECTLESS_TOOLS: CoreModelToolDefinition[] = [
   {
     name: "generate_image",
     description:
-      "Generate PNG images in the Browser Ask Agent helper using leased or cached OpenAI/Codex credentials and show them in this browser chat. Default to GPT-Image-2.5 Flare for fast exploration and user alignment, then use Sunburst with the selected session image as a reference for polished assets, concepts, or final images. Go directly to Sunburst when the direction is already settled, and honor explicit user preferences. Ask Agent cannot save generated images to files; output_path and local reference image paths are unavailable.",
+      "Generate PNG images in the Browser Ask Agent helper using leased or cached OpenAI/Codex credentials and show them in this browser chat. Default to GPT-Image-2.6 Flare for fast exploration and user alignment, then use Sunburst with the selected session image as a reference for polished assets, concepts, or final images. Go directly to Sunburst when the direction is already settled, and honor explicit user preferences. Ask Agent cannot save generated images to files; output_path and local reference image paths are unavailable.",
     input_schema: askAgentSchema(ASK_AGENT_GENERATE_IMAGE_SCHEMA),
   },
   {

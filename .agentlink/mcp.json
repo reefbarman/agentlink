@@ -17,15 +17,15 @@
       "env": { "TESTBED_ERA": "legacy" },
       "protocol": "legacy",
       "toolPolicy": "allow"
-    },
-    "agent-comms": {
-      "command": "node",
-      "args": [
-        "/Users/tristan/workspace/agentlink-agent-comms/dist/index.js",
-        "--scope",
-        "/Users/tristan/workspace/agentlink"
-      ],
-      "toolDisclosure": "deferred"
     }
+    // "agent-comms": {
+    //   "command": "node",
+    //   "args": [
+    //     "/Users/tristan/workspace/agentlink-agent-comms/dist/index.js",
+    //     "--scope",
+    //     "/Users/tristan/workspace/agentlink"
+    //   ],
+    //   "toolDisclosure": "deferred"
+    // }
   }
 }

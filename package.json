@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink: AI Coding Agent",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
-  "version": "1.94.1",
+  "version": "1.94.7",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -843,6 +843,20 @@
               }
             }
           }
+        },
+        "agentlink.imageGeneration.credential": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "auto",
+            "openaiApiKey"
+          ],
+          "enumDescriptions": [
+            "Use the ChatGPT/Codex login when signed in, otherwise the OpenAI API key. On the ChatGPT login the backend picks the image model, size and quality and ignores masks.",
+            "Always use the saved OpenAI API key (or OPENAI_API_KEY), billed to that key, even when signed in with ChatGPT. Honours image_model, output_size, quality and masks. A key saved as embeddings only is accepted. Fails instead of falling back when no key is available."
+          ],
+          "default": "auto",
+          "description": "Which OpenAI credential `generate_image` uses in VS Code. Chat keeps using its own credential. Browser Ask Agent always uses its shared chat credential."
         },
         "agentlink.codex.useWebSocket": {
           "scope": "window",

@@ -2,7 +2,10 @@ import * as fs from "fs/promises";
 import * as path from "path";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
-import { openAiCodexAuthManager } from "../agent/providers/codex/OpenAiCodexAuthManager.js";
+import {
+  openAiCodexAuthManager,
+  type OpenAiImageGenerationCredentialPreference,
+} from "../agent/providers/codex/OpenAiCodexAuthManager.js";
 import {
   assertCodexImageGenerationOptionsSupported,
   assertCodexMaskCompositeSupported,
@@ -11,6 +14,7 @@ import {
   codexImageGenerationRequiresPerCallApproval,
   CODEX_IMAGE_GENERATION_ACTIONS,
   CODEX_IMAGE_GENERATION_BACKGROUNDS,
+  CODEX_IMAGE_GENERATION_COMPLEXITIES,
   CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS,
   CODEX_IMAGE_GENERATION_INPUT_FIDELITIES,
   CODEX_IMAGE_GENERATION_MAX_COUNT,
@@ -23,10 +27,12 @@ import {
   validateCodexMaskedEdit,
   type CodexImageGenerationAction,
   type CodexImageGenerationBackground,
+  type CodexImageGenerationComplexity,
   type CodexImageGenerationInputFidelity,
   type CodexImageGenerationModel,
   type CodexImageGenerationOptions,
   type CodexImageGenerationOutputFormat,
+  type CodexServedImageTool,
   type CodexImageGenerationQuality,
   parseCodexImageGenerationSse,
   type CodexGeneratedImage,
@@ -45,6 +51,11 @@ const DEFAULT_TIMEOUT_MS = CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS;
 const DEFAULT_RECENT_IMAGE_COUNT = 4;
 const MAX_REFERENCE_IMAGES = CODEX_IMAGE_GENERATION_MAX_REFERENCE_IMAGES;
 
+export interface GenerateImageHandlerOptions {
+  /** Value of the `agentlink.imageGeneration.credential` setting. */
+  credentialPreference?: OpenAiImageGenerationCredentialPreference;
+}
+
 type GenerateImageParams = {
   prompt?: unknown;
   image_model?: unknown;
@@ -57,6 +68,7 @@ type GenerateImageParams = {
   output_compression?: unknown;
   action?: unknown;
   input_fidelity?: unknown;
+  complexity?: unknown;
   edit_image_path?: unknown;
   edit_image_id?: unknown;
   mask_image_path?: unknown;
@@ -447,6 +459,15 @@ async function resolveOutputTargets(
 
 export { buildCodexImageGenerationRequestBody as buildRequestBodyForTest } from "../core/model/providers/codex/imageGeneration.js";
 
+/** Session grant that also covers xhigh/max quality and large output sizes. */
+const GENERATE_IMAGE_ADVANCED_SESSION_APPROVAL = "generate_image:advanced";
+
+const GENERATE_IMAGE_APPROVAL_CHOICES = [
+  { label: "Generate", value: "accept", isPrimary: true },
+  { label: "Generate for Session", value: "accept-session" },
+  { label: "Deny", value: "reject", isDanger: true },
+];
+
 type ImageGenerationApprovalResult = {
   approved: boolean;
   followUp?: string;
@@ -468,12 +489,20 @@ export async function requestImageGenerationApprovalForTest(params: {
   billing: string;
 }): Promise<ImageGenerationApprovalResult> {
   const options = params.options ?? {};
-  const perCallOnly = codexImageGenerationRequiresPerCallApproval(options);
+  // Costly calls (xhigh/max quality, sizes above 2560x1440) need their own
+  // session grant, given from a costly-call prompt; that grant covers all calls.
+  const advanced = codexImageGenerationRequiresPerCallApproval(options);
+  const sessionApprovalKey = advanced
+    ? GENERATE_IMAGE_ADVANCED_SESSION_APPROVAL
+    : "generate_image";
   if (
-    !perCallOnly &&
     params.approvalManager.isBuiltInToolApproved(
       params.sessionId,
-      "generate_image",
+      GENERATE_IMAGE_ADVANCED_SESSION_APPROVAL,
+    ) ||
+    params.approvalManager.isBuiltInToolApproved(
+      params.sessionId,
+      sessionApprovalKey,
     )
   ) {
     return { approved: true };
@@ -497,6 +526,7 @@ export async function requestImageGenerationApprovalForTest(params: {
     options.inputFidelity
       ? `Input fidelity: ${options.inputFidelity}`
       : undefined,
+    options.complexity ? `Complexity: ${options.complexity}` : undefined,
     params.editImage ? `Edit target: ${params.editImage.label}` : undefined,
     options.maskImage ? `Mask: ${options.maskImage.label}` : undefined,
     options.maskComposite === false
@@ -515,9 +545,9 @@ export async function requestImageGenerationApprovalForTest(params: {
     targets.length > 0
       ? "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before files are written."
       : "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before images are returned to chat.",
-    perCallOnly
-      ? "xhigh/max quality and output sizes above 2560x1440 require approval for each call."
-      : "Generate for Session also authorizes later generate_image calls in this chat, including edits, masks and new workspace image outputs. Calls using xhigh/max quality or output sizes above 2560x1440 still ask each time.",
+    advanced
+      ? "This call uses xhigh/max quality or an output size above 2560x1440. Generate for Session authorizes all later generate_image calls in this chat, including other xhigh/max quality and large-size calls, edits, masks and new workspace image outputs."
+      : "Generate for Session also authorizes later generate_image calls in this chat, including edits, masks and new workspace image outputs. Calls using xhigh/max quality or output sizes above 2560x1440 still ask until one of them is approved for the session.",
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
@@ -531,34 +561,16 @@ export async function requestImageGenerationApprovalForTest(params: {
         targetPath:
           targets[0]?.absolutePath ??
           (targets.length === 1 ? targets[0]?.relPath : undefined),
-        choices: perCallOnly
-          ? [
-              { label: "Generate", value: "accept", isPrimary: true },
-              { label: "Deny", value: "reject", isDanger: true },
-            ]
-          : [
-              { label: "Generate", value: "accept", isPrimary: true },
-              { label: "Generate for Session", value: "accept-session" },
-              { label: "Deny", value: "reject", isDanger: true },
-            ],
-        writeChoices: perCallOnly
-          ? [
-              { label: "Generate", value: "accept", isPrimary: true },
-              { label: "Deny", value: "reject", isDanger: true },
-            ]
-          : [
-              { label: "Generate", value: "accept", isPrimary: true },
-              { label: "Generate for Session", value: "accept-session" },
-              { label: "Deny", value: "reject", isDanger: true },
-            ],
+        choices: GENERATE_IMAGE_APPROVAL_CHOICES,
+        writeChoices: GENERATE_IMAGE_APPROVAL_CHOICES,
       },
       params.sessionId,
     );
     const decision = typeof raw === "string" ? raw : raw.decision;
-    if (decision === "accept-session" && !perCallOnly) {
+    if (decision === "accept-session") {
       params.approvalManager.approveBuiltInTool(
         params.sessionId,
-        "generate_image",
+        sessionApprovalKey,
       );
     }
     return {
@@ -692,6 +704,7 @@ function requestedOptionsMetadata(
       : {}),
     ...(options.action ? { action: options.action } : {}),
     ...(options.inputFidelity ? { input_fidelity: options.inputFidelity } : {}),
+    ...(options.complexity ? { complexity: options.complexity } : {}),
     ...(options.maskImage
       ? {
           mask_image: {
@@ -714,6 +727,7 @@ function buildGenerateImageSuccessResult(params: {
     eventTypes: string[];
     responseId?: string;
     usage?: Record<string, unknown>;
+    servedImageTool?: CodexServedImageTool;
     model: string;
     imageModel: CodexImageGenerationModel;
   };
@@ -751,6 +765,10 @@ function buildGenerateImageSuccessResult(params: {
             ...imageGenerationOptionMismatchFields(
               params.requestedOptions,
               result.images,
+              {
+                requestedImageModel: result.imageModel,
+                tool: result.servedImageTool,
+              },
             ),
             ...(result.responseId ? { response_id: result.responseId } : {}),
             ...(result.usage ? { usage: result.usage } : {}),
@@ -776,6 +794,7 @@ export async function handleGenerateImage(
   sessionId: string,
   onApprovalRequest?: OnApprovalRequest,
   getSessionImages?: () => SessionImageReference[],
+  handlerOptions: GenerateImageHandlerOptions = {},
 ): Promise<ToolResult> {
   try {
     const prompt = normalizePrompt(params.prompt);
@@ -814,6 +833,11 @@ export async function handleGenerateImage(
       value: params.input_fidelity,
       values: CODEX_IMAGE_GENERATION_INPUT_FIDELITIES,
       fieldName: "input_fidelity",
+    });
+    const complexity = normalizeEnum<CodexImageGenerationComplexity>({
+      value: params.complexity,
+      values: CODEX_IMAGE_GENERATION_COMPLEXITIES,
+      fieldName: "complexity",
     });
     const timeoutMs = normalizeTimeoutMs(params.timeout_seconds);
     const editImage = await resolveSingleImage({
@@ -883,6 +907,7 @@ export async function handleGenerateImage(
       ...(outputCompression !== undefined ? { outputCompression } : {}),
       ...(action ? { action } : {}),
       ...(inputFidelity ? { inputFidelity } : {}),
+      ...(complexity ? { complexity } : {}),
       ...(maskImage ? { maskImage } : {}),
       ...(maskComposite !== undefined ? { maskComposite } : {}),
     };
@@ -891,14 +916,20 @@ export async function handleGenerateImage(
       : undefined;
     const generatedImages: GeneratedImage[] = [];
 
-    let auth = await openAiCodexAuthManager.resolveModelAuth();
+    const credentialPreference = handlerOptions.credentialPreference ?? "auto";
+    let auth =
+      await openAiCodexAuthManager.resolveImageGenerationAuth(
+        credentialPreference,
+      );
     if (!auth) {
       return errorResult(
-        "OpenAI/Codex auth is not configured. Sign in with ChatGPT/Codex OAuth or add an OpenAI API key before using generate_image.",
+        credentialPreference === "openaiApiKey"
+          ? "agentlink.imageGeneration.credential is set to openaiApiKey, but no OpenAI API key is saved and OPENAI_API_KEY is not set. Add an OpenAI API key, or set the option back to auto to use the ChatGPT/Codex login."
+          : "OpenAI/Codex auth is not configured. Sign in with ChatGPT/Codex OAuth or add an OpenAI API key before using generate_image.",
       );
     }
 
-    assertCodexImageGenerationOptionsSupported(auth, options);
+    assertCodexImageGenerationOptionsSupported(auth, options, imageModel);
 
     const billing =
       auth.method === "oauth"
@@ -981,7 +1012,7 @@ export async function handleGenerateImage(
           throw new Error("Codex OAuth refresh failed after 401 response");
         }
         auth = refreshed;
-        assertCodexImageGenerationOptionsSupported(auth, options);
+        assertCodexImageGenerationOptionsSupported(auth, options, imageModel);
         try {
           const rawResult = await generateCodexImages({
             auth,
