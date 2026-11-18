@@ -63,6 +63,60 @@ describe("edit durability classification", () => {
     ).toMatchObject({ outcome: "exact", disk_changed: false });
   });
 
+  it("warns with line numbers for newly introduced escaped quotes in text files", () => {
+    const content = 'first line\nexisting "quote"\nnew \\"value\\" here\n';
+    const result = classify({
+      relativePath: "docs/example.md",
+      baselineContent: 'first line\nexisting "quote"\nplain value here\n',
+      approvedContent: content,
+      editorContent: content,
+      disk: { status: "readable", content },
+    });
+
+    expect(result.durability.status).toBe("durable");
+    expect(result.warnings).toEqual([expect.stringContaining("line 3")]);
+  });
+
+  it("does not warn about escaped quotes that already existed", () => {
+    const content = 'existing \\"quote\\"\nchanged line\n';
+    const result = classify({
+      relativePath: "notes.txt",
+      baselineContent: 'existing \\"quote\\"\nold line\n',
+      approvedContent: content,
+      editorContent: content,
+      disk: { status: "readable", content },
+    });
+
+    expect(result.warnings).toBeUndefined();
+  });
+
+  it("does not warn about escaped quotes in code files", () => {
+    const content = 'const value = "\\\\\"quoted\\\\\"";\n';
+    const result = classify({
+      relativePath: "src/example.ts",
+      baselineContent: 'const value = "quoted";\n',
+      approvedContent: content,
+      editorContent: content,
+      disk: { status: "readable", content },
+    });
+
+    expect(result.warnings).toBeUndefined();
+  });
+
+  it("warns about all escaped quotes in a newly created text file", () => {
+    const content = 'one \\"quote\\"\n\ntwo \\"quotes\\"\n';
+    const result = classify({
+      relativePath: "docs/new.mdx",
+      baselineExists: false,
+      baselineContent: "",
+      approvedContent: content,
+      editorContent: content,
+      disk: { status: "readable", content },
+    });
+
+    expect(result.warnings).toEqual([expect.stringContaining("lines 1, 3")]);
+  });
+
   it("accepts an ordinary formatter transformation with a bounded patch", () => {
     const result = classify({
       approvedContent: "const value={a:1}\n",

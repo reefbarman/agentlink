@@ -15,6 +15,7 @@ import {
   getEditDurabilityPolicy,
   normalizeEditorText,
   type EditDiskObservation,
+  type EditDurabilityClassification,
   type EditDurabilityPolicy,
 } from "../core/editDurability.js";
 import { canonicalizePath } from "../util/canonicalPath.js";
@@ -48,6 +49,16 @@ export interface CommitAndVerifyEditRequest {
 export interface CommitAndVerifyEditResult extends EditReviewResult {
   status: "accepted" | "error";
   path: string;
+}
+
+function classificationWarnings(
+  classification: EditDurabilityClassification,
+): { warnings: string[] } | Record<string, never> {
+  const warnings = [
+    ...(classification.formatOnSaveReport?.warnings ?? []),
+    ...(classification.warnings ?? []),
+  ];
+  return warnings.length > 0 ? { warnings } : {};
 }
 
 /**
@@ -480,6 +491,7 @@ async function verifyCommittedEdit(
             status: "accepted",
             path: request.relativePath,
             durability: classification.durability,
+            ...classificationWarnings(classification),
             ...(recoveredDisk.status === "readable"
               ? { finalContent: recoveredDisk.content }
               : {}),
@@ -513,6 +525,7 @@ async function verifyCommittedEdit(
       reason: classification.failureReason ?? "post_save_verification_failed",
       durability: classification.durability,
       ...classification.formatOnSaveReport,
+      ...classificationWarnings(classification),
       ...(classification.nextSteps
         ? { next_steps: classification.nextSteps }
         : {}),
@@ -525,6 +538,7 @@ async function verifyCommittedEdit(
     path: request.relativePath,
     durability: classification.durability,
     ...classification.formatOnSaveReport,
+    ...classificationWarnings(classification),
     ...(disk.status === "readable" ? { finalContent: disk.content } : {}),
   };
 }

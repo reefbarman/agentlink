@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 
 const FORMAT_ON_SAVE_PATCH_LIMIT = 4_000;
+const ESCAPED_QUOTE_WARNING_EXTENSIONS = new Set([".md", ".mdx", ".txt"]);
 const UNITY_SERIALIZATION_EXTENSIONS = new Set([
   ".meta",
   ".asset",
@@ -69,6 +70,7 @@ export interface EditDurabilityClassification {
   durability: EditDurabilityEvidence;
   expectedDiskContent: string;
   formatOnSaveReport?: FormatOnSaveReport;
+  warnings?: string[];
   failureReason?: EditDurabilityFailureReason;
   error?: string;
   nextSteps?: string[];
@@ -115,6 +117,74 @@ export function deriveExpectedDiskContent(
     return `\uFEFF${approvedContent}`;
   }
   return approvedContent;
+}
+
+export function getNewEscapedQuoteWarning(
+  relativePath: string,
+  baselineExists: boolean,
+  baselineContent: string,
+  finalContent: string,
+): string | undefined {
+  if (
+    !ESCAPED_QUOTE_WARNING_EXTENSIONS.has(
+      path.extname(relativePath).toLowerCase(),
+    )
+  ) {
+    return undefined;
+  }
+
+  const affectedLines = new Set<number>();
+  if (!baselineExists) {
+    collectEscapedQuoteLines(
+      finalContent,
+      0,
+      finalContent.length,
+      affectedLines,
+    );
+  } else {
+    const changes = diffLib.diffChars(baselineContent, finalContent, {
+      timeout: 100,
+    });
+    if (!changes) return undefined;
+
+    let finalOffset = 0;
+    for (const change of changes) {
+      if (change.removed) continue;
+      if (change.added) {
+        collectEscapedQuoteLines(
+          finalContent,
+          finalOffset,
+          finalOffset + change.value.length,
+          affectedLines,
+        );
+      }
+      finalOffset += change.value.length;
+    }
+  }
+
+  if (affectedLines.size === 0) return undefined;
+  const lines = [...affectedLines].sort((a, b) => a - b).join(", ");
+  const sequence = String.fromCharCode(92, 34);
+  return `New escaped-quote sequences (${sequence}) were saved on line${affectedLines.size === 1 ? "" : "s"} ${lines}. Check for unintended JSON escaping; this advisory warning did not change or block the edit.`;
+}
+
+function collectEscapedQuoteLines(
+  content: string,
+  changedStart: number,
+  changedEnd: number,
+  affectedLines: Set<number>,
+): void {
+  const searchStart = Math.max(0, changedStart - 1);
+  const searchEnd = Math.min(content.length - 1, changedEnd);
+  for (let index = searchStart; index < searchEnd; index++) {
+    if (
+      content[index] === "\\" &&
+      content[index + 1] === '"' &&
+      index + 1 >= changedStart
+    ) {
+      affectedLines.add(content.slice(0, index).split(/\r\n|\r|\n/).length);
+    }
+  }
 }
 
 export function createFormatOnSaveReport(
@@ -264,6 +334,13 @@ export function classifyEditDurability(
   }
 
   const finalContent = params.disk.content;
+  const escapedQuoteWarning = getNewEscapedQuoteWarning(
+    params.relativePath,
+    params.baselineExists,
+    params.baselineContent,
+    finalContent,
+  );
+  const warnings = escapedQuoteWarning ? [escapedQuoteWarning] : undefined;
   const formatOnSaveReport =
     params.saveOutcome === "returned_false" ||
     params.saveOutcome === "exception"
@@ -292,6 +369,7 @@ export function classifyEditDurability(
       expectedDiskContent,
       finalFields,
       formatOnSaveReport,
+      warnings,
       outcome: "diverged",
       reason: "editor_disk_diverged",
       error: "Editor and disk content diverged after save",
@@ -308,6 +386,7 @@ export function classifyEditDurability(
         ...finalFields,
         requires_reread: false,
       },
+      ...(warnings ? { warnings } : {}),
     };
   }
 
@@ -320,6 +399,7 @@ export function classifyEditDurability(
       expectedDiskContent,
       finalFields,
       formatOnSaveReport,
+      warnings,
       outcome: "reverted",
       reason: "save_reverted_edit",
       error: "Approved edit did not survive save",
@@ -332,6 +412,7 @@ export function classifyEditDurability(
       expectedDiskContent,
       finalFields,
       formatOnSaveReport,
+      warnings,
       outcome: "transformed",
       reason: "exact_preservation_failed",
       error: "Save changed a file that requires exact preservation",
@@ -350,6 +431,7 @@ export function classifyEditDurability(
         formatOnSaveReport?.format_on_save_exceeds_proposal === true,
     },
     ...(formatOnSaveReport ? { formatOnSaveReport } : {}),
+    ...(warnings ? { warnings } : {}),
   };
 }
 
@@ -369,6 +451,7 @@ function failedReadableClassification(params: {
     "final_exists" | "final_content_hash" | "disk_changed"
   >;
   formatOnSaveReport?: FormatOnSaveReport;
+  warnings?: string[];
   outcome: Extract<
     EditDurabilityOutcome,
     "transformed" | "reverted" | "diverged"
@@ -388,6 +471,7 @@ function failedReadableClassification(params: {
     ...(params.formatOnSaveReport
       ? { formatOnSaveReport: params.formatOnSaveReport }
       : {}),
+    ...(params.warnings ? { warnings: params.warnings } : {}),
     failureReason: params.reason,
     error: params.error,
     nextSteps: [
