@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.99.0
+
+- The routing eval harness now answers a todo-only reply with a stub result and grades the following reply, so single-call Codex models are scored fairly; it also ships the 1.97.1 dogfood version bump.
+
 ## 1.98.0
 
 - Adds a developer-only model bench script and mise task that automates benchmark runs through VS Code chat tabs, with no change to shipped products.
