@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.95.0
+
 - GPT-6.2 Astra (`gpt-6.2-astra`) and GPT-6.2 Sol (`gpt-6.2-sol`) are now in the Codex/OpenAI model picker for both ChatGPT sign-in and API keys, at the top of the list. GPT-6 Astra and GPT-6.1 Sol stay available and the default model is unchanged, because OpenAI's launch covers Plus, Pro, Enterprise and Edu plans but not Business. With an API key both use OpenAI's documented 1.05M window, 922K input cap, 128K output, `low` through `max` reasoning (default `medium`), and Fast and Ultrafast. With ChatGPT sign-in they follow Codex's catalog: Responses Lite, the `ultra` preset, a `low` default effort and an 872K window, with GPT-6.2 Sol condensing at Codex's 500K default like GPT-6.1 Sol. Background agents now prefer GPT-6.2 Astra for deep reasoning and GPT-6.2 Sol for balanced work.
 
 - `generate_image` now defaults to GPT-Image-2.6 Flare, and `image_model` accepts `gpt-image-2.6-flare` and `gpt-image-2.6-sunburst`. The GPT-Image-2.5 models are still available. This only changes which model runs with an OpenAI API key: on the ChatGPT/Codex login the backend serves its own image model. GPT-Image-2.6's SVG, GIF and markup options aren't available through `generate_image` yet. This applies in VS Code and Browser Ask Agent.

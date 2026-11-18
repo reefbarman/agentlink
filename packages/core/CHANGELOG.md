@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.56.0 — 2026-11-18
+
+- Fixes a bug where a failed disk write while creating the keychain mutation lock left a stale lock behind, which blocked Codex sign-in and token refresh until the lock was removed by hand.
+- Adds GPT-6.2 Astra and Sol to the Codex/OpenAI model picker. Also makes GPT-Image-2.6 Flare the default for generate_image, adds a complexity option, a served_image_tool field and the agentlink.imageGeneration.credential setting, and rejects input_fidelity earlier.
+
 ## 0.55.1 — 2026-11-12
 
 - Image-heavy sessions on OpenAI-compatible providers no longer exhaust memory, because request bodies are encoded into a single off-heap buffer with identical wire bytes.
