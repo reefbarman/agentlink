@@ -28,6 +28,12 @@
  * - AGENTLINK_EVAL_CODEX_ACCOUNT_ID ChatGPT account ID header for codex
  * - AGENTLINK_EVAL_REASONING_EFFORT Reasoning effort for codex (default: the
  *                            model's AgentLink default)
+ *
+ * When a reply contains only todo_write calls, the eval answers them with a
+ * stub result and also grades the next reply: single-call models cannot open
+ * the TODO list the prompt asks for and act in the same reply. Codex
+ * responses-lite models (gpt-6.x sol/astra on OAuth) are single-call: the
+ * backend rejects parallel_tool_calls=true with HTTP 400 (checked 2026-11-18).
  */
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -52,6 +58,8 @@ import { createNativeToolDisclosureSnapshot } from "../core/tools/nativeToolDisc
 import {
   GOLDEN_TASKS,
   gradeGoldenTask,
+  isTodoOnlyReply,
+  todoStubResult,
   type GoldenTask,
   type GoldenTaskGrade,
   type ObservedToolCall,
@@ -104,6 +112,8 @@ interface RunResult extends GoldenTaskGrade {
   text: string;
   /** First-response tool calls with inputs, for diagnosing failures. */
   calls: ObservedToolCall[];
+  /** The first reply was only todo_write, so the next reply was graded too. */
+  followUp?: boolean;
   durationMs: number;
   error?: string;
 }
@@ -150,15 +160,12 @@ async function buildPromptAndTools(task: GoldenTask) {
   };
 }
 
-async function buildRequest(task: GoldenTask) {
-  const { systemPrompt, userContent, tools } = await buildPromptAndTools(task);
+async function buildRequest(task: GoldenTask, messages: unknown[]) {
+  const { systemPrompt, tools } = await buildPromptAndTools(task);
   return {
     model,
     max_tokens: 4096,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userContent },
-    ],
+    messages: [{ role: "system", content: systemPrompt }, ...messages],
     tools: tools.map((tool) => ({
       type: "function",
       function: {
@@ -180,9 +187,16 @@ function parseArguments(raw: unknown): unknown {
   }
 }
 
-async function requestCodex(
-  task: GoldenTask,
-): Promise<{ calls: ObservedToolCall[]; text: string }> {
+/** One model reply, plus a way to answer its calls and get the next reply. */
+interface Turn {
+  calls: ObservedToolCall[];
+  text: string;
+  answer(results: string[]): Promise<Turn>;
+}
+
+type CodexMessages = Parameters<typeof translateCodexMessages>[0];
+
+async function startCodex(task: GoldenTask): Promise<Turn> {
   const { systemPrompt, userContent, tools } = await buildPromptAndTools(task);
   const auth = {
     method: "oauth" as const,
@@ -194,42 +208,48 @@ async function requestCodex(
     auth,
     getCodexEndpointConfig(auth, randomUUID()),
   );
-  const result = await executeCodexResolvedCompletion({
-    client,
-    authMethod: "oauth",
-    model,
-    instructions: systemPrompt,
-    input: translateCodexMessages([{ role: "user", content: userContent }]),
-    state: { store: false },
-    tools,
-    ...(reasoningEffort
-      ? { reasoningEffort: reasoningEffort as CoreReasoningEffort }
-      : {}),
-    maxRetries: 1,
-  });
-  return {
-    calls: result.toolCalls.map((call) => ({
-      name: call.name,
-      input: call.input,
-    })),
-    text: result.text,
+  const send = async (messages: CodexMessages): Promise<Turn> => {
+    const result = await executeCodexResolvedCompletion({
+      client,
+      authMethod: "oauth",
+      model,
+      instructions: systemPrompt,
+      input: translateCodexMessages(messages),
+      state: { store: false },
+      tools,
+      ...(reasoningEffort
+        ? { reasoningEffort: reasoningEffort as CoreReasoningEffort }
+        : {}),
+      maxRetries: 1,
+    });
+    return {
+      calls: result.toolCalls.map((call) => ({
+        name: call.name,
+        input: call.input,
+      })),
+      text: result.text,
+      answer: async (results) =>
+        await send([
+          ...messages,
+          // Carries the provider's replay items, as a real session would.
+          result.assistantMessage,
+          {
+            role: "user",
+            content: result.toolCalls.map((call, index) => ({
+              type: "tool_result" as const,
+              tool_use_id: call.id,
+              content: results[index] ?? "",
+            })),
+          },
+        ] as CodexMessages),
+    };
   };
+  return await send([{ role: "user", content: userContent }]);
 }
 
-async function runTask(task: GoldenTask, run: number): Promise<RunResult> {
-  const startedAt = Date.now();
-  const base = { taskId: task.id, run, text: "", calls: [] };
-  try {
-    if (transport === "codex") {
-      const { calls, text } = await requestCodex(task);
-      return {
-        ...base,
-        ...gradeGoldenTask(task, calls),
-        calls,
-        text: text.slice(0, 300),
-        durationMs: Date.now() - startedAt,
-      };
-    }
+async function startChatCompletions(task: GoldenTask): Promise<Turn> {
+  const { userContent } = await buildPromptAndTools(task);
+  const send = async (messages: unknown[]): Promise<Turn> => {
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -238,7 +258,7 @@ async function runTask(task: GoldenTask, run: number): Promise<RunResult> {
           ? { authorization: `Bearer ${env.AGENTLINK_EVAL_API_KEY}` }
           : {}),
       },
-      body: JSON.stringify(await buildRequest(task)),
+      body: JSON.stringify(await buildRequest(task, messages)),
     });
     if (!response.ok) {
       throw new Error(
@@ -248,23 +268,64 @@ async function runTask(task: GoldenTask, run: number): Promise<RunResult> {
     const body = (await response.json()) as {
       choices?: {
         message?: {
+          role?: string;
           content?: string | null;
-          tool_calls?: { function?: { name?: string; arguments?: unknown } }[];
+          tool_calls?: {
+            id?: string;
+            function?: { name?: string; arguments?: unknown };
+          }[];
         };
       }[];
     };
     const message = body.choices?.[0]?.message;
-    const calls: ObservedToolCall[] = (message?.tool_calls ?? []).map(
-      (call) => ({
+    const toolCalls = message?.tool_calls ?? [];
+    return {
+      calls: toolCalls.map((call) => ({
         name: call.function?.name ?? "",
         input: parseArguments(call.function?.arguments),
-      }),
-    );
+      })),
+      text: message?.content ?? "",
+      answer: async (results) =>
+        await send([
+          ...messages,
+          { ...message, role: "assistant" },
+          ...toolCalls.map((call, index) => ({
+            role: "tool",
+            tool_call_id: call.id,
+            content: results[index] ?? "",
+          })),
+        ]),
+    };
+  };
+  return await send([{ role: "user", content: userContent }]);
+}
+
+async function runTask(task: GoldenTask, run: number): Promise<RunResult> {
+  const startedAt = Date.now();
+  const base = { taskId: task.id, run, text: "", calls: [] };
+  try {
+    const first =
+      transport === "codex"
+        ? await startCodex(task)
+        : await startChatCompletions(task);
+    // A reply that only opens the TODO list is following the prompt; grade
+    // the first real action, which single-call models can't put in the same
+    // reply.
+    const followUp = isTodoOnlyReply(first.calls)
+      ? await first.answer(
+          first.calls.map((call) => todoStubResult(call.input)),
+        )
+      : undefined;
+    const calls = [...first.calls, ...(followUp?.calls ?? [])];
     return {
       ...base,
       ...gradeGoldenTask(task, calls),
       calls,
-      text: (message?.content ?? "").slice(0, 300),
+      followUp: followUp !== undefined,
+      text: [first.text, followUp?.text]
+        .filter(Boolean)
+        .join("\n")
+        .slice(0, 300),
       durationMs: Date.now() - startedAt,
     };
   } catch (error) {
@@ -329,6 +390,8 @@ describe.skipIf(!configured)("first-turn routing eval", () => {
             family,
             transport,
             reasoningEffort: reasoningEffort ?? null,
+
+            followUps: results.filter((r) => r.followUp).length,
             promptProfile: resolvedProfile,
             harnessRevision: harnessRevision(),
             runs,

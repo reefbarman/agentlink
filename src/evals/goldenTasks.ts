@@ -269,3 +269,22 @@ export function gradeGoldenTask(
 
   return { pass: reasons.length === 0, tools, reasons };
 }
+
+/**
+ * True when a reply made only todo_write calls. Single-call transports (Codex
+ * responses-lite disables parallel tool calls) must spend their first call on
+ * the TODO list the prompt asks for, so the eval grades the following call too.
+ */
+export function isTodoOnlyReply(calls: readonly ObservedToolCall[]): boolean {
+  return calls.length > 0 && calls.every((call) => call.name === "todo_write");
+}
+
+/** A result shaped like the real todo_write tool's, for the stubbed turn. */
+export function todoStubResult(input: unknown): string {
+  const todos = Array.isArray((input as { todos?: unknown } | null)?.todos)
+    ? (input as { todos: { status?: unknown }[] }).todos
+    : [];
+  const count = (status: string) =>
+    todos.filter((todo) => todo?.status === status).length;
+  return `Updated: ${count("completed")}/${todos.length} complete, ${count("in_progress")} in progress, ${count("pending")} pending`;
+}

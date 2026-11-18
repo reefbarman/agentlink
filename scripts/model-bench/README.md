@@ -247,6 +247,7 @@ Point `--models <file>` or `MODEL_BENCH_MODELS` at a private copy for endpoints 
 ## Limits
 
 - **Routing sends one request per probe.** For Claude it goes through Meridian's chat-completions API rather than the VS Code provider. For Codex it uses AgentLink's production Codex request builder over HTTP, so it's close to what VS Code sends, but it's still a single first turn.
+- **A TODO-only first reply gets one follow-up turn.** If the first reply only calls `todo_write`, routing answers it with a stub result and grades the next reply too. GPT sol models on Codex sign-in can make only one tool call per reply (the backend rejects `parallel_tool_calls=true` with HTTP 400), so without this they'd fail every probe where the prompt also asks for a TODO list. Reports count these as `followUps`.
 - **`bench:run` drives the VS Code window you're using.** It opens background tabs and edits the fixture work folder. Avoid editing in that folder, or switching that window's approval settings, while it runs.
 - **The evaluated agent runs in this repo.** It can read `AGENTS.md` and, in principle, the bench's own checks and reference fixes.
 - **The tasks are small** and their checks and reference fixes live in this repo, where a model could find them. Treat results as directional, not a public ranking.

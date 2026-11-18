@@ -3,6 +3,8 @@ import { getAgentTools } from "../agent/toolAdapter.js";
 import {
   GOLDEN_TASKS,
   gradeGoldenTask,
+  isTodoOnlyReply,
+  todoStubResult,
   type GoldenTask,
 } from "./goldenTasks.js";
 
@@ -91,6 +93,34 @@ describe("gradeGoldenTask", () => {
       gradeGoldenTask(task({ anyOf: ["ask_user"], allowNoToolCall: true }), [])
         .pass,
     ).toBe(true);
+  });
+});
+
+describe("todo-only follow-up", () => {
+  it("detects replies that only open the TODO list", () => {
+    expect(isTodoOnlyReply([{ name: "todo_write", input: {} }])).toBe(true);
+    expect(
+      isTodoOnlyReply([
+        { name: "todo_write", input: {} },
+        { name: "read_file", input: {} },
+      ]),
+    ).toBe(false);
+    expect(isTodoOnlyReply([])).toBe(false);
+  });
+
+  it("stubs a result shaped like the real todo_write tool", () => {
+    expect(
+      todoStubResult({
+        todos: [
+          { status: "in_progress" },
+          { status: "pending" },
+          { status: "pending" },
+        ],
+      }),
+    ).toBe("Updated: 0/3 complete, 1 in progress, 2 pending");
+    expect(todoStubResult(undefined)).toBe(
+      "Updated: 0/0 complete, 0 in progress, 0 pending",
+    );
   });
 });
 
