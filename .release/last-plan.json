@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "e27c848cb3a55c0a1bea75e2e6720b42c547374d",
-  "createdAt": "2026-11-18T08:52:14.794Z",
+  "sourceSha": "ef6deec62bd3a55214e35efb1cc06de08052b186",
+  "createdAt": "2026-11-18T09:27:42.163Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,94 +10,64 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.100.0",
-      "baselineRef": "v1.100.0",
-      "reserved": "1.100.0",
-      "commits": [
-        "1efe30e542abce26ba3ec3217c4c43c08670f20e",
-        "e27c848cb3a55c0a1bea75e2e6720b42c547374d"
-      ],
-      "unknownPaths": ["mise.toml"],
+      "published": "1.101.0",
+      "baselineRef": "v1.101.0",
+      "reserved": "1.101.0",
+      "commits": ["ef6deec62bd3a55214e35efb1cc06de08052b186"],
+      "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.101.0",
-      "effectiveBump": "minor",
+      "version": "1.101.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.101.0",
+      "tag": "v1.101.1",
       "notes": [
         {
-          "sha": "1efe30e542abce26ba3ec3217c4c43c08670f20e",
-          "subject": "feat(evals): store per-request stats and add bench:compare",
-          "summary": "Adds a bench:compare developer task and per-request stats to the model-bench evaluation scripts; this is internal tooling that does not affect shipped products.",
-          "breaking": false
-        },
-        {
-          "sha": "e27c848cb3a55c0a1bea75e2e6720b42c547374d",
-          "subject": "feat(tools): warn when text-file edits introduce new escaped quotes",
-          "summary": "write_file and apply_diff now warn, without blocking the edit, when a saved .md, .mdx or .txt file introduces new backslash-quote sequences, listing the affected line numbers.",
+          "sha": "ef6deec62bd3a55214e35efb1cc06de08052b186",
+          "subject": "fix(agent): emit todo_write completion before sibling tools settle",
+          "summary": "The todo_write tool now shows as complete immediately instead of appearing to spin until long-running sibling tool calls in the same batch finish.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.100.0",
-      "baselineRef": "desktop-v0.100.0",
-      "reserved": "0.100.0",
-      "commits": [
-        "1efe30e542abce26ba3ec3217c4c43c08670f20e",
-        "e27c848cb3a55c0a1bea75e2e6720b42c547374d"
-      ],
-      "unknownPaths": ["mise.toml"],
+      "published": "0.101.0",
+      "baselineRef": "desktop-v0.101.0",
+      "reserved": "0.101.0",
+      "commits": ["ef6deec62bd3a55214e35efb1cc06de08052b186"],
+      "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.101.0",
-      "effectiveBump": "minor",
+      "version": "0.101.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.101.0",
+      "tag": "desktop-v0.101.1",
       "notes": [
         {
-          "sha": "1efe30e542abce26ba3ec3217c4c43c08670f20e",
-          "subject": "feat(evals): store per-request stats and add bench:compare",
-          "summary": "Adds a bench:compare developer task and per-request stats to the model-bench evaluation scripts; this is internal tooling that does not affect shipped products.",
-          "breaking": false
-        },
-        {
-          "sha": "e27c848cb3a55c0a1bea75e2e6720b42c547374d",
-          "subject": "feat(tools): warn when text-file edits introduce new escaped quotes",
-          "summary": "write_file and apply_diff now warn, without blocking the edit, when a saved .md, .mdx or .txt file introduces new backslash-quote sequences, listing the affected line numbers.",
+          "sha": "ef6deec62bd3a55214e35efb1cc06de08052b186",
+          "subject": "fix(agent): emit todo_write completion before sibling tools settle",
+          "summary": "The todo_write tool now shows as complete immediately instead of appearing to spin until long-running sibling tool calls in the same batch finish.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.70.0",
-      "baselineRef": "cli-v0.70.0",
-      "reserved": "0.70.0",
-      "commits": ["1efe30e542abce26ba3ec3217c4c43c08670f20e"],
-      "unknownPaths": ["mise.toml"],
+      "published": "0.71.0",
+      "baselineRef": "cli-v0.71.0",
+      "reserved": "0.71.0",
+      "commits": [],
+      "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.71.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.71.0",
-      "notes": [
-        {
-          "sha": "1efe30e542abce26ba3ec3217c4c43c08670f20e",
-          "subject": "feat(evals): store per-request stats and add bench:compare",
-          "summary": "Adds a bench:compare developer task and per-request stats to the model-bench evaluation scripts; this is internal tooling that does not affect shipped products.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
       "published": "0.57.0",
@@ -112,70 +82,19 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.70.1",
-      "baselineRef": "assistant-v0.70.1",
+      "published": "0.71.0",
+      "baselineRef": "assistant-v0.71.0",
       "reserved": "0.71.0",
-      "commits": [
-        "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
-        "b5b0088ff1bb08ee25312128b9245f38aa117689",
-        "1efe30e542abce26ba3ec3217c4c43c08670f20e",
-        "e27c848cb3a55c0a1bea75e2e6720b42c547374d"
-      ],
-      "unknownPaths": ["mise.toml"],
+      "commits": [],
+      "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.71.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": true,
-      "consumedIntent": false,
-      "tag": "assistant-v0.71.0",
-      "notes": [
-        {
-          "sha": "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
-          "subject": "fix(codex): restore prompt caching for GPT-6.2 over ChatGPT sign-in",
-          "summary": "Restores prompt caching for GPT-6.2 Sol and Astra over ChatGPT sign-in by sending tools and instructions as leading input items while keeping full Responses and parallel tool calls.",
-          "breaking": false
-        },
-        {
-          "sha": "b5b0088ff1bb08ee25312128b9245f38aa117689",
-          "subject": "feat(evals): add TODO decision-point eval and tighten TODO guidance",
-          "summary": "Tightens todo_write guidance and system prompts so models skip lists for small tasks, never send todo_write alone, and finish with completeTodos; adds a live TODO eval and bench command for developers.",
-          "breaking": false
-        },
-        {
-          "sha": "1efe30e542abce26ba3ec3217c4c43c08670f20e",
-          "subject": "feat(evals): store per-request stats and add bench:compare",
-          "summary": "Adds a bench:compare developer task and per-request stats to the model-bench evaluation scripts; this is internal tooling that does not affect shipped products.",
-          "breaking": false
-        },
-        {
-          "sha": "e27c848cb3a55c0a1bea75e2e6720b42c547374d",
-          "subject": "feat(tools): warn when text-file edits introduce new escaped quotes",
-          "summary": "write_file and apply_diff now warn, without blocking the edit, when a saved .md, .mdx or .txt file introduces new backslash-quote sequences, listing the affected line numbers.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     }
   },
   "decisions": {
-    "2061fcae351897e1be817ed1cd6a3c41d9f126a6": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Restores prompt caching for GPT-6.2 Sol and Astra over ChatGPT sign-in by sending tools and instructions as leading input items while keeping full Responses and parallel tool calls.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "b5b0088ff1bb08ee25312128b9245f38aa117689": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Tightens todo_write guidance and system prompts so models skip lists for small tasks, never send todo_write alone, and finish with completeTodos; adds a live TODO eval and bench command for developers.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
     "1efe30e542abce26ba3ec3217c4c43c08670f20e": {
       "bump": "none",
       "breakingUnits": [],
@@ -188,6 +107,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "write_file and apply_diff now warn, without blocking the edit, when a saved .md, .mdx or .txt file introduces new backslash-quote sequences, listing the affected line numbers.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ef6deec62bd3a55214e35efb1cc06de08052b186": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The todo_write tool now shows as complete immediately instead of appearing to spin until long-running sibling tool calls in the same batch finish.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

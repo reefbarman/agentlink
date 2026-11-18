@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.101.1
+
+- The todo_write tool now shows as complete immediately instead of appearing to spin until long-running sibling tool calls in the same batch finish.
+
 ## 1.101.0
 
 - Adds a bench:compare developer task and per-request stats to the model-bench evaluation scripts; this is internal tooling that does not affect shipped products.
