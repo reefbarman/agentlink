@@ -1,0 +1,17 @@
+{
+  "id": "minesweeper-app",
+  "title": "Build a Minesweeper engine, renderer and CLI from a spec",
+  "workspace": "fixtures/agent-eval-workspace/work",
+  "pristine": "fixtures/agent-eval-workspace/pristine-minesweeper-app",
+  "prompt": "In the AgentLink eval fixture workspace at fixtures/agent-eval-workspace/work, build the Minesweeper game described in fixtures/agent-eval-workspace/work/SPEC.md: the engine in src/game.js, the renderer in src/render.js and the command-line app in src/cli.js. Follow the spec exactly; it is the source of truth and the public tests only cover a few basics. Do not change src/rng.js, package.json or anything under test/. Edit only files under fixtures/agent-eval-workspace/work. Run the fixture validation command, check the app by hand with a few commands, and report what you built.",
+  "validationCommand": "npm --prefix fixtures/agent-eval-workspace/work test",
+  "expectedFiles": ["src/game.js", "src/render.js", "src/cli.js"],
+  "allowedPaths": ["src/"],
+  "protectedFiles": ["src/rng.js"],
+  "limits": { "maxMinutes": 30, "maxRequests": 80 },
+  "successCriteria": [
+    "Every behaviour in SPEC.md works: validation, flood fill, flags, chording, win and loss, seeded first-click safety, rendering and the CLI.",
+    "src/rng.js, package.json and the tests are unchanged.",
+    "The final response reports the validation command and result."
+  ]
+}

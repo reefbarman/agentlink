@@ -100,6 +100,7 @@ export function summarizeAttempts(attempts) {
       attempts: group.length,
       unassistedSolved: solved.length,
       solveRate: group.length ? solved.length / group.length : null,
+      meanScore: mean(group.map(checkScore)),
       interventions: group.length - unassisted.length,
       stopped: group.filter(
         (attempt) =>
@@ -128,6 +129,23 @@ export function summarizeAttempts(attempts) {
   return rows.sort(
     (a, b) => a.task.localeCompare(b.task) || a.label.localeCompare(b.label),
   );
+}
+
+/** Share of verifier checks passed; older attempts lack a stored score. */
+export function checkScore(attempt) {
+  const { score, checks } = attempt.verdict ?? {};
+  if (typeof score === "number") return score;
+  if (!Array.isArray(checks) || checks.length === 0) return null;
+  return checks.filter((check) => check.pass).length / checks.length;
+}
+
+function mean(values) {
+  const numbers = values.filter(
+    (value) => typeof value === "number" && Number.isFinite(value),
+  );
+  return numbers.length
+    ? numbers.reduce((sum, value) => sum + value, 0) / numbers.length
+    : null;
 }
 
 function hasIntegrityFlag(attempt) {
@@ -313,6 +331,7 @@ export function renderMarkdown({ generatedAt, routing, endToEnd, charts }) {
           "Task",
           "Model",
           "Solved",
+          "Mean check score",
           "Interventions",
           "Stopped",
           "Infra failures",
@@ -325,6 +344,7 @@ export function renderMarkdown({ generatedAt, routing, endToEnd, charts }) {
           row.task,
           row.label,
           `${row.unassistedSolved}/${row.attempts}`,
+          percent(row.meanScore),
           row.interventions,
           row.stopped,
           row.infraFailures,
@@ -337,7 +357,7 @@ export function renderMarkdown({ generatedAt, routing, endToEnd, charts }) {
         ]),
       ),
       ``,
-      `Solved means every held-out, public and static check passed without intervention. Stopped counts attempts ended by a time or request cap, a question the model needed answered, or a chat error. Infra failures (harness or gateway problems) are excluded from the attempt count. Integrity flags count attempts that changed tests, package.json or files outside the task's expected set.`,
+      `Solved means every held-out, public and static check passed without intervention. Mean check score is the average share of checks passed, which shows partial progress on longer tasks. Stopped counts attempts ended by a time or request cap, a question the model needed answered, or a chat error. Infra failures (harness or gateway problems) are excluded from the attempt count. Integrity flags count attempts that changed tests, package.json or files outside the task's expected set.`,
       ``,
     );
   } else {
@@ -419,6 +439,7 @@ ${htmlTable(
     "Task",
     "Model",
     "Solved",
+    "Mean check score",
     "Interventions",
     "Stopped",
     "Infra failures",
@@ -430,6 +451,7 @@ ${htmlTable(
     row.task,
     row.label,
     `${row.unassistedSolved}/${row.attempts}`,
+    percent(row.meanScore),
     row.interventions,
     row.stopped,
     row.infraFailures,

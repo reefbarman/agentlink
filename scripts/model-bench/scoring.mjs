@@ -36,6 +36,7 @@ export const SCORED_TASK_IDS = [
   "multi-file-refactor",
   "small-ts-bugfix",
   "tool-contract-docs",
+  "minesweeper-app",
 ];
 
 /** Every control must produce this verdict, or the task is not calibrated. */
@@ -43,6 +44,19 @@ export const CONTROL_EXPECTATIONS = {
   "no-change": false,
   partial: false,
   reference: true,
+};
+
+/**
+ * Score ranges (share of checks passed, inclusive) that controls must land in,
+ * for tasks whose partial score matters. Keeps the partial control a genuine
+ * middle-of-the-road result rather than something that fails everything.
+ */
+export const CONTROL_SCORE_RANGES = {
+  "minesweeper-app": {
+    "no-change": [0, 0.05],
+    partial: [0.4, 0.85],
+    reference: [1, 1],
+  },
 };
 
 const STATIC_CHECKS = {
@@ -134,25 +148,32 @@ export function scoreWorkspace(taskId, workDir) {
     throw new Error(`Workspace not found: ${workDir}`);
   }
   const changedFiles = diffTrees(task.pristineDir, workDir);
-  const protectedFilesChanged = changedFiles.filter(isProtectedFile);
+  const isProtected = (file) => isProtectedFile(task, file);
+  const protectedFilesChanged = changedFiles.filter(isProtected);
   const expected = new Set(task.expectedFiles ?? []);
+  const allowed = task.allowedPaths ?? [];
   const outOfScopeChanges = changedFiles.filter(
-    (file) => !isProtectedFile(file) && !expected.has(file),
+    (file) =>
+      !isProtected(file) &&
+      !expected.has(file) &&
+      !allowed.some((prefix) => file.startsWith(prefix)),
   );
 
   const verifyDir = fs.mkdtempSync(path.join(os.tmpdir(), "model-bench-"));
   try {
     copyDir(workDir, verifyDir);
-    restoreProtectedFiles(task.pristineDir, verifyDir);
+    restoreProtectedFiles(task, verifyDir);
     const checks = [
       ...runHoldout(taskId, verifyDir),
       runPublicTest(task.pristineDir, verifyDir),
       ...(STATIC_CHECKS[taskId]?.(verifyDir) ?? []),
     ];
+    const passed = checks.filter((check) => check.pass).length;
     return {
       taskId,
       verifierVersion: VERIFIER_VERSION,
-      solved: checks.length > 0 && checks.every((check) => check.pass),
+      solved: checks.length > 0 && passed === checks.length,
+      score: checks.length ? passed / checks.length : 0,
       checks,
       integrity: { protectedFilesChanged, outOfScopeChanges },
       changedFiles,
@@ -181,12 +202,19 @@ export function calibrate(taskIds = SCORED_TASK_IDS) {
           copyDir(overlay, dir);
         }
         const verdict = scoreWorkspace(taskId, dir);
+        const range = CONTROL_SCORE_RANGES[taskId]?.[control];
+        const inRange =
+          !range ||
+          (verdict.score >= range[0] - 1e-9 &&
+            verdict.score <= range[1] + 1e-9);
         rows.push({
           taskId,
           control,
           expectedSolved,
           solved: verdict.solved,
-          ok: verdict.solved === expectedSolved,
+          score: verdict.score,
+          expectedScore: range ?? null,
+          ok: verdict.solved === expectedSolved && inRange,
           failedChecks: verdict.checks
             .filter((check) => !check.pass)
             .map((check) => check.id),
@@ -263,16 +291,23 @@ function runNode(cwd, args) {
   };
 }
 
-function isProtectedFile(file) {
-  return file === "package.json" || file.startsWith("test/");
+/** Tests, package.json and any task-provided files the agent must not edit. */
+function isProtectedFile(task, file) {
+  return (
+    file === "package.json" ||
+    file.startsWith("test/") ||
+    (task.protectedFiles ?? []).includes(file)
+  );
 }
 
-function restoreProtectedFiles(pristineDir, verifyDir) {
+function restoreProtectedFiles(task, verifyDir) {
   fs.rmSync(path.join(verifyDir, "test"), { recursive: true, force: true });
-  for (const file of listFiles(pristineDir).filter(isProtectedFile)) {
+  for (const file of listFiles(task.pristineDir).filter((entry) =>
+    isProtectedFile(task, entry),
+  )) {
     const target = path.join(verifyDir, file);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.copyFileSync(path.join(pristineDir, file), target);
+    fs.copyFileSync(path.join(task.pristineDir, file), target);
   }
 }
 

@@ -18,6 +18,8 @@
 //       [--max-requests n] [--on-input stop|wait] [--keep-tabs] [--dry-run]
 //                                     Run every task for every model in new VS Code
 //                                     chat tabs, in a balanced order, scoring each.
+//                                     Caps default to each task's "limits" (else 10
+//                                     min, 20 requests); the flags override all tasks.
 //   routing [--models <file>] [--only a,b] [--runs n]
 //           [--profiles compatibility,reasoning] [--tasks a,b]
 //                                     Run the first-turn routing eval per model.
@@ -40,7 +42,7 @@ import {
   loadTask,
   scoreWorkspace,
 } from "./scoring.mjs";
-import { buildSchedule, runAttempt } from "./runner.mjs";
+import { buildSchedule, resolveLimits, runAttempt } from "./runner.mjs";
 import { createGatewayClient, findGatewayInstance } from "./gateway.mjs";
 import { findTaskSessions, listSessions } from "./sessions.mjs";
 
@@ -112,6 +114,8 @@ function runCalibrate(args) {
       control: row.control,
       expected: row.expectedSolved ? "solved" : "unsolved",
       actual: row.solved ? "solved" : "unsolved",
+      score: row.score.toFixed(2),
+      expectedScore: row.expectedScore ? row.expectedScore.join("-") : "",
       ok: row.ok ? "yes" : "NO",
       failedChecks: row.failedChecks.join(", "),
     })),
@@ -324,8 +328,9 @@ function recordAttempt({
     JSON.stringify(attempt, null, 2),
   );
 
+  const passedChecks = verdict.checks.filter((check) => check.pass).length;
   console.log(
-    `${verdict.solved ? "SOLVED" : "NOT SOLVED"}  ${taskId}  (${label})`,
+    `${verdict.solved ? "SOLVED" : "NOT SOLVED"}  ${taskId}  (${label})  ${passedChecks}/${verdict.checks.length} checks`,
   );
   for (const check of verdict.checks) {
     console.log(
@@ -383,24 +388,25 @@ async function runCampaign(args) {
   taskIds.forEach((taskId) => loadTask(taskId));
   const rounds = Math.max(1, Number(args.rounds ?? 2) || 2);
   const schedule = buildSchedule(models, taskIds, rounds);
-  const limits = {
-    maxMs: (Number(args["max-minutes"] ?? 10) || 10) * 60_000,
-    maxRequests: Number(args["max-requests"] ?? 20) || 20,
-  };
+  const limitsFor = (taskId) => resolveLimits(loadTask(taskId), args);
   const onInput = args["on-input"] === "wait" ? "wait" : "stop";
 
   console.log(
-    `${schedule.length} attempts: ${models.length} model(s) x ${taskIds.length} task(s) x ${rounds} round(s). Caps: ${limits.maxMs / 60_000} min, ${limits.maxRequests} requests. On input: ${onInput}.`,
+    `${schedule.length} attempts: ${models.length} model(s) x ${taskIds.length} task(s) x ${rounds} round(s). On input: ${onInput}.`,
   );
   console.table(
-    schedule.map((item, index) => ({
-      "#": index + 1,
-      round: item.round,
-      task: item.taskId,
-      model: item.model.label,
-      vscodeModel: item.model.vscodeModel ?? item.model.model,
-      effort: item.model.reasoningEffort ?? "default",
-    })),
+    schedule.map((item, index) => {
+      const limits = limitsFor(item.taskId);
+      return {
+        "#": index + 1,
+        round: item.round,
+        task: item.taskId,
+        model: item.model.label,
+        vscodeModel: item.model.vscodeModel ?? item.model.model,
+        effort: item.model.reasoningEffort ?? "default",
+        caps: `${limits.maxMs / 60_000} min, ${limits.maxRequests} req`,
+      };
+    }),
   );
   if (args["dry-run"]) return;
 
@@ -421,7 +427,7 @@ async function runCampaign(args) {
           path.join(HISTORY_DIR, sessionId, "activity-trace-summary.json"),
         ),
       record: recordAttempt,
-      limits,
+      limits: limitsFor(item.taskId),
       onInput,
       keepTabs: Boolean(args["keep-tabs"]),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -436,6 +442,10 @@ async function runCampaign(args) {
       task: item.taskId,
       model: item.model.label,
       solved: result.verdict?.solved ? "yes" : "no",
+      score:
+        typeof result.verdict?.score === "number"
+          ? result.verdict.score.toFixed(2)
+          : "n/a",
       ended: result.terminalReason,
       requests: result.trace?.apiCalls ?? "n/a",
     })),

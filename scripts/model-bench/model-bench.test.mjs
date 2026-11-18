@@ -2,17 +2,24 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import {
+  SCORED_TASK_IDS,
+  calibrate,
+  copyDir,
+  loadTask,
+  scoreWorkspace,
+} from "./scoring.mjs";
 import { afterEach, test } from "node:test";
 import {
   buildCharts,
+  checkScore,
   median,
   renderMarkdown,
   summarizeAttempts,
   summarizeRouting,
   writeReport,
 } from "./report.mjs";
-import { calibrate, copyDir, loadTask, scoreWorkspace } from "./scoring.mjs";
-import { buildSchedule, runAttempt } from "./runner.mjs";
+import { buildSchedule, resolveLimits, runAttempt } from "./runner.mjs";
 import { findTaskSessions, listSessions } from "./sessions.mjs";
 
 import assert from "node:assert/strict";
@@ -269,16 +276,70 @@ afterEach(() => {
   }
 });
 
-test("every control gets its expected verdict", () => {
+test("every control gets its expected verdict and score range", () => {
   const rows = calibrate();
-  assert.equal(rows.length, 9);
+  assert.equal(rows.length, SCORED_TASK_IDS.length * 3);
   for (const row of rows) {
-    assert.equal(
-      row.solved,
-      row.expectedSolved,
-      `${row.taskId}/${row.control} failed: ${row.failedChecks.join(", ")}`,
+    assert.ok(
+      row.ok,
+      `${row.taskId}/${row.control}: solved=${row.solved} score=${row.score} failed: ${row.failedChecks.join(", ")}`,
     );
   }
+  const partial = rows.find(
+    (row) => row.taskId === "minesweeper-app" && row.control === "partial",
+  );
+  assert.ok(partial.score > 0.4 && partial.score < 0.85);
+});
+
+test("minesweeper verifier restores the provided rng and allows new src files", () => {
+  const dir = makeTempDirectory();
+  const task = loadTask("minesweeper-app");
+  copyDir(task.pristineDir, dir);
+  copyDir(
+    path.join(
+      path.dirname(new URL(import.meta.url).pathname),
+      "controls",
+      "minesweeper-app",
+      "reference",
+    ),
+    dir,
+  );
+  // Rigging placeMines must not change the verdict, but is flagged.
+  fs.writeFileSync(
+    path.join(dir, "src", "rng.js"),
+    "export const placeMines = () => [];\n",
+  );
+  fs.writeFileSync(path.join(dir, "src", "helpers.js"), "export {};\n");
+  const verdict = scoreWorkspace("minesweeper-app", dir);
+  assert.equal(verdict.solved, true);
+  assert.equal(verdict.score, 1);
+  assert.deepEqual(verdict.integrity.protectedFilesChanged, ["src/rng.js"]);
+  assert.deepEqual(verdict.integrity.outOfScopeChanges, []);
+});
+
+test("per-task limits apply unless a flag overrides them", () => {
+  const long = { limits: { maxMinutes: 30, maxRequests: 80 } };
+  assert.deepEqual(resolveLimits(long), { maxMs: 1_800_000, maxRequests: 80 });
+  assert.deepEqual(resolveLimits({}), { maxMs: 600_000, maxRequests: 20 });
+  assert.deepEqual(resolveLimits(long, { "max-minutes": "5" }), {
+    maxMs: 300_000,
+    maxRequests: 80,
+  });
+  assert.deepEqual(resolveLimits(long, { "max-requests": true }), {
+    maxMs: 1_800_000,
+    maxRequests: 80,
+  });
+});
+
+test("check score falls back to stored checks for older attempts", () => {
+  assert.equal(checkScore({ verdict: { score: 0.5 } }), 0.5);
+  assert.equal(
+    checkScore({
+      verdict: { checks: [{ pass: true }, { pass: false }, { pass: true }] },
+    }),
+    2 / 3,
+  );
+  assert.equal(checkScore({ verdict: {} }), null);
 });
 
 test("edited tests cannot award a pass and are flagged", () => {

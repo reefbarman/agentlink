@@ -43,6 +43,31 @@ function focusedSelection(state) {
   };
 }
 
+export const DEFAULT_LIMITS = { maxMinutes: 10, maxRequests: 20 };
+
+/**
+ * Caps for one task: `--max-minutes` / `--max-requests` win, then the task's
+ * own `limits`, then DEFAULT_LIMITS. Longer tasks declare bigger caps so a
+ * campaign can mix them with short ones.
+ */
+export function resolveLimits(task, args = {}) {
+  const pick = (flag, key) => {
+    for (const value of [
+      args[flag],
+      task?.limits?.[key],
+      DEFAULT_LIMITS[key],
+    ]) {
+      const number = Number(value);
+      if (value !== undefined && value !== true && number > 0) return number;
+    }
+    return DEFAULT_LIMITS[key];
+  };
+  return {
+    maxMs: pick("max-minutes", "maxMinutes") * 60_000,
+    maxRequests: pick("max-requests", "maxRequests"),
+  };
+}
+
 /**
  * Run one attempt in a new chat tab and record it.
  * @returns the recorder's result plus terminalReason.

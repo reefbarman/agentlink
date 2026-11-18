@@ -27,7 +27,7 @@ All output goes to `telemetry-reports/model-bench/` (Git-ignored).
    mise run bench:calibrate
    ```
 
-   Expect `All 9 controls calibrated.` If not, don't trust any scores until it's fixed.
+   Expect `All 12 controls calibrated.` If not, don't trust any scores until it's fixed.
 
 3. **Make sure each model is reachable** (routing only):
    - **Claude models** go through Meridian at `http://127.0.0.1:3456/v1`. Check `curl http://127.0.0.1:3456/health`.
@@ -64,11 +64,23 @@ Each run writes a JSON report to `telemetry-reports/model-bench/routing/`. Error
 
 ## Step 2: End-to-end tasks (automated)
 
-There are three tasks: `multi-file-refactor`, `small-ts-bugfix`, `tool-contract-docs`. One command runs every task for every model in `models.json`:
+There are four tasks:
+
+| Task                  | Size  | What the model does                                                                                    | Caps           |
+| --------------------- | ----- | ------------------------------------------------------------------------------------------------------ | -------------- |
+| `small-ts-bugfix`     | Small | Fix a cart total that can go negative                                                                  | 10 min, 20 req |
+| `multi-file-refactor` | Small | Rename money helpers across several files                                                              | 10 min, 20 req |
+| `tool-contract-docs`  | Small | Add a tool parameter and document it                                                                   | 10 min, 20 req |
+| `minesweeper-app`     | Long  | Build a Minesweeper engine, text renderer and CLI from `SPEC.md`, checked by 35 hidden behaviour tests | 30 min, 80 req |
+
+The small tasks are quick and every strong model tends to solve them, so they mostly show efficiency. `minesweeper-app` is the one that separates models: its hidden checks cover validation, flood fill on a 200 x 200 board, flags, chording, win and loss, seeded first-click safety and the CLI, and the report shows the **share of checks passed**, not just solved or not.
+
+One command runs every task for every model in `models.json`:
 
 ```sh
-mise run bench:run --dry-run   # show the schedule, change nothing
-mise run bench:run             # 3 tasks x 3 models x 2 rounds = 18 attempts
+mise run bench:run --dry-run   # show the schedule and caps, change nothing
+mise run bench:run             # 4 tasks x 3 models x 2 rounds = 24 attempts
+mise run bench:run --tasks minesweeper-app   # just the long task
 ```
 
 **What it does for each attempt**, through the VS Code window that has this repo open:
@@ -85,8 +97,8 @@ The order is balanced: within each round, every task rotates the model order, so
 
 | Ended as      | When                                                             | Counts as                                                                                                                           |
 | ------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `time_cap`    | Longer than `--max-minutes` (default 10)                         | An unsolved attempt, unless the work was already done                                                                               |
-| `request_cap` | More than `--max-requests` model requests (default 20)           | Same                                                                                                                                |
+| `time_cap`    | Longer than the task's time cap (see the table above)            | An unsolved attempt, unless the work was already done                                                                               |
+| `request_cap` | More model requests than the task's request cap                  | Same                                                                                                                                |
 | `needs_input` | The model asks a question or a human approval is needed          | Same. Use `--on-input wait` to answer it yourself instead; the attempt is then marked as intervened, so it doesn't count as a solve |
 | `infra`       | Gateway error, the tab disappeared or the wrong model was loaded | Left out of the attempt count and shown separately                                                                                  |
 
@@ -98,7 +110,7 @@ Every attempt is still scored on the files the model left behind.
 mise run bench:run --only gpt-6.1-sol,gpt-6.2-sol   # just these models
 mise run bench:run --tasks small-ts-bugfix          # just these tasks
 mise run bench:run --rounds 3                       # more repeats (default 2)
-mise run bench:run --max-minutes 15 --max-requests 30
+mise run bench:run --max-minutes 15 --max-requests 30   # override every task's caps
 mise run bench:run --keep-tabs                      # leave finished tabs open to read
 ```
 
@@ -126,7 +138,7 @@ If you want to watch or drive a single attempt yourself, for each model and task
    - Switch to **Code** mode and select the model under test.
    - Keep reasoning effort and approval settings the same across models.
    - Paste the printed prompt **exactly**. Don't steer, hint or add an extra "continue".
-   - Wait until it finishes. A reasonable cap is about 20 requests or 10 minutes; stop it if it goes past that.
+   - Wait until it finishes. Use the task's caps from the table in Step 2 (for the small tasks, 20 requests or 10 minutes); stop it if it goes past that.
 
 3. **Score it:**
 
@@ -171,6 +183,7 @@ Routing uses the latest report per model and profile. End-to-end rows include ev
 ## Reading the results
 
 - **Verified solves** (`2/2`): solved without intervention, out of all attempts. Only bench-verified results count.
+- **Mean check score**: the average share of the verifier's checks that passed. Use it for `minesweeper-app`, where a model can get most of the way. On the small tasks it isn't meaningful (an untouched workspace already passes about half the checks), so read solves there instead.
 - **Integrity flags**: attempts that edited tests or `package.json`, or touched files outside the task. Look at these even when the task was solved.
 - **Median requests, tool calls, elapsed time**: efficiency. On these small tasks, strong models often all solve everything, so efficiency is the more useful comparison.
 - **Routing per probe**: shows which kinds of tool choice a model gets wrong, for example searching when it should read a known file.

@@ -39,6 +39,7 @@ node --experimental-strip-types scripts/agent-eval.mts report --task small-ts-bu
 - `architect-plan` — produce a no-edit implementation plan from fixture requirements and code context.
 - `tool-contract-docs` — update a tool parameter contract and companion documentation.
 - `multi-file-refactor` — rename shared helpers across a small module graph while preserving behavior.
+- `minesweeper-app` — build a Minesweeper engine, text renderer and CLI from `SPEC.md` (the long task; scored by hidden checks in `scripts/model-bench`).
 
 Do not edit any `pristine-*` directory during an evaluation run. Edit only `work/`.
 
