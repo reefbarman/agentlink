@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "cb6ab9c1592b3fc65dac475686b8e813d868eafd",
-  "createdAt": "2026-11-18T02:24:55.963Z",
+  "sourceSha": "d2094d1848947095011ff94012e2c5192aed3331",
+  "createdAt": "2026-11-18T02:54:05.045Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,73 +10,73 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.96.0",
-      "baselineRef": "v1.96.0",
-      "reserved": "1.96.0",
-      "commits": ["cb6ab9c1592b3fc65dac475686b8e813d868eafd"],
+      "published": "1.97.0",
+      "baselineRef": "v1.97.0",
+      "reserved": "1.97.0",
+      "commits": ["d2094d1848947095011ff94012e2c5192aed3331"],
       "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.97.0",
+      "version": "1.98.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.97.0",
+      "tag": "v1.98.0",
       "notes": [
         {
-          "sha": "cb6ab9c1592b3fc65dac475686b8e813d868eafd",
-          "subject": "feat(evals): run model bench routing on codex subscription and auto-detect scored sessions",
-          "summary": "Adds Codex subscription transport and session auto-detection to the internal model benchmark and routing eval tooling; no shipped product behaviour changes.",
+          "sha": "d2094d1848947095011ff94012e2c5192aed3331",
+          "subject": "feat(evals): automate model bench end-to-end runs through VS Code chat tabs",
+          "summary": "Adds a developer-only model bench script and mise task that automates benchmark runs through VS Code chat tabs, with no change to shipped products.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.96.0",
-      "baselineRef": "desktop-v0.96.0",
-      "reserved": "0.96.0",
-      "commits": ["cb6ab9c1592b3fc65dac475686b8e813d868eafd"],
+      "published": "0.97.0",
+      "baselineRef": "desktop-v0.97.0",
+      "reserved": "0.97.0",
+      "commits": ["d2094d1848947095011ff94012e2c5192aed3331"],
       "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.97.0",
+      "version": "0.98.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.97.0",
+      "tag": "desktop-v0.98.0",
       "notes": [
         {
-          "sha": "cb6ab9c1592b3fc65dac475686b8e813d868eafd",
-          "subject": "feat(evals): run model bench routing on codex subscription and auto-detect scored sessions",
-          "summary": "Adds Codex subscription transport and session auto-detection to the internal model benchmark and routing eval tooling; no shipped product behaviour changes.",
+          "sha": "d2094d1848947095011ff94012e2c5192aed3331",
+          "subject": "feat(evals): automate model bench end-to-end runs through VS Code chat tabs",
+          "summary": "Adds a developer-only model bench script and mise task that automates benchmark runs through VS Code chat tabs, with no change to shipped products.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.67.0",
-      "baselineRef": "cli-v0.67.0",
-      "reserved": "0.67.0",
-      "commits": ["cb6ab9c1592b3fc65dac475686b8e813d868eafd"],
+      "published": "0.68.0",
+      "baselineRef": "cli-v0.68.0",
+      "reserved": "0.68.0",
+      "commits": ["d2094d1848947095011ff94012e2c5192aed3331"],
       "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.68.0",
+      "version": "0.69.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.68.0",
+      "tag": "cli-v0.69.0",
       "notes": [
         {
-          "sha": "cb6ab9c1592b3fc65dac475686b8e813d868eafd",
-          "subject": "feat(evals): run model bench routing on codex subscription and auto-detect scored sessions",
-          "summary": "Adds Codex subscription transport and session auto-detection to the internal model benchmark and routing eval tooling; no shipped product behaviour changes.",
+          "sha": "d2094d1848947095011ff94012e2c5192aed3331",
+          "subject": "feat(evals): automate model bench end-to-end runs through VS Code chat tabs",
+          "summary": "Adds a developer-only model bench script and mise task that automates benchmark runs through VS Code chat tabs, with no change to shipped products.",
           "breaking": false
         }
       ]
@@ -94,25 +94,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.68.0",
-      "baselineRef": "assistant-v0.68.0",
-      "reserved": "0.68.0",
-      "commits": ["cb6ab9c1592b3fc65dac475686b8e813d868eafd"],
+      "published": "0.69.0",
+      "baselineRef": "assistant-v0.69.0",
+      "reserved": "0.69.0",
+      "commits": ["d2094d1848947095011ff94012e2c5192aed3331"],
       "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.69.0",
+      "version": "0.70.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.69.0",
+      "tag": "assistant-v0.70.0",
       "notes": [
         {
-          "sha": "cb6ab9c1592b3fc65dac475686b8e813d868eafd",
-          "subject": "feat(evals): run model bench routing on codex subscription and auto-detect scored sessions",
-          "summary": "Adds Codex subscription transport and session auto-detection to the internal model benchmark and routing eval tooling; no shipped product behaviour changes.",
+          "sha": "d2094d1848947095011ff94012e2c5192aed3331",
+          "subject": "feat(evals): automate model bench end-to-end runs through VS Code chat tabs",
+          "summary": "Adds a developer-only model bench script and mise task that automates benchmark runs through VS Code chat tabs, with no change to shipped products.",
           "breaking": false
         }
       ]
@@ -131,6 +131,14 @@
       "bump": "none",
       "breakingUnits": [],
       "summary": "Adds Codex subscription transport and session auto-detection to the internal model benchmark and routing eval tooling; no shipped product behaviour changes.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "d2094d1848947095011ff94012e2c5192aed3331": {
+      "bump": "none",
+      "breakingUnits": [],
+      "summary": "Adds a developer-only model bench script and mise task that automates benchmark runs through VS Code chat tabs, with no change to shipped products.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

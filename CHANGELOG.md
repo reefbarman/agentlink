@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.98.0
+
+- Adds a developer-only model bench script and mise task that automates benchmark runs through VS Code chat tabs, with no change to shipped products.
+
 ## 1.97.0
 
 - Adds Codex subscription transport and session auto-detection to the internal model benchmark and routing eval tooling; no shipped product behaviour changes.
