@@ -56,6 +56,10 @@ export function buildOpenAiCompatibleChatRequest(args: {
     ],
     max_tokens: args.maxTokens,
     stream: true,
+    // Servers that follow the OpenAI streaming contract (including Meridian)
+    // omit the final usage chunk, and with it all token and cache counts,
+    // unless the request opts in.
+    stream_options: { include_usage: true },
     ...(args.store === false && args.supportsStoreFalse
       ? { store: false }
       : {}),

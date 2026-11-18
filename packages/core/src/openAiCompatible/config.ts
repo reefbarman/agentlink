@@ -42,6 +42,7 @@ const RESERVED_BODY_FIELDS = new Set([
   "messages",
   "max_tokens",
   "stream",
+  "stream_options",
   "store",
   "response_format",
   "tools",

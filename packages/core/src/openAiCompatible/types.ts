@@ -118,6 +118,7 @@ export interface OpenAiCompatibleChatRequest {
   messages: OpenAiCompatibleWireMessage[];
   max_tokens: number;
   stream: true;
+  stream_options: { include_usage: true };
   store?: false;
   response_format?: {
     type: "json_schema";

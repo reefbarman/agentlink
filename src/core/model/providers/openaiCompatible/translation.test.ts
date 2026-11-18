@@ -78,6 +78,7 @@ describe("buildOpenAiCompatibleChatRequest", () => {
       ],
       max_tokens: 123,
       stream: true,
+      stream_options: { include_usage: true },
       reasoning_effort: "high",
       tools: [
         {
