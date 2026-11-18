@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "fe2f48cb2e459cf292fdccaa1207e8bb8eee6070",
-  "createdAt": "2026-11-18T05:10:30.615Z",
+  "sourceSha": "b5b0088ff1bb08ee25312128b9245f38aa117689",
+  "createdAt": "2026-11-18T06:53:59.191Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,216 +10,184 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.99.0",
-      "baselineRef": "v1.99.0",
-      "reserved": "1.99.1",
+      "published": "1.99.1",
+      "baselineRef": "v1.99.1",
+      "reserved": "1.99.3",
       "commits": [
-        "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
-        "bcce696439951744ec9a52098aaa552500372bb9"
+        "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
+        "b5b0088ff1bb08ee25312128b9245f38aa117689"
       ],
-      "unknownPaths": [],
+      "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.99.1",
-      "effectiveBump": "patch",
+      "version": "1.100.0",
+      "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": true,
+      "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.99.1",
+      "tag": "v1.100.0",
       "notes": [
         {
-          "sha": "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
-          "subject": "fix(openai-compatible): request usage in streamed chat responses",
-          "summary": "OpenAI-compatible streamed chat requests now ask for usage data, so servers like Meridian report accurate token and cache counts; stream_options is also reserved against body mapping collisions.",
+          "sha": "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
+          "subject": "fix(codex): restore prompt caching for GPT-6.2 over ChatGPT sign-in",
+          "summary": "Restores prompt caching for GPT-6.2 Sol and Astra over ChatGPT sign-in by sending tools and instructions as leading input items while keeping full Responses and parallel tool calls.",
           "breaking": false
         },
         {
-          "sha": "bcce696439951744ec9a52098aaa552500372bb9",
-          "subject": "fix(codex): use full Responses for GPT-6.x OAuth models",
-          "summary": "GPT-6.x Astra and Sol models over ChatGPT sign-in now use full Responses instead of Responses Lite, so they can make multiple parallel tool calls in one reply.",
+          "sha": "b5b0088ff1bb08ee25312128b9245f38aa117689",
+          "subject": "feat(evals): add TODO decision-point eval and tighten TODO guidance",
+          "summary": "Tightens todo_write guidance and system prompts so models skip lists for small tasks, never send todo_write alone, and finish with completeTodos; adds a live TODO eval and bench command for developers.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.99.0",
-      "baselineRef": "desktop-v0.99.0",
-      "reserved": "0.99.0",
+      "published": "0.99.1",
+      "baselineRef": "desktop-v0.99.1",
+      "reserved": "0.99.1",
       "commits": [
-        "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
-        "bcce696439951744ec9a52098aaa552500372bb9"
+        "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
+        "b5b0088ff1bb08ee25312128b9245f38aa117689"
       ],
-      "unknownPaths": [],
+      "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.99.1",
-      "effectiveBump": "patch",
+      "version": "0.100.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.99.1",
+      "tag": "desktop-v0.100.0",
       "notes": [
         {
-          "sha": "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
-          "subject": "fix(openai-compatible): request usage in streamed chat responses",
-          "summary": "OpenAI-compatible streamed chat requests now ask for usage data, so servers like Meridian report accurate token and cache counts; stream_options is also reserved against body mapping collisions.",
+          "sha": "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
+          "subject": "fix(codex): restore prompt caching for GPT-6.2 over ChatGPT sign-in",
+          "summary": "Restores prompt caching for GPT-6.2 Sol and Astra over ChatGPT sign-in by sending tools and instructions as leading input items while keeping full Responses and parallel tool calls.",
           "breaking": false
         },
         {
-          "sha": "bcce696439951744ec9a52098aaa552500372bb9",
-          "subject": "fix(codex): use full Responses for GPT-6.x OAuth models",
-          "summary": "GPT-6.x Astra and Sol models over ChatGPT sign-in now use full Responses instead of Responses Lite, so they can make multiple parallel tool calls in one reply.",
+          "sha": "b5b0088ff1bb08ee25312128b9245f38aa117689",
+          "subject": "feat(evals): add TODO decision-point eval and tighten TODO guidance",
+          "summary": "Tightens todo_write guidance and system prompts so models skip lists for small tasks, never send todo_write alone, and finish with completeTodos; adds a live TODO eval and bench command for developers.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.69.0",
-      "baselineRef": "cli-v0.69.0",
-      "reserved": "0.69.0",
+      "published": "0.69.1",
+      "baselineRef": "cli-v0.69.1",
+      "reserved": "0.69.1",
       "commits": [
-        "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
-        "bcce696439951744ec9a52098aaa552500372bb9"
+        "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
+        "b5b0088ff1bb08ee25312128b9245f38aa117689"
       ],
-      "unknownPaths": [],
+      "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.69.1",
-      "effectiveBump": "patch",
+      "version": "0.70.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.69.1",
+      "tag": "cli-v0.70.0",
       "notes": [
         {
-          "sha": "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
-          "subject": "fix(openai-compatible): request usage in streamed chat responses",
-          "summary": "OpenAI-compatible streamed chat requests now ask for usage data, so servers like Meridian report accurate token and cache counts; stream_options is also reserved against body mapping collisions.",
+          "sha": "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
+          "subject": "fix(codex): restore prompt caching for GPT-6.2 over ChatGPT sign-in",
+          "summary": "Restores prompt caching for GPT-6.2 Sol and Astra over ChatGPT sign-in by sending tools and instructions as leading input items while keeping full Responses and parallel tool calls.",
           "breaking": false
         },
         {
-          "sha": "bcce696439951744ec9a52098aaa552500372bb9",
-          "subject": "fix(codex): use full Responses for GPT-6.x OAuth models",
-          "summary": "GPT-6.x Astra and Sol models over ChatGPT sign-in now use full Responses instead of Responses Lite, so they can make multiple parallel tool calls in one reply.",
+          "sha": "b5b0088ff1bb08ee25312128b9245f38aa117689",
+          "subject": "feat(evals): add TODO decision-point eval and tighten TODO guidance",
+          "summary": "Tightens todo_write guidance and system prompts so models skip lists for small tasks, never send todo_write alone, and finish with completeTodos; adds a live TODO eval and bench command for developers.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.56.0",
-      "baselineRef": "sdk-v0.56.0",
-      "reserved": "0.56.0",
+      "published": "0.56.1",
+      "baselineRef": "sdk-v0.56.1",
+      "reserved": "0.56.1",
       "commits": [
-        "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
-        "bcce696439951744ec9a52098aaa552500372bb9"
+        "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
+        "b5b0088ff1bb08ee25312128b9245f38aa117689"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.56.1",
-      "effectiveBump": "patch",
+      "version": "0.57.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.56.1",
+      "tag": "sdk-v0.57.0",
       "notes": [
         {
-          "sha": "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
-          "subject": "fix(openai-compatible): request usage in streamed chat responses",
-          "summary": "OpenAI-compatible streamed chat requests now ask for usage data, so servers like Meridian report accurate token and cache counts; stream_options is also reserved against body mapping collisions.",
+          "sha": "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
+          "subject": "fix(codex): restore prompt caching for GPT-6.2 over ChatGPT sign-in",
+          "summary": "Restores prompt caching for GPT-6.2 Sol and Astra over ChatGPT sign-in by sending tools and instructions as leading input items while keeping full Responses and parallel tool calls.",
           "breaking": false
         },
         {
-          "sha": "bcce696439951744ec9a52098aaa552500372bb9",
-          "subject": "fix(codex): use full Responses for GPT-6.x OAuth models",
-          "summary": "GPT-6.x Astra and Sol models over ChatGPT sign-in now use full Responses instead of Responses Lite, so they can make multiple parallel tool calls in one reply.",
+          "sha": "b5b0088ff1bb08ee25312128b9245f38aa117689",
+          "subject": "feat(evals): add TODO decision-point eval and tighten TODO guidance",
+          "summary": "Tightens todo_write guidance and system prompts so models skip lists for small tasks, never send todo_write alone, and finish with completeTodos; adds a live TODO eval and bench command for developers.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.70.0",
-      "baselineRef": "assistant-v0.70.0",
-      "reserved": "0.70.0",
+      "published": "0.70.1",
+      "baselineRef": "assistant-v0.70.1",
+      "reserved": "0.70.1",
       "commits": [
-        "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
-        "bcce696439951744ec9a52098aaa552500372bb9"
+        "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
+        "b5b0088ff1bb08ee25312128b9245f38aa117689"
       ],
-      "unknownPaths": [],
+      "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.70.1",
-      "effectiveBump": "patch",
+      "version": "0.71.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.70.1",
+      "tag": "assistant-v0.71.0",
       "notes": [
         {
-          "sha": "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
-          "subject": "fix(openai-compatible): request usage in streamed chat responses",
-          "summary": "OpenAI-compatible streamed chat requests now ask for usage data, so servers like Meridian report accurate token and cache counts; stream_options is also reserved against body mapping collisions.",
+          "sha": "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
+          "subject": "fix(codex): restore prompt caching for GPT-6.2 over ChatGPT sign-in",
+          "summary": "Restores prompt caching for GPT-6.2 Sol and Astra over ChatGPT sign-in by sending tools and instructions as leading input items while keeping full Responses and parallel tool calls.",
           "breaking": false
         },
         {
-          "sha": "bcce696439951744ec9a52098aaa552500372bb9",
-          "subject": "fix(codex): use full Responses for GPT-6.x OAuth models",
-          "summary": "GPT-6.x Astra and Sol models over ChatGPT sign-in now use full Responses instead of Responses Lite, so they can make multiple parallel tool calls in one reply.",
+          "sha": "b5b0088ff1bb08ee25312128b9245f38aa117689",
+          "subject": "feat(evals): add TODO decision-point eval and tighten TODO guidance",
+          "summary": "Tightens todo_write guidance and system prompts so models skip lists for small tasks, never send todo_write alone, and finish with completeTodos; adds a live TODO eval and bench command for developers.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "bb19d92bc1c6d954f8e429093f3847c9ead299fe": {
+    "2061fcae351897e1be817ed1cd6a3c41d9f126a6": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "The routing eval harness now answers a todo-only reply with a stub result and grades the following reply, so single-call Codex models are scored fairly; it also ships the 1.97.1 dogfood version bump.",
+      "summary": "Restores prompt caching for GPT-6.2 Sol and Astra over ChatGPT sign-in by sending tools and instructions as leading input items while keeping full Responses and parallel tool calls.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f": {
-      "bump": "none",
-      "breakingUnits": [],
-      "summary": "Adds a developer-only model bench (scripts, fixtures, mise tasks) and extra metadata and report-dir options for the routing eval; none of it ships in the product.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "cb6ab9c1592b3fc65dac475686b8e813d868eafd": {
-      "bump": "none",
-      "breakingUnits": [],
-      "summary": "Adds Codex subscription transport and session auto-detection to the internal model benchmark and routing eval tooling; no shipped product behaviour changes.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "d2094d1848947095011ff94012e2c5192aed3331": {
-      "bump": "none",
-      "breakingUnits": [],
-      "summary": "Adds a developer-only model bench script and mise task that automates benchmark runs through VS Code chat tabs, with no change to shipped products.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3": {
+    "b5b0088ff1bb08ee25312128b9245f38aa117689": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "OpenAI-compatible streamed chat requests now ask for usage data, so servers like Meridian report accurate token and cache counts; stream_options is also reserved against body mapping collisions.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "bcce696439951744ec9a52098aaa552500372bb9": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "GPT-6.x Astra and Sol models over ChatGPT sign-in now use full Responses instead of Responses Lite, so they can make multiple parallel tool calls in one reply.",
+      "summary": "Tightens todo_write guidance and system prompts so models skip lists for small tasks, never send todo_write alone, and finish with completeTodos; adds a live TODO eval and bench command for developers.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

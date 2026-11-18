@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.100.0
+
 - Restored prompt caching for GPT-6.2 Sol and GPT-6.2 Astra over ChatGPT/Codex sign-in. With separate `tools` and `instructions` fields, the backend reused only about half of the fixed prompt for these models (about 55% of input cached against about 92% for GPT-6.1 Sol), so every turn re-read the tool definitions. They now send tools and instructions at the start of the conversation, as Responses Lite does, while staying on full Responses with parallel tool calls. Hosted web search turns and API-key requests are unchanged.
 - Tightened TODO guidance in the `todo_write` tool description, the full system prompt and the short reasoning prompt: skip the list for small, well-specified tasks, never send `todo_write` alone (pair it with the next real action), update only when an item finishes or the plan changes, and finish with `set_task_status` `completeTodos=true` instead of a final `todo_write`. GPT models previously spent several replies per task on TODO updates alone.
 - Added a live TODO decision-point eval (`npm run eval:todos`, `mise run bench:todos`) and TODO metrics in the model bench report, including replies spent only on `todo_write`.

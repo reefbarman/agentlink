@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.57.0 — 2026-11-18
+
+- Restores prompt caching for GPT-6.2 Sol and Astra over ChatGPT sign-in by sending tools and instructions as leading input items while keeping full Responses and parallel tool calls.
+- Tightens todo_write guidance and system prompts so models skip lists for small tasks, never send todo_write alone, and finish with completeTodos; adds a live TODO eval and bench command for developers.
+
 ## 0.56.1 — 2026-11-18
 
 - OpenAI-compatible streamed chat requests now ask for usage data, so servers like Meridian report accurate token and cache counts; stream_options is also reserved against body mapping collisions.
