@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.99.1
+
 - GPT-6.2 Astra, GPT-6.2 Sol, GPT-6 Astra and GPT-6.1 Sol now use the full Responses API over ChatGPT/Codex sign-in instead of Responses Lite, so they can call several tools in one reply instead of one per request. Lite forces `parallel_tool_calls: false` and is now kept only for models the backend requires it for (none currently). The `ultra` preset still maps to `xhigh`, and API-key requests are unchanged.
 
 ## 1.99.0

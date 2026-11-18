@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "bb19d92bc1c6d954f8e429093f3847c9ead299fe",
-  "createdAt": "2026-11-18T03:44:26.600Z",
+  "sourceSha": "fe2f48cb2e459cf292fdccaa1207e8bb8eee6070",
+  "createdAt": "2026-11-18T05:10:30.615Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,67 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.98.0",
-      "baselineRef": "v1.98.0",
-      "reserved": "1.98.0",
-      "commits": ["bb19d92bc1c6d954f8e429093f3847c9ead299fe"],
+      "published": "1.99.0",
+      "baselineRef": "v1.99.0",
+      "reserved": "1.99.1",
+      "commits": [
+        "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
+        "bcce696439951744ec9a52098aaa552500372bb9"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.99.0",
-      "effectiveBump": "minor",
+      "version": "1.99.1",
+      "effectiveBump": "patch",
       "breaking": false,
-      "usedReservation": false,
+      "usedReservation": true,
       "consumedIntent": false,
-      "tag": "v1.99.0",
+      "tag": "v1.99.1",
       "notes": [
         {
-          "sha": "bb19d92bc1c6d954f8e429093f3847c9ead299fe",
-          "subject": "feat(evals): grade the next call after a todo-only routing reply",
-          "summary": "The routing eval harness now answers a todo-only reply with a stub result and grades the following reply, so single-call Codex models are scored fairly; it also ships the 1.97.1 dogfood version bump.",
+          "sha": "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
+          "subject": "fix(openai-compatible): request usage in streamed chat responses",
+          "summary": "OpenAI-compatible streamed chat requests now ask for usage data, so servers like Meridian report accurate token and cache counts; stream_options is also reserved against body mapping collisions.",
+          "breaking": false
+        },
+        {
+          "sha": "bcce696439951744ec9a52098aaa552500372bb9",
+          "subject": "fix(codex): use full Responses for GPT-6.x OAuth models",
+          "summary": "GPT-6.x Astra and Sol models over ChatGPT sign-in now use full Responses instead of Responses Lite, so they can make multiple parallel tool calls in one reply.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.98.0",
-      "baselineRef": "desktop-v0.98.0",
-      "reserved": "0.98.0",
-      "commits": ["bb19d92bc1c6d954f8e429093f3847c9ead299fe"],
+      "published": "0.99.0",
+      "baselineRef": "desktop-v0.99.0",
+      "reserved": "0.99.0",
+      "commits": [
+        "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
+        "bcce696439951744ec9a52098aaa552500372bb9"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.99.0",
-      "effectiveBump": "minor",
+      "version": "0.99.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.99.0",
+      "tag": "desktop-v0.99.1",
       "notes": [
         {
-          "sha": "bb19d92bc1c6d954f8e429093f3847c9ead299fe",
-          "subject": "feat(evals): grade the next call after a todo-only routing reply",
-          "summary": "The routing eval harness now answers a todo-only reply with a stub result and grades the following reply, so single-call Codex models are scored fairly; it also ships the 1.97.1 dogfood version bump.",
+          "sha": "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
+          "subject": "fix(openai-compatible): request usage in streamed chat responses",
+          "summary": "OpenAI-compatible streamed chat requests now ask for usage data, so servers like Meridian report accurate token and cache counts; stream_options is also reserved against body mapping collisions.",
+          "breaking": false
+        },
+        {
+          "sha": "bcce696439951744ec9a52098aaa552500372bb9",
+          "subject": "fix(codex): use full Responses for GPT-6.x OAuth models",
+          "summary": "GPT-6.x Astra and Sol models over ChatGPT sign-in now use full Responses instead of Responses Lite, so they can make multiple parallel tool calls in one reply.",
           "breaking": false
         }
       ]
@@ -61,40 +79,111 @@
       "published": "0.69.0",
       "baselineRef": "cli-v0.69.0",
       "reserved": "0.69.0",
-      "commits": [],
+      "commits": [
+        "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
+        "bcce696439951744ec9a52098aaa552500372bb9"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.69.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.69.1",
+      "notes": [
+        {
+          "sha": "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
+          "subject": "fix(openai-compatible): request usage in streamed chat responses",
+          "summary": "OpenAI-compatible streamed chat requests now ask for usage data, so servers like Meridian report accurate token and cache counts; stream_options is also reserved against body mapping collisions.",
+          "breaking": false
+        },
+        {
+          "sha": "bcce696439951744ec9a52098aaa552500372bb9",
+          "subject": "fix(codex): use full Responses for GPT-6.x OAuth models",
+          "summary": "GPT-6.x Astra and Sol models over ChatGPT sign-in now use full Responses instead of Responses Lite, so they can make multiple parallel tool calls in one reply.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.56.0",
       "baselineRef": "sdk-v0.56.0",
       "reserved": "0.56.0",
-      "commits": [],
+      "commits": [
+        "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
+        "bcce696439951744ec9a52098aaa552500372bb9"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.56.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.56.1",
+      "notes": [
+        {
+          "sha": "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
+          "subject": "fix(openai-compatible): request usage in streamed chat responses",
+          "summary": "OpenAI-compatible streamed chat requests now ask for usage data, so servers like Meridian report accurate token and cache counts; stream_options is also reserved against body mapping collisions.",
+          "breaking": false
+        },
+        {
+          "sha": "bcce696439951744ec9a52098aaa552500372bb9",
+          "subject": "fix(codex): use full Responses for GPT-6.x OAuth models",
+          "summary": "GPT-6.x Astra and Sol models over ChatGPT sign-in now use full Responses instead of Responses Lite, so they can make multiple parallel tool calls in one reply.",
+          "breaking": false
+        }
+      ]
     },
     "assistant": {
       "published": "0.70.0",
       "baselineRef": "assistant-v0.70.0",
       "reserved": "0.70.0",
-      "commits": [],
+      "commits": [
+        "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
+        "bcce696439951744ec9a52098aaa552500372bb9"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.70.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.70.1",
+      "notes": [
+        {
+          "sha": "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3",
+          "subject": "fix(openai-compatible): request usage in streamed chat responses",
+          "summary": "OpenAI-compatible streamed chat requests now ask for usage data, so servers like Meridian report accurate token and cache counts; stream_options is also reserved against body mapping collisions.",
+          "breaking": false
+        },
+        {
+          "sha": "bcce696439951744ec9a52098aaa552500372bb9",
+          "subject": "fix(codex): use full Responses for GPT-6.x OAuth models",
+          "summary": "GPT-6.x Astra and Sol models over ChatGPT sign-in now use full Responses instead of Responses Lite, so they can make multiple parallel tool calls in one reply.",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
+    "bb19d92bc1c6d954f8e429093f3847c9ead299fe": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The routing eval harness now answers a todo-only reply with a stub result and grades the following reply, so single-call Codex models are scored fairly; it also ships the 1.97.1 dogfood version bump.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
     "ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f": {
       "bump": "none",
       "breakingUnits": [],
@@ -119,10 +208,18 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "bb19d92bc1c6d954f8e429093f3847c9ead299fe": {
+    "000f0c9cc4f6f767da1aaf30d64c811b03a5e9c3": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "The routing eval harness now answers a todo-only reply with a stub result and grades the following reply, so single-call Codex models are scored fairly; it also ships the 1.97.1 dogfood version bump.",
+      "summary": "OpenAI-compatible streamed chat requests now ask for usage data, so servers like Meridian report accurate token and cache counts; stream_options is also reserved against body mapping collisions.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "bcce696439951744ec9a52098aaa552500372bb9": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "GPT-6.x Astra and Sol models over ChatGPT sign-in now use full Responses instead of Responses Lite, so they can make multiple parallel tool calls in one reply.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

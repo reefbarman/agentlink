@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.56.1 — 2026-11-18
+
+- OpenAI-compatible streamed chat requests now ask for usage data, so servers like Meridian report accurate token and cache counts; stream_options is also reserved against body mapping collisions.
+- GPT-6.x Astra and Sol models over ChatGPT sign-in now use full Responses instead of Responses Lite, so they can make multiple parallel tool calls in one reply.
+
 ## 0.56.0 — 2026-11-18
 
 - Fixes a bug where a failed disk write while creating the keychain mutation lock left a stale lock behind, which blocked Codex sign-in and token refresh until the lock was removed by hand.
