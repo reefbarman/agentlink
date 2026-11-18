@@ -1,4 +1,5 @@
 # AgentLink model bench. Extra arguments are passed through, for example:
+#   mise run bench:run --rounds 2
 #   mise run bench:prepare multi-file-refactor
 #   mise run bench:score --session <session-id>
 #   mise run bench:routing --only opus-5.5 --profiles compatibility,reasoning
@@ -15,6 +16,10 @@ run = "node scripts/model-bench/bench.mjs prepare"
 [tasks."bench:score"]
 description = "Verify the fixture work dir and record an attempt (finds the chat automatically)"
 run = "node scripts/model-bench/bench.mjs score"
+
+[tasks."bench:run"]
+description = "Run every task for every model in new VS Code chat tabs, in a balanced order, and score them"
+run = "node scripts/model-bench/bench.mjs run"
 
 [tasks."bench:sessions"]
 description = "List recent AgentLink chat sessions and their IDs"

@@ -88,16 +88,24 @@ export function summarizeAttempts(attempts) {
     groups.get(key).push(attempt);
   }
   const rows = [];
-  for (const group of groups.values()) {
+  for (const all of groups.values()) {
+    // Harness or gateway failures say nothing about the model; report them
+    // separately instead of counting them as unsolved.
+    const group = all.filter((attempt) => attempt.terminalReason !== "infra");
     const unassisted = group.filter((attempt) => !attempt.intervened);
     const solved = unassisted.filter((attempt) => attempt.verdict.solved);
     rows.push({
-      label: group[0].label,
-      task: group[0].taskId,
+      label: all[0].label,
+      task: all[0].taskId,
       attempts: group.length,
       unassistedSolved: solved.length,
       solveRate: group.length ? solved.length / group.length : null,
       interventions: group.length - unassisted.length,
+      stopped: group.filter(
+        (attempt) =>
+          attempt.terminalReason && attempt.terminalReason !== "completed",
+      ).length,
+      infraFailures: all.length - group.length,
       integrityFlags: group.filter(hasIntegrityFlag).length,
       medianApiCalls: median(group.map((attempt) => attempt.trace?.apiCalls)),
       medianToolCalls: median(group.map((attempt) => attempt.trace?.toolCalls)),
@@ -306,6 +314,8 @@ export function renderMarkdown({ generatedAt, routing, endToEnd, charts }) {
           "Model",
           "Solved",
           "Interventions",
+          "Stopped",
+          "Infra failures",
           "Integrity flags",
           "Median requests",
           "Median tool calls",
@@ -316,6 +326,8 @@ export function renderMarkdown({ generatedAt, routing, endToEnd, charts }) {
           row.label,
           `${row.unassistedSolved}/${row.attempts}`,
           row.interventions,
+          row.stopped,
+          row.infraFailures,
           row.integrityFlags,
           row.medianApiCalls ?? "n/a",
           row.medianToolCalls ?? "n/a",
@@ -325,12 +337,12 @@ export function renderMarkdown({ generatedAt, routing, endToEnd, charts }) {
         ]),
       ),
       ``,
-      `Solved means every held-out, public and static check passed without intervention. Integrity flags count attempts that changed tests, package.json or files outside the task's expected set.`,
+      `Solved means every held-out, public and static check passed without intervention. Stopped counts attempts ended by a time or request cap, a question the model needed answered, or a chat error. Infra failures (harness or gateway problems) are excluded from the attempt count. Integrity flags count attempts that changed tests, package.json or files outside the task's expected set.`,
       ``,
     );
   } else {
     lines.push(
-      `No scored attempts yet. Run \`mise run bench:prepare <task>\`, do the task in a fresh chat, then \`mise run bench:score --session <id>\`.`,
+      `No scored attempts yet. Run \`mise run bench:run\`, or \`mise run bench:prepare <task>\` and \`mise run bench:score\` by hand.`,
       ``,
     );
   }
@@ -408,6 +420,8 @@ ${htmlTable(
     "Model",
     "Solved",
     "Interventions",
+    "Stopped",
+    "Infra failures",
     "Integrity flags",
     "Median requests",
     "Median elapsed (s)",
@@ -417,6 +431,8 @@ ${htmlTable(
     row.label,
     `${row.unassistedSolved}/${row.attempts}`,
     row.interventions,
+    row.stopped,
+    row.infraFailures,
     row.integrityFlags,
     row.medianApiCalls ?? "n/a",
     row.medianElapsedSec == null ? "n/a" : Math.round(row.medianElapsedSec),

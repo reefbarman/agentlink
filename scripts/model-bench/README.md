@@ -4,10 +4,10 @@ Compare how different models perform inside AgentLink, using AgentLink's real sy
 
 The bench has two parts:
 
-| Part                 | What it measures                                                                                                                  | How it runs                                                |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| **Routing**          | Whether the model picks the right tool on its first reply, across 14 probes (`src/evals/goldenTasks.ts`). Tools are not executed. | Fully automated                                            |
-| **End-to-end tasks** | Whether the model actually completes a small coding task in a VS Code chat, and how many requests, tool calls and tokens it uses. | You paste a prompt into a fresh chat; scoring is automated |
+| Part                 | What it measures                                                                                                                  | How it runs                                                 |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| **Routing**          | Whether the model picks the right tool on its first reply, across 14 probes (`src/evals/goldenTasks.ts`). Tools are not executed. | Fully automated                                             |
+| **End-to-end tasks** | Whether the model actually completes a small coding task in a VS Code chat, and how many requests, tool calls and tokens it uses. | Fully automated with `bench:run` (or by hand if you prefer) |
 
 End-to-end results are verified by the bench, never by the agent's own claim. The scorer copies the finished workspace, restores the original tests, then runs hidden behaviour checks, the original public test and file checks. Edited tests can't earn a pass.
 
@@ -62,9 +62,58 @@ Run it natively, not in the AgentLink sandbox: it needs localhost (Meridian) and
 
 Each run writes a JSON report to `telemetry-reports/model-bench/routing/`. Errors (timeouts, HTTP failures) are counted separately and left out of the pass rate.
 
-## Step 2: End-to-end tasks (manual run, automatic scoring)
+## Step 2: End-to-end tasks (automated)
 
-There are three tasks: `multi-file-refactor`, `small-ts-bugfix`, `tool-contract-docs`. For each model and task:
+There are three tasks: `multi-file-refactor`, `small-ts-bugfix`, `tool-contract-docs`. One command runs every task for every model in `models.json`:
+
+```sh
+mise run bench:run --dry-run   # show the schedule, change nothing
+mise run bench:run             # 3 tasks x 3 models x 2 rounds = 18 attempts
+```
+
+**What it does for each attempt**, through the VS Code window that has this repo open:
+
+1. Resets `fixtures/agent-eval-workspace/work` for the task.
+2. Opens a **new chat tab in the background**. It doesn't take focus or touch the chat you're in.
+3. Sets the tab's model (`vscodeModel`, or `model`) and reasoning effort from `models.json`. If VS Code falls back to a different model, the attempt is recorded as an infra failure and the prompt is never sent.
+4. Sends the exact task prompt in Code mode.
+5. Waits until the chat finishes, then scores it, records requests, tokens and tool calls from that session, and closes the tab.
+
+The order is balanced: within each round, every task rotates the model order, so no model always goes first or last.
+
+**It stops an attempt early when:**
+
+| Ended as      | When                                                             | Counts as                                                                                                                           |
+| ------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `time_cap`    | Longer than `--max-minutes` (default 10)                         | An unsolved attempt, unless the work was already done                                                                               |
+| `request_cap` | More than `--max-requests` model requests (default 20)           | Same                                                                                                                                |
+| `needs_input` | The model asks a question or a human approval is needed          | Same. Use `--on-input wait` to answer it yourself instead; the attempt is then marked as intervened, so it doesn't count as a solve |
+| `infra`       | Gateway error, the tab disappeared or the wrong model was loaded | Left out of the attempt count and shown separately                                                                                  |
+
+Every attempt is still scored on the files the model left behind.
+
+**Options:**
+
+```sh
+mise run bench:run --only gpt-6.1-sol,gpt-6.2-sol   # just these models
+mise run bench:run --tasks small-ts-bugfix          # just these tasks
+mise run bench:run --rounds 3                       # more repeats (default 2)
+mise run bench:run --max-minutes 15 --max-requests 30
+mise run bench:run --keep-tabs                      # leave finished tabs open to read
+```
+
+**Requirements and tips:**
+
+- VS Code must be open on this repo with AgentLink running. The bench finds the window through `~/.agentlink/browser-gateways.json`, the same local bridge the browser remote view uses.
+- Run it in your own terminal (an AgentLink terminal tab is fine). If an agent runs it, it needs native, not sandboxed, execution because it talks to localhost.
+- The attempts use that window's normal settings (Approve for Me, approval policy and so on), so keep them the same for the whole campaign.
+- Leave the fixture alone while it runs. Attempts run one at a time because they share `fixtures/agent-eval-workspace/work`.
+- Ctrl+C stops the campaign. The current tab keeps running. Stop or close it in VS Code. Attempts already scored stay recorded.
+- Finished chats stay in history. Open them from the chat history to see what a model did, or use `mise run bench:sessions`.
+
+### Doing a run by hand
+
+If you want to watch or drive a single attempt yourself, for each model and task:
 
 1. **Reset the fixture and get the prompt:**
 
@@ -166,36 +215,39 @@ Use the same `MODEL_BENCH_DIR` for prepare, score and report in that campaign.
 }
 ```
 
-| Field             | Meaning                                                                                           |
-| ----------------- | ------------------------------------------------------------------------------------------------- |
-| `label`           | Name shown in reports and used by `--only`                                                        |
-| `model`           | Model ID sent to the provider                                                                     |
-| `transport`       | `codex` for the ChatGPT subscription; omit for any OpenAI-compatible `/chat/completions` endpoint |
-| `baseUrl`         | Endpoint for chat-completions models                                                              |
-| `family`          | `anthropic` or `openai` prompt tuning for chat-completions models (Codex is always `openai`)      |
-| `reasoningEffort` | Codex only, for example `medium` or `high`; omit for AgentLink's default                          |
-| `apiKeyEnv`       | Environment variable holding a bearer token for the endpoint                                      |
-| `promptProfile`   | Force `compatibility` or `reasoning`; omit for AgentLink's own choice                             |
-| `runs`            | Repeats per probe (default 2)                                                                     |
+| Field             | Meaning                                                                                                    |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| `label`           | Name shown in reports and used by `--only`                                                                 |
+| `model`           | Model ID sent to the provider                                                                              |
+| `transport`       | `codex` for the ChatGPT subscription; omit for any OpenAI-compatible `/chat/completions` endpoint          |
+| `baseUrl`         | Endpoint for chat-completions models                                                                       |
+| `family`          | `anthropic` or `openai` prompt tuning for chat-completions models (Codex is always `openai`)               |
+| `vscodeModel`     | Model ID to select in VS Code for `bench:run`, when it differs from `model`                                |
+| `reasoningEffort` | For example `medium` or `high`; omit for AgentLink's default. Used by routing (Codex only) and `bench:run` |
+| `apiKeyEnv`       | Environment variable holding a bearer token for the endpoint                                               |
+| `promptProfile`   | Force `compatibility` or `reasoning`; omit for AgentLink's own choice                                      |
+| `runs`            | Repeats per probe (default 2)                                                                              |
 
 Point `--models <file>` or `MODEL_BENCH_MODELS` at a private copy for endpoints you don't want in Git.
 
 ## All commands
 
-| Command                                | What it does                                                                                |
-| -------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `mise run bench:calibrate`             | Check every task's checks against no-change, half-done and correct controls                 |
-| `mise run bench:codex-login`           | Show or add the Codex sign-in (`--force` adds another account)                              |
-| `mise run bench:routing`               | Routing eval per model (`--only`, `--runs`, `--tasks`, `--profiles`, `--models`)            |
-| `mise run bench:prepare <task>`        | Reset the fixture and print the prompt                                                      |
-| `mise run bench:score`                 | Verify the fixture and record an attempt (`--session`, `--model`, `--intervened`, `--note`) |
-| `mise run bench:sessions`              | List recent chats and their session IDs (`--limit n`)                                       |
-| `mise run bench:report` / `bench:open` | Build (and open) the report                                                                 |
-| `mise run bench:test`                  | The bench's own tests                                                                       |
+| Command                                | What it does                                                                                                                                                                      |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mise run bench:calibrate`             | Check every task's checks against no-change, half-done and correct controls                                                                                                       |
+| `mise run bench:codex-login`           | Show or add the Codex sign-in (`--force` adds another account)                                                                                                                    |
+| `mise run bench:routing`               | Routing eval per model (`--only`, `--runs`, `--tasks`, `--profiles`, `--models`)                                                                                                  |
+| `mise run bench:run`                   | Run every task for every model in VS Code chat tabs and score them (`--only`, `--tasks`, `--rounds`, `--max-minutes`, `--max-requests`, `--on-input`, `--keep-tabs`, `--dry-run`) |
+| `mise run bench:prepare <task>`        | Reset the fixture and print the prompt                                                                                                                                            |
+| `mise run bench:score`                 | Verify the fixture and record an attempt (`--session`, `--model`, `--intervened`, `--note`)                                                                                       |
+| `mise run bench:sessions`              | List recent chats and their session IDs (`--limit n`)                                                                                                                             |
+| `mise run bench:report` / `bench:open` | Build (and open) the report                                                                                                                                                       |
+| `mise run bench:test`                  | The bench's own tests                                                                                                                                                             |
 
 ## Limits
 
 - **Routing sends one request per probe.** For Claude it goes through Meridian's chat-completions API rather than the VS Code provider. For Codex it uses AgentLink's production Codex request builder over HTTP, so it's close to what VS Code sends, but it's still a single first turn.
-- **End-to-end runs need you at the keyboard.** There's no unattended runner yet.
+- **`bench:run` drives the VS Code window you're using.** It opens background tabs and edits the fixture work folder. Avoid editing in that folder, or switching that window's approval settings, while it runs.
+- **The evaluated agent runs in this repo.** It can read `AGENTS.md` and, in principle, the bench's own checks and reference fixes.
 - **The tasks are small** and their checks and reference fixes live in this repo, where a model could find them. Treat results as directional, not a public ranking.
 - **Changing a check means bumping `VERIFIER_VERSION`** in `scoring.mjs`. The report lists verifier versions so you don't compare across them.

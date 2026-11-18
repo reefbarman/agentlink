@@ -14,6 +14,10 @@
 //                                     Without --session, finds the chat started after
 //                                     prepare whose first message is the task prompt.
 //   sessions [--limit n]              List recent VS Code chat sessions and their IDs.
+//   run [--only a,b] [--tasks a,b] [--rounds n] [--max-minutes n]
+//       [--max-requests n] [--on-input stop|wait] [--keep-tabs] [--dry-run]
+//                                     Run every task for every model in new VS Code
+//                                     chat tabs, in a balanced order, scoring each.
 //   routing [--models <file>] [--only a,b] [--runs n]
 //           [--profiles compatibility,reasoning] [--tasks a,b]
 //                                     Run the first-turn routing eval per model.
@@ -36,6 +40,8 @@ import {
   loadTask,
   scoreWorkspace,
 } from "./scoring.mjs";
+import { buildSchedule, runAttempt } from "./runner.mjs";
+import { createGatewayClient, findGatewayInstance } from "./gateway.mjs";
 import { findTaskSessions, listSessions } from "./sessions.mjs";
 
 import { pathToFileURL } from "node:url";
@@ -83,6 +89,7 @@ async function main() {
     prepare: runPrepare,
     score: runScore,
     sessions: runSessions,
+    run: runCampaign,
     routing: runRouting,
     "codex-login": runCodexLogin,
     report: runReport,
@@ -125,6 +132,27 @@ function runPrepare(args) {
     process.exitCode = 1;
     return;
   }
+  const task = prepareTask(taskId);
+  console.log(`Reset ${path.relative(REPO_ROOT, WORK_DIR)} for ${taskId}.
+
+1. Open a NEW AgentLink chat in VS Code, select the model under test, Code mode.
+2. Paste this prompt verbatim. No steering, hints or extra "continue":
+
+${task.prompt}
+
+3. When it finishes (or hits your cap), score it:
+
+   mise run bench:score
+
+   The chat is found automatically and labelled with its model. Add
+   --intervened if you had to step in, or --session <id> if detection
+   picks the wrong chat (mise run bench:sessions lists IDs).
+
+   Or let mise run bench:run do all of this for you.`);
+}
+
+/** Reset work/ from the task's pristine copy and remember when. */
+function prepareTask(taskId) {
   const task = loadTask(taskId);
   fs.rmSync(WORK_DIR, { recursive: true, force: true });
   copyDir(task.pristineDir, WORK_DIR);
@@ -141,20 +169,7 @@ function runPrepare(args) {
       2,
     ),
   );
-  console.log(`Reset ${path.relative(REPO_ROOT, WORK_DIR)} for ${taskId}.
-
-1. Open a NEW AgentLink chat in VS Code, select the model under test, Code mode.
-2. Paste this prompt verbatim. No steering, hints or extra "continue":
-
-${task.prompt}
-
-3. When it finishes (or hits your cap), score it:
-
-   mise run bench:score
-
-   The chat is found automatically and labelled with its model. Add
-   --intervened if you had to step in, or --session <id> if detection
-   picks the wrong chat (mise run bench:sessions lists IDs).`);
+  return task;
 }
 
 function runSessions(args) {
@@ -213,11 +228,48 @@ function runScore(args) {
   if (sessionId && !args.session) {
     console.log(`Using session ${sessionId}`);
   }
+  recordAttempt({
+    taskId,
+    sessionId,
+    summaryPath: args.summary
+      ? path.resolve(REPO_ROOT, String(args.summary))
+      : undefined,
+    label: typeof args.model === "string" ? args.model : undefined,
+    intervened: args.intervened === true || args.intervened === "true",
+    note: typeof args.note === "string" ? args.note : null,
+    terminalReason: null,
+  });
+}
+
+/** Map a VS Code model ID to its models.json label so manual and automated runs group together. */
+function labelForModel(modelId) {
+  if (!modelId) return undefined;
+  const config = readJson(DEFAULT_MODELS_FILE);
+  const entry = config?.models?.find(
+    (item) => (item.vscodeModel ?? item.model) === modelId,
+  );
+  return entry?.label ?? modelId;
+}
+
+/** Snapshot work/, verify it and write attempt.json. Returns the attempt. */
+function recordAttempt({
+  taskId,
+  sessionId,
+  summaryPath,
+  label: requestedLabel,
+  intervened = false,
+  note = null,
+  terminalReason = null,
+  detail,
+}) {
+  const state = readJson(STATE_FILE);
   const session = sessionId ? loadSession(sessionId) : undefined;
-  const traceSummary = args.summary
-    ? readJson(path.resolve(REPO_ROOT, String(args.summary)))
+  const traceSummary = summaryPath
+    ? readJson(summaryPath)
     : session?.traceSummary;
-  const label = String(args.model ?? session?.metadata?.model ?? "");
+  const label = String(
+    requestedLabel ?? labelForModel(session?.metadata?.model) ?? "",
+  );
   if (!label) {
     throw new Error(
       "Could not find the chat for this attempt. Pass --session <id> (see mise run bench:sessions) or --model <label>.",
@@ -246,8 +298,9 @@ function runScore(args) {
     harnessRevision: gitRevision(),
     fixtureDigest: fixtureDigest(loadTask(taskId).pristineDir),
     preparedFixtureDigest: state?.fixtureDigest ?? null,
-    intervened: args.intervened === true || args.intervened === "true",
-    note: typeof args.note === "string" ? args.note : null,
+    intervened,
+    note: [note, detail].filter(Boolean).join("; ") || null,
+    terminalReason,
     elapsedMs:
       state?.taskId === taskId && state.preparedAt
         ? (lastEventAt ?? Date.now()) - state.preparedAt
@@ -293,7 +346,104 @@ function runScore(args) {
       "  no trace attached (no matching chat found; pass --session <id> for requests and tokens)",
     );
   }
+  if (terminalReason && terminalReason !== "completed") {
+    console.log(`  stopped: ${terminalReason}${detail ? ` (${detail})` : ""}`);
+  }
   console.log(`Recorded ${path.relative(REPO_ROOT, attemptDir)}`);
+  return attempt;
+}
+
+function loadModels(args) {
+  const modelsFile = path.resolve(
+    REPO_ROOT,
+    String(
+      args.models ?? process.env.MODEL_BENCH_MODELS ?? DEFAULT_MODELS_FILE,
+    ),
+  );
+  const config = readJson(modelsFile);
+  if (!config?.models?.length) {
+    throw new Error(`No models in ${modelsFile}`);
+  }
+  const only = args.only ? String(args.only).split(",") : undefined;
+  const models = config.models.filter(
+    (entry) => !only || only.includes(entry.label),
+  );
+  const unknown = (only ?? []).filter(
+    (label) => !config.models.some((entry) => entry.label === label),
+  );
+  if (unknown.length) {
+    throw new Error(`Unknown model label(s) in --only: ${unknown.join(", ")}`);
+  }
+  return models;
+}
+
+async function runCampaign(args) {
+  const models = loadModels(args);
+  const taskIds = args.tasks ? String(args.tasks).split(",") : SCORED_TASK_IDS;
+  taskIds.forEach((taskId) => loadTask(taskId));
+  const rounds = Math.max(1, Number(args.rounds ?? 2) || 2);
+  const schedule = buildSchedule(models, taskIds, rounds);
+  const limits = {
+    maxMs: (Number(args["max-minutes"] ?? 10) || 10) * 60_000,
+    maxRequests: Number(args["max-requests"] ?? 20) || 20,
+  };
+  const onInput = args["on-input"] === "wait" ? "wait" : "stop";
+
+  console.log(
+    `${schedule.length} attempts: ${models.length} model(s) x ${taskIds.length} task(s) x ${rounds} round(s). Caps: ${limits.maxMs / 60_000} min, ${limits.maxRequests} requests. On input: ${onInput}.`,
+  );
+  console.table(
+    schedule.map((item, index) => ({
+      "#": index + 1,
+      round: item.round,
+      task: item.taskId,
+      model: item.model.label,
+      vscodeModel: item.model.vscodeModel ?? item.model.model,
+      effort: item.model.reasoningEffort ?? "default",
+    })),
+  );
+  if (args["dry-run"]) return;
+
+  const instance = await findGatewayInstance(REPO_ROOT);
+  const client = createGatewayClient(instance);
+  const results = [];
+  for (const [index, item] of schedule.entries()) {
+    console.log(
+      `\n[${index + 1}/${schedule.length}] round ${item.round}  ${item.taskId}  ${item.model.label}`,
+    );
+    const result = await runAttempt({
+      client,
+      entry: item.model,
+      task: loadTask(item.taskId),
+      prepare: prepareTask,
+      readTrace: (sessionId) =>
+        readJson(
+          path.join(HISTORY_DIR, sessionId, "activity-trace-summary.json"),
+        ),
+      record: recordAttempt,
+      limits,
+      onInput,
+      keepTabs: Boolean(args["keep-tabs"]),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      log: (message) => console.log(message),
+    });
+    results.push({ item, result });
+  }
+
+  console.log("\nCampaign finished.");
+  console.table(
+    results.map(({ item, result }) => ({
+      task: item.taskId,
+      model: item.model.label,
+      solved: result.verdict?.solved ? "yes" : "no",
+      ended: result.terminalReason,
+      requests: result.trace?.apiCalls ?? "n/a",
+    })),
+  );
+  const { outDir } = writeReport(BENCH_DIR);
+  console.log(
+    `Report: ${path.relative(REPO_ROOT, path.join(outDir, "index.html"))}`,
+  );
 }
 
 async function codexRuntime() {
@@ -336,20 +486,7 @@ async function runCodexLogin(args) {
 }
 
 async function runRouting(args) {
-  const modelsFile = path.resolve(
-    REPO_ROOT,
-    String(
-      args.models ?? process.env.MODEL_BENCH_MODELS ?? DEFAULT_MODELS_FILE,
-    ),
-  );
-  const config = readJson(modelsFile);
-  if (!config?.models?.length) {
-    throw new Error(`No models in ${modelsFile}`);
-  }
-  const only = args.only ? String(args.only).split(",") : undefined;
-  const models = config.models.filter(
-    (entry) => !only || only.includes(entry.label),
-  );
+  const models = loadModels(args);
   const profiles = args.profiles
     ? String(args.profiles).split(",")
     : [undefined];

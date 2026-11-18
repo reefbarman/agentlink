@@ -12,10 +12,211 @@ import {
   writeReport,
 } from "./report.mjs";
 import { calibrate, copyDir, loadTask, scoreWorkspace } from "./scoring.mjs";
+import { buildSchedule, runAttempt } from "./runner.mjs";
 import { findTaskSessions, listSessions } from "./sessions.mjs";
 
 import assert from "node:assert/strict";
 import { parseArgs } from "./bench.mjs";
+
+test("schedule rotates model order so each model takes each slot", () => {
+  const schedule = buildSchedule(
+    [{ label: "a" }, { label: "b" }, { label: "c" }],
+    ["t1", "t2", "t3"],
+    2,
+  );
+  assert.equal(schedule.length, 18);
+  const firstRound = schedule.filter((item) => item.round === 1);
+  for (const label of ["a", "b", "c"]) {
+    const slots = ["t1", "t2", "t3"].map((taskId) =>
+      firstRound
+        .filter((item) => item.taskId === taskId)
+        .findIndex((item) => item.model.label === label),
+    );
+    assert.deepEqual(
+      [...slots].sort(),
+      [0, 1, 2],
+      `${label} slots ${slots.join(",")}`,
+    );
+  }
+});
+
+/**
+ * Fake gateway: a foreground chat plus one new tab whose status follows
+ * `script`, one entry per poll after send.
+ */
+function fakeGateway({ script, resolvedModel }) {
+  const calls = [];
+  const tabs = [
+    {
+      tabId: "fg-tab",
+      sessionId: "fg-session",
+      status: "streaming",
+      busy: true,
+      model: "claude-opus-5-5",
+    },
+  ];
+  let polls = -1;
+  let sent = false;
+  const state = () => {
+    if (sent) {
+      polls++;
+      const step = script[Math.min(polls, script.length - 1)];
+      Object.assign(tabs[1], step);
+    }
+    return {
+      session: {
+        chatWorkspace: {
+          controllerEpoch: "epoch",
+          focusedTabId: "fg-tab",
+          tabs: tabs.map((tab) => ({ ...tab })),
+        },
+      },
+    };
+  };
+  const client = {
+    calls,
+    getState: async () => state(),
+    newTab: async (selection) => {
+      calls.push(["newTab", selection]);
+      tabs.push({
+        tabId: "bench-tab",
+        sessionId: "bench-session",
+        status: "idle",
+        busy: false,
+        model: "default-model",
+      });
+      return {
+        ok: true,
+        tabId: "bench-tab",
+        sessionId: "bench-session",
+        controllerEpoch: "epoch",
+      };
+    },
+    setModel: async (sessionId, model) => {
+      calls.push(["setModel", sessionId, model]);
+      tabs[1].model = resolvedModel ?? model;
+    },
+    setReasoningEffort: async (sessionId, effort) =>
+      calls.push(["setReasoningEffort", sessionId, effort]),
+    send: async (sessionId, text, mode) => {
+      calls.push(["send", sessionId, text, mode]);
+      sent = true;
+    },
+    stop: async (sessionId) => {
+      calls.push(["stop", sessionId]);
+      tabs[1].busy = false;
+      tabs[1].status = "idle";
+      script.length = 0;
+      script.push({ busy: false, status: "idle" });
+    },
+    closeTab: async (selection) => calls.push(["closeTab", selection]),
+  };
+  return client;
+}
+
+async function runFake(client, overrides = {}) {
+  let clock = 0;
+  const recorded = [];
+  const result = await runAttempt({
+    client,
+    entry: {
+      label: "gpt-6.2-sol",
+      model: "gpt-6.2-sol",
+      reasoningEffort: "high",
+    },
+    task: { id: "small-ts-bugfix", prompt: "Fix the cart." },
+    prepare: () => {},
+    readTrace: () => ({ apiCalls: 3 }),
+    record: (attempt) => {
+      recorded.push(attempt);
+      return { verdict: { solved: true } };
+    },
+    limits: { maxMs: 60_000, maxRequests: 20 },
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    now: () => clock,
+    pollMs: 1_000,
+    ...overrides,
+  });
+  return { result, recorded };
+}
+
+test("runner drives a new tab to completion and never touches the foreground chat", async () => {
+  const client = fakeGateway({
+    script: [
+      { busy: true, status: "streaming" },
+      { busy: true, status: "streaming" },
+      { busy: false, status: "completed" },
+    ],
+  });
+  const { result, recorded } = await runFake(client);
+  assert.equal(result.terminalReason, "completed");
+  assert.equal(recorded[0].sessionId, "bench-session");
+  assert.equal(recorded[0].label, "gpt-6.2-sol");
+  assert.deepEqual(client.calls[0], [
+    "newTab",
+    { controllerEpoch: "epoch", tabId: "fg-tab", sessionId: "fg-session" },
+  ]);
+  for (const call of client.calls.slice(1, -1)) {
+    assert.equal(
+      call[1],
+      "bench-session",
+      `${call[0]} targeted the wrong chat`,
+    );
+  }
+  assert.deepEqual(
+    client.calls.map((call) => call[0]),
+    ["newTab", "setModel", "setReasoningEffort", "send", "closeTab"],
+  );
+  assert.deepEqual(client.calls[3], [
+    "send",
+    "bench-session",
+    "Fix the cart.",
+    "code",
+  ]);
+});
+
+test("runner stops at the time cap and records why", async () => {
+  const client = fakeGateway({ script: [{ busy: true, status: "streaming" }] });
+  const { result, recorded } = await runFake(client, {
+    limits: { maxMs: 5_000, maxRequests: 20 },
+  });
+  assert.equal(result.terminalReason, "time_cap");
+  assert.equal(recorded[0].terminalReason, "time_cap");
+  assert.ok(client.calls.some((call) => call[0] === "stop"));
+});
+
+test("runner stops when the model needs input instead of waiting for a human", async () => {
+  const client = fakeGateway({
+    script: [
+      { busy: true, status: "streaming" },
+      { busy: true, status: "needs_input" },
+    ],
+  });
+  const { result } = await runFake(client);
+  assert.equal(result.terminalReason, "needs_input");
+});
+
+test("runner refuses to benchmark a fallback model", async () => {
+  const client = fakeGateway({ script: [], resolvedModel: "gpt-5.6-luna" });
+  const { result, recorded } = await runFake(client);
+  assert.equal(result.terminalReason, "infra");
+  assert.match(recorded[0].detail, /gpt-5\.6-luna/);
+  assert.ok(!client.calls.some((call) => call[0] === "send"));
+});
+
+test("infra failures are reported separately from attempts", () => {
+  const [row] = summarizeAttempts([
+    attempt("a", "t", true, { terminalReason: "completed" }),
+    attempt("a", "t", false, { terminalReason: "time_cap" }),
+    attempt("a", "t", false, { terminalReason: "infra" }),
+  ]);
+  assert.equal(row.attempts, 2);
+  assert.equal(row.unassistedSolved, 1);
+  assert.equal(row.stopped, 1);
+  assert.equal(row.infraFailures, 1);
+});
 
 function writeSession(historyDir, id, summary, firstMessage) {
   const dir = path.join(historyDir, id);
