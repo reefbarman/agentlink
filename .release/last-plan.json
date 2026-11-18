@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "b5b0088ff1bb08ee25312128b9245f38aa117689",
-  "createdAt": "2026-11-18T06:53:59.191Z",
+  "sourceSha": "e27c848cb3a55c0a1bea75e2e6720b42c547374d",
+  "createdAt": "2026-11-18T08:52:14.794Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,145 +10,76 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.99.1",
-      "baselineRef": "v1.99.1",
-      "reserved": "1.99.3",
+      "published": "1.100.0",
+      "baselineRef": "v1.100.0",
+      "reserved": "1.100.0",
       "commits": [
-        "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
-        "b5b0088ff1bb08ee25312128b9245f38aa117689"
+        "1efe30e542abce26ba3ec3217c4c43c08670f20e",
+        "e27c848cb3a55c0a1bea75e2e6720b42c547374d"
       ],
       "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.100.0",
+      "version": "1.101.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.100.0",
+      "tag": "v1.101.0",
       "notes": [
         {
-          "sha": "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
-          "subject": "fix(codex): restore prompt caching for GPT-6.2 over ChatGPT sign-in",
-          "summary": "Restores prompt caching for GPT-6.2 Sol and Astra over ChatGPT sign-in by sending tools and instructions as leading input items while keeping full Responses and parallel tool calls.",
+          "sha": "1efe30e542abce26ba3ec3217c4c43c08670f20e",
+          "subject": "feat(evals): store per-request stats and add bench:compare",
+          "summary": "Adds a bench:compare developer task and per-request stats to the model-bench evaluation scripts; this is internal tooling that does not affect shipped products.",
           "breaking": false
         },
         {
-          "sha": "b5b0088ff1bb08ee25312128b9245f38aa117689",
-          "subject": "feat(evals): add TODO decision-point eval and tighten TODO guidance",
-          "summary": "Tightens todo_write guidance and system prompts so models skip lists for small tasks, never send todo_write alone, and finish with completeTodos; adds a live TODO eval and bench command for developers.",
+          "sha": "e27c848cb3a55c0a1bea75e2e6720b42c547374d",
+          "subject": "feat(tools): warn when text-file edits introduce new escaped quotes",
+          "summary": "write_file and apply_diff now warn, without blocking the edit, when a saved .md, .mdx or .txt file introduces new backslash-quote sequences, listing the affected line numbers.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.99.1",
-      "baselineRef": "desktop-v0.99.1",
-      "reserved": "0.99.1",
+      "published": "0.100.0",
+      "baselineRef": "desktop-v0.100.0",
+      "reserved": "0.100.0",
       "commits": [
-        "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
-        "b5b0088ff1bb08ee25312128b9245f38aa117689"
+        "1efe30e542abce26ba3ec3217c4c43c08670f20e",
+        "e27c848cb3a55c0a1bea75e2e6720b42c547374d"
       ],
       "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.100.0",
+      "version": "0.101.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.100.0",
+      "tag": "desktop-v0.101.0",
       "notes": [
         {
-          "sha": "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
-          "subject": "fix(codex): restore prompt caching for GPT-6.2 over ChatGPT sign-in",
-          "summary": "Restores prompt caching for GPT-6.2 Sol and Astra over ChatGPT sign-in by sending tools and instructions as leading input items while keeping full Responses and parallel tool calls.",
+          "sha": "1efe30e542abce26ba3ec3217c4c43c08670f20e",
+          "subject": "feat(evals): store per-request stats and add bench:compare",
+          "summary": "Adds a bench:compare developer task and per-request stats to the model-bench evaluation scripts; this is internal tooling that does not affect shipped products.",
           "breaking": false
         },
         {
-          "sha": "b5b0088ff1bb08ee25312128b9245f38aa117689",
-          "subject": "feat(evals): add TODO decision-point eval and tighten TODO guidance",
-          "summary": "Tightens todo_write guidance and system prompts so models skip lists for small tasks, never send todo_write alone, and finish with completeTodos; adds a live TODO eval and bench command for developers.",
+          "sha": "e27c848cb3a55c0a1bea75e2e6720b42c547374d",
+          "subject": "feat(tools): warn when text-file edits introduce new escaped quotes",
+          "summary": "write_file and apply_diff now warn, without blocking the edit, when a saved .md, .mdx or .txt file introduces new backslash-quote sequences, listing the affected line numbers.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.69.1",
-      "baselineRef": "cli-v0.69.1",
-      "reserved": "0.69.1",
-      "commits": [
-        "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
-        "b5b0088ff1bb08ee25312128b9245f38aa117689"
-      ],
-      "unknownPaths": ["mise.toml"],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.70.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.70.0",
-      "notes": [
-        {
-          "sha": "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
-          "subject": "fix(codex): restore prompt caching for GPT-6.2 over ChatGPT sign-in",
-          "summary": "Restores prompt caching for GPT-6.2 Sol and Astra over ChatGPT sign-in by sending tools and instructions as leading input items while keeping full Responses and parallel tool calls.",
-          "breaking": false
-        },
-        {
-          "sha": "b5b0088ff1bb08ee25312128b9245f38aa117689",
-          "subject": "feat(evals): add TODO decision-point eval and tighten TODO guidance",
-          "summary": "Tightens todo_write guidance and system prompts so models skip lists for small tasks, never send todo_write alone, and finish with completeTodos; adds a live TODO eval and bench command for developers.",
-          "breaking": false
-        }
-      ]
-    },
-    "sdk": {
-      "published": "0.56.1",
-      "baselineRef": "sdk-v0.56.1",
-      "reserved": "0.56.1",
-      "commits": [
-        "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
-        "b5b0088ff1bb08ee25312128b9245f38aa117689"
-      ],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.57.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.57.0",
-      "notes": [
-        {
-          "sha": "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
-          "subject": "fix(codex): restore prompt caching for GPT-6.2 over ChatGPT sign-in",
-          "summary": "Restores prompt caching for GPT-6.2 Sol and Astra over ChatGPT sign-in by sending tools and instructions as leading input items while keeping full Responses and parallel tool calls.",
-          "breaking": false
-        },
-        {
-          "sha": "b5b0088ff1bb08ee25312128b9245f38aa117689",
-          "subject": "feat(evals): add TODO decision-point eval and tighten TODO guidance",
-          "summary": "Tightens todo_write guidance and system prompts so models skip lists for small tasks, never send todo_write alone, and finish with completeTodos; adds a live TODO eval and bench command for developers.",
-          "breaking": false
-        }
-      ]
-    },
-    "assistant": {
-      "published": "0.70.1",
-      "baselineRef": "assistant-v0.70.1",
-      "reserved": "0.70.1",
-      "commits": [
-        "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
-        "b5b0088ff1bb08ee25312128b9245f38aa117689"
-      ],
+      "published": "0.70.0",
+      "baselineRef": "cli-v0.70.0",
+      "reserved": "0.70.0",
+      "commits": ["1efe30e542abce26ba3ec3217c4c43c08670f20e"],
       "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
       "bump": "minor",
@@ -157,6 +88,47 @@
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.71.0",
+      "notes": [
+        {
+          "sha": "1efe30e542abce26ba3ec3217c4c43c08670f20e",
+          "subject": "feat(evals): store per-request stats and add bench:compare",
+          "summary": "Adds a bench:compare developer task and per-request stats to the model-bench evaluation scripts; this is internal tooling that does not affect shipped products.",
+          "breaking": false
+        }
+      ]
+    },
+    "sdk": {
+      "published": "0.57.0",
+      "baselineRef": "sdk-v0.57.0",
+      "reserved": "0.57.0",
+      "commits": [],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
+    },
+    "assistant": {
+      "published": "0.70.1",
+      "baselineRef": "assistant-v0.70.1",
+      "reserved": "0.71.0",
+      "commits": [
+        "2061fcae351897e1be817ed1cd6a3c41d9f126a6",
+        "b5b0088ff1bb08ee25312128b9245f38aa117689",
+        "1efe30e542abce26ba3ec3217c4c43c08670f20e",
+        "e27c848cb3a55c0a1bea75e2e6720b42c547374d"
+      ],
+      "unknownPaths": ["mise.toml"],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.71.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": true,
       "consumedIntent": false,
       "tag": "assistant-v0.71.0",
       "notes": [
@@ -170,6 +142,18 @@
           "sha": "b5b0088ff1bb08ee25312128b9245f38aa117689",
           "subject": "feat(evals): add TODO decision-point eval and tighten TODO guidance",
           "summary": "Tightens todo_write guidance and system prompts so models skip lists for small tasks, never send todo_write alone, and finish with completeTodos; adds a live TODO eval and bench command for developers.",
+          "breaking": false
+        },
+        {
+          "sha": "1efe30e542abce26ba3ec3217c4c43c08670f20e",
+          "subject": "feat(evals): store per-request stats and add bench:compare",
+          "summary": "Adds a bench:compare developer task and per-request stats to the model-bench evaluation scripts; this is internal tooling that does not affect shipped products.",
+          "breaking": false
+        },
+        {
+          "sha": "e27c848cb3a55c0a1bea75e2e6720b42c547374d",
+          "subject": "feat(tools): warn when text-file edits introduce new escaped quotes",
+          "summary": "write_file and apply_diff now warn, without blocking the edit, when a saved .md, .mdx or .txt file introduces new backslash-quote sequences, listing the affected line numbers.",
           "breaking": false
         }
       ]
@@ -188,6 +172,22 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Tightens todo_write guidance and system prompts so models skip lists for small tasks, never send todo_write alone, and finish with completeTodos; adds a live TODO eval and bench command for developers.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "1efe30e542abce26ba3ec3217c4c43c08670f20e": {
+      "bump": "none",
+      "breakingUnits": [],
+      "summary": "Adds a bench:compare developer task and per-request stats to the model-bench evaluation scripts; this is internal tooling that does not affect shipped products.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "e27c848cb3a55c0a1bea75e2e6720b42c547374d": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "write_file and apply_diff now warn, without blocking the edit, when a saved .md, .mdx or .txt file introduces new backslash-quote sequences, listing the affected line numbers.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

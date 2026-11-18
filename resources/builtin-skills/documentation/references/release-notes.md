@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.101.0
+
+- Adds a bench:compare developer task and per-request stats to the model-bench evaluation scripts; this is internal tooling that does not affect shipped products.
+- write_file and apply_diff now warn, without blocking the edit, when a saved .md, .mdx or .txt file introduces new backslash-quote sequences, listing the affected line numbers.
+
 ## 1.100.0
 
 - Restored prompt caching for GPT-6.2 Sol and GPT-6.2 Astra over ChatGPT/Codex sign-in. With separate `tools` and `instructions` fields, the backend reused only about half of the fixed prompt for these models (about 55% of input cached against about 92% for GPT-6.1 Sol), so every turn re-read the tool definitions. They now send tools and instructions at the start of the conversation, as Responses Lite does, while staying on full Responses with parallel tool calls. Hosted web search turns and API-key requests are unchanged.
