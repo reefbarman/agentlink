@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "ee9a6299ce887bef5ff76e4052a50d391e558225",
-  "createdAt": "2026-11-18T00:57:37.603Z",
+  "sourceSha": "ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f",
+  "createdAt": "2026-11-18T01:37:28.461Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,153 +10,59 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.94.1",
-      "baselineRef": "v1.94.1",
-      "reserved": "1.94.7",
-      "commits": [
-        "4cdcc858135eb93e16582b5a7c2e944ac4ce579b",
-        "ee9a6299ce887bef5ff76e4052a50d391e558225"
-      ],
-      "unknownPaths": [],
+      "published": "1.95.0",
+      "baselineRef": "v1.95.0",
+      "reserved": "1.95.0",
+      "commits": ["ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f"],
+      "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.95.0",
+      "version": "1.96.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.95.0",
+      "tag": "v1.96.0",
       "notes": [
         {
-          "sha": "4cdcc858135eb93e16582b5a7c2e944ac4ce579b",
-          "subject": "fix(credentials): release the mutation lock when its owner write fails",
-          "summary": "Fixes a bug where a failed disk write while creating the keychain mutation lock left a stale lock behind, which blocked Codex sign-in and token refresh until the lock was removed by hand.",
-          "breaking": false
-        },
-        {
-          "sha": "ee9a6299ce887bef5ff76e4052a50d391e558225",
-          "subject": "feat(models): add GPT-6.2 Astra and Sol, GPT-Image-2.6 for generate_image",
-          "summary": "Adds GPT-6.2 Astra and Sol to the Codex/OpenAI model picker. Also makes GPT-Image-2.6 Flare the default for generate_image, adds a complexity option, a served_image_tool field and the agentlink.imageGeneration.credential setting, and rejects input_fidelity earlier.",
+          "sha": "ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f",
+          "subject": "feat(evals): add model bench with independent fixture scoring and comparison reports",
+          "summary": "Adds a developer-only model bench (scripts, fixtures, mise tasks) and extra metadata and report-dir options for the routing eval; none of it ships in the product.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.94.1",
-      "baselineRef": "desktop-v0.94.1",
-      "reserved": "0.94.1",
-      "commits": [
-        "4cdcc858135eb93e16582b5a7c2e944ac4ce579b",
-        "ee9a6299ce887bef5ff76e4052a50d391e558225"
-      ],
-      "unknownPaths": [],
+      "published": "0.95.0",
+      "baselineRef": "desktop-v0.95.0",
+      "reserved": "0.95.0",
+      "commits": ["ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f"],
+      "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.95.0",
+      "version": "0.96.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.95.0",
+      "tag": "desktop-v0.96.0",
       "notes": [
         {
-          "sha": "4cdcc858135eb93e16582b5a7c2e944ac4ce579b",
-          "subject": "fix(credentials): release the mutation lock when its owner write fails",
-          "summary": "Fixes a bug where a failed disk write while creating the keychain mutation lock left a stale lock behind, which blocked Codex sign-in and token refresh until the lock was removed by hand.",
-          "breaking": false
-        },
-        {
-          "sha": "ee9a6299ce887bef5ff76e4052a50d391e558225",
-          "subject": "feat(models): add GPT-6.2 Astra and Sol, GPT-Image-2.6 for generate_image",
-          "summary": "Adds GPT-6.2 Astra and Sol to the Codex/OpenAI model picker. Also makes GPT-Image-2.6 Flare the default for generate_image, adds a complexity option, a served_image_tool field and the agentlink.imageGeneration.credential setting, and rejects input_fidelity earlier.",
+          "sha": "ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f",
+          "subject": "feat(evals): add model bench with independent fixture scoring and comparison reports",
+          "summary": "Adds a developer-only model bench (scripts, fixtures, mise tasks) and extra metadata and report-dir options for the routing eval; none of it ships in the product.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.65.0",
-      "baselineRef": "cli-v0.65.0",
-      "reserved": "0.65.1",
-      "commits": [
-        "db91038bf1a363d267a56d9ed3dd34e7f9f3367f",
-        "4cdcc858135eb93e16582b5a7c2e944ac4ce579b",
-        "ee9a6299ce887bef5ff76e4052a50d391e558225"
-      ],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.66.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.66.0",
-      "notes": [
-        {
-          "sha": "db91038bf1a363d267a56d9ed3dd34e7f9f3367f",
-          "subject": "fix(openai-compatible): send image history without extra heap copies",
-          "summary": "Image-heavy sessions on OpenAI-compatible providers no longer exhaust memory, because request bodies are encoded into a single off-heap buffer with identical wire bytes.",
-          "breaking": false
-        },
-        {
-          "sha": "4cdcc858135eb93e16582b5a7c2e944ac4ce579b",
-          "subject": "fix(credentials): release the mutation lock when its owner write fails",
-          "summary": "Fixes a bug where a failed disk write while creating the keychain mutation lock left a stale lock behind, which blocked Codex sign-in and token refresh until the lock was removed by hand.",
-          "breaking": false
-        },
-        {
-          "sha": "ee9a6299ce887bef5ff76e4052a50d391e558225",
-          "subject": "feat(models): add GPT-6.2 Astra and Sol, GPT-Image-2.6 for generate_image",
-          "summary": "Adds GPT-6.2 Astra and Sol to the Codex/OpenAI model picker. Also makes GPT-Image-2.6 Flare the default for generate_image, adds a complexity option, a served_image_tool field and the agentlink.imageGeneration.credential setting, and rejects input_fidelity earlier.",
-          "breaking": false
-        }
-      ]
-    },
-    "sdk": {
-      "published": "0.55.1",
-      "baselineRef": "sdk-v0.55.1",
-      "reserved": "0.55.1",
-      "commits": [
-        "4cdcc858135eb93e16582b5a7c2e944ac4ce579b",
-        "ee9a6299ce887bef5ff76e4052a50d391e558225"
-      ],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.56.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.56.0",
-      "notes": [
-        {
-          "sha": "4cdcc858135eb93e16582b5a7c2e944ac4ce579b",
-          "subject": "fix(credentials): release the mutation lock when its owner write fails",
-          "summary": "Fixes a bug where a failed disk write while creating the keychain mutation lock left a stale lock behind, which blocked Codex sign-in and token refresh until the lock was removed by hand.",
-          "breaking": false
-        },
-        {
-          "sha": "ee9a6299ce887bef5ff76e4052a50d391e558225",
-          "subject": "feat(models): add GPT-6.2 Astra and Sol, GPT-Image-2.6 for generate_image",
-          "summary": "Adds GPT-6.2 Astra and Sol to the Codex/OpenAI model picker. Also makes GPT-Image-2.6 Flare the default for generate_image, adds a complexity option, a served_image_tool field and the agentlink.imageGeneration.credential setting, and rejects input_fidelity earlier.",
-          "breaking": false
-        }
-      ]
-    },
-    "assistant": {
-      "published": "0.66.1",
-      "baselineRef": "assistant-v0.66.1",
-      "reserved": "0.66.1",
-      "commits": [
-        "4cdcc858135eb93e16582b5a7c2e944ac4ce579b",
-        "ee9a6299ce887bef5ff76e4052a50d391e558225"
-      ],
-      "unknownPaths": [],
+      "published": "0.66.0",
+      "baselineRef": "cli-v0.66.0",
+      "reserved": "0.66.0",
+      "commits": ["ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f"],
+      "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
@@ -165,52 +71,58 @@
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.67.0",
+      "tag": "cli-v0.67.0",
       "notes": [
         {
-          "sha": "4cdcc858135eb93e16582b5a7c2e944ac4ce579b",
-          "subject": "fix(credentials): release the mutation lock when its owner write fails",
-          "summary": "Fixes a bug where a failed disk write while creating the keychain mutation lock left a stale lock behind, which blocked Codex sign-in and token refresh until the lock was removed by hand.",
+          "sha": "ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f",
+          "subject": "feat(evals): add model bench with independent fixture scoring and comparison reports",
+          "summary": "Adds a developer-only model bench (scripts, fixtures, mise tasks) and extra metadata and report-dir options for the routing eval; none of it ships in the product.",
           "breaking": false
-        },
+        }
+      ]
+    },
+    "sdk": {
+      "published": "0.56.0",
+      "baselineRef": "sdk-v0.56.0",
+      "reserved": "0.56.0",
+      "commits": [],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
+    },
+    "assistant": {
+      "published": "0.67.0",
+      "baselineRef": "assistant-v0.67.0",
+      "reserved": "0.67.0",
+      "commits": ["ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f"],
+      "unknownPaths": ["mise.toml"],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.68.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.68.0",
+      "notes": [
         {
-          "sha": "ee9a6299ce887bef5ff76e4052a50d391e558225",
-          "subject": "feat(models): add GPT-6.2 Astra and Sol, GPT-Image-2.6 for generate_image",
-          "summary": "Adds GPT-6.2 Astra and Sol to the Codex/OpenAI model picker. Also makes GPT-Image-2.6 Flare the default for generate_image, adds a complexity option, a served_image_tool field and the agentlink.imageGeneration.credential setting, and rejects input_fidelity earlier.",
+          "sha": "ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f",
+          "subject": "feat(evals): add model bench with independent fixture scoring and comparison reports",
+          "summary": "Adds a developer-only model bench (scripts, fixtures, mise tasks) and extra metadata and report-dir options for the routing eval; none of it ships in the product.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "1bd0c891287dc94c69326aad444f35c761b1cf82": {
-      "bump": "patch",
+    "ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f": {
+      "bump": "none",
       "breakingUnits": [],
-      "summary": "Approval cards and reviewers now see full bodies (up to 64 KB) of inline scripts run through interpreters, and sandbox-denied Git object writes in protected repositories get native retry guidance.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "db91038bf1a363d267a56d9ed3dd34e7f9f3367f": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Image-heavy sessions on OpenAI-compatible providers no longer exhaust memory, because request bodies are encoded into a single off-heap buffer with identical wire bytes.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "4cdcc858135eb93e16582b5a7c2e944ac4ce579b": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Fixes a bug where a failed disk write while creating the keychain mutation lock left a stale lock behind, which blocked Codex sign-in and token refresh until the lock was removed by hand.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "ee9a6299ce887bef5ff76e4052a50d391e558225": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Adds GPT-6.2 Astra and Sol to the Codex/OpenAI model picker. Also makes GPT-Image-2.6 Flare the default for generate_image, adds a complexity option, a served_image_tool field and the agentlink.imageGeneration.credential setting, and rejects input_fidelity earlier.",
+      "summary": "Adds a developer-only model bench (scripts, fixtures, mise tasks) and extra metadata and report-dir options for the routing eval; none of it ships in the product.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

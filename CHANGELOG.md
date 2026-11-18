@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.96.0
+
+- Adds a developer-only model bench (scripts, fixtures, mise tasks) and extra metadata and report-dir options for the routing eval; none of it ships in the product.
+
 ## 1.95.0
 
 - GPT-6.2 Astra (`gpt-6.2-astra`) and GPT-6.2 Sol (`gpt-6.2-sol`) are now in the Codex/OpenAI model picker for both ChatGPT sign-in and API keys, at the top of the list. GPT-6 Astra and GPT-6.1 Sol stay available and the default model is unchanged, because OpenAI's launch covers Plus, Pro, Enterprise and Edu plans but not Business. With an API key both use OpenAI's documented 1.05M window, 922K input cap, 128K output, `low` through `max` reasoning (default `medium`), and Fast and Ultrafast. With ChatGPT sign-in they follow Codex's catalog: Responses Lite, the `ultra` preset, a `low` default effort and an 872K window, with GPT-6.2 Sol condensing at Codex's 500K default like GPT-6.1 Sol. Background agents now prefer GPT-6.2 Astra for deep reasoning and GPT-6.2 Sol for balanced work.
