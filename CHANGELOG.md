@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.97.0
+
+- Adds Codex subscription transport and session auto-detection to the internal model benchmark and routing eval tooling; no shipped product behaviour changes.
+
 ## 1.96.0
 
 - Adds a developer-only model bench (scripts, fixtures, mise tasks) and extra metadata and report-dir options for the routing eval; none of it ships in the product.

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f",
-  "createdAt": "2026-11-18T01:37:28.461Z",
+  "sourceSha": "cb6ab9c1592b3fc65dac475686b8e813d868eafd",
+  "createdAt": "2026-11-18T02:24:55.963Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,73 +10,73 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.95.0",
-      "baselineRef": "v1.95.0",
-      "reserved": "1.95.0",
-      "commits": ["ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f"],
+      "published": "1.96.0",
+      "baselineRef": "v1.96.0",
+      "reserved": "1.96.0",
+      "commits": ["cb6ab9c1592b3fc65dac475686b8e813d868eafd"],
       "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.96.0",
+      "version": "1.97.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.96.0",
+      "tag": "v1.97.0",
       "notes": [
         {
-          "sha": "ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f",
-          "subject": "feat(evals): add model bench with independent fixture scoring and comparison reports",
-          "summary": "Adds a developer-only model bench (scripts, fixtures, mise tasks) and extra metadata and report-dir options for the routing eval; none of it ships in the product.",
+          "sha": "cb6ab9c1592b3fc65dac475686b8e813d868eafd",
+          "subject": "feat(evals): run model bench routing on codex subscription and auto-detect scored sessions",
+          "summary": "Adds Codex subscription transport and session auto-detection to the internal model benchmark and routing eval tooling; no shipped product behaviour changes.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.95.0",
-      "baselineRef": "desktop-v0.95.0",
-      "reserved": "0.95.0",
-      "commits": ["ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f"],
+      "published": "0.96.0",
+      "baselineRef": "desktop-v0.96.0",
+      "reserved": "0.96.0",
+      "commits": ["cb6ab9c1592b3fc65dac475686b8e813d868eafd"],
       "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.96.0",
+      "version": "0.97.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.96.0",
+      "tag": "desktop-v0.97.0",
       "notes": [
         {
-          "sha": "ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f",
-          "subject": "feat(evals): add model bench with independent fixture scoring and comparison reports",
-          "summary": "Adds a developer-only model bench (scripts, fixtures, mise tasks) and extra metadata and report-dir options for the routing eval; none of it ships in the product.",
+          "sha": "cb6ab9c1592b3fc65dac475686b8e813d868eafd",
+          "subject": "feat(evals): run model bench routing on codex subscription and auto-detect scored sessions",
+          "summary": "Adds Codex subscription transport and session auto-detection to the internal model benchmark and routing eval tooling; no shipped product behaviour changes.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.66.0",
-      "baselineRef": "cli-v0.66.0",
-      "reserved": "0.66.0",
-      "commits": ["ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f"],
+      "published": "0.67.0",
+      "baselineRef": "cli-v0.67.0",
+      "reserved": "0.67.0",
+      "commits": ["cb6ab9c1592b3fc65dac475686b8e813d868eafd"],
       "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.67.0",
+      "version": "0.68.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.67.0",
+      "tag": "cli-v0.68.0",
       "notes": [
         {
-          "sha": "ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f",
-          "subject": "feat(evals): add model bench with independent fixture scoring and comparison reports",
-          "summary": "Adds a developer-only model bench (scripts, fixtures, mise tasks) and extra metadata and report-dir options for the routing eval; none of it ships in the product.",
+          "sha": "cb6ab9c1592b3fc65dac475686b8e813d868eafd",
+          "subject": "feat(evals): run model bench routing on codex subscription and auto-detect scored sessions",
+          "summary": "Adds Codex subscription transport and session auto-detection to the internal model benchmark and routing eval tooling; no shipped product behaviour changes.",
           "breaking": false
         }
       ]
@@ -94,25 +94,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.67.0",
-      "baselineRef": "assistant-v0.67.0",
-      "reserved": "0.67.0",
-      "commits": ["ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f"],
+      "published": "0.68.0",
+      "baselineRef": "assistant-v0.68.0",
+      "reserved": "0.68.0",
+      "commits": ["cb6ab9c1592b3fc65dac475686b8e813d868eafd"],
       "unknownPaths": ["mise.toml"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.68.0",
+      "version": "0.69.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.68.0",
+      "tag": "assistant-v0.69.0",
       "notes": [
         {
-          "sha": "ee8c472f266f7a0ffdec30481eaf41a9e2a6b55f",
-          "subject": "feat(evals): add model bench with independent fixture scoring and comparison reports",
-          "summary": "Adds a developer-only model bench (scripts, fixtures, mise tasks) and extra metadata and report-dir options for the routing eval; none of it ships in the product.",
+          "sha": "cb6ab9c1592b3fc65dac475686b8e813d868eafd",
+          "subject": "feat(evals): run model bench routing on codex subscription and auto-detect scored sessions",
+          "summary": "Adds Codex subscription transport and session auto-detection to the internal model benchmark and routing eval tooling; no shipped product behaviour changes.",
           "breaking": false
         }
       ]
@@ -123,6 +123,14 @@
       "bump": "none",
       "breakingUnits": [],
       "summary": "Adds a developer-only model bench (scripts, fixtures, mise tasks) and extra metadata and report-dir options for the routing eval; none of it ships in the product.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "cb6ab9c1592b3fc65dac475686b8e813d868eafd": {
+      "bump": "none",
+      "breakingUnits": [],
+      "summary": "Adds Codex subscription transport and session auto-detection to the internal model benchmark and routing eval tooling; no shipped product behaviour changes.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
