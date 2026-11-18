@@ -120,7 +120,7 @@ describe("executeCodexResolvedCompletion", () => {
     });
   });
 
-  it("uses Responses Lite and maps OAuth Astra ultra to xhigh", async () => {
+  it("uses full Responses and maps OAuth Astra ultra to xhigh", async () => {
     let capturedBody: Record<string, unknown> | undefined;
     let capturedOptions: Record<string, unknown> | undefined;
     const client = {
@@ -156,29 +156,13 @@ describe("executeCodexResolvedCompletion", () => {
 
     expect(capturedBody).toMatchObject({
       model: "gpt-6-astra",
-      parallel_tool_calls: false,
-      reasoning: { effort: "xhigh", summary: "detailed", context: "all_turns" },
-      input: [
-        {
-          type: "additional_tools",
-          tools: [
-            {
-              type: "namespace",
-              name: "functions",
-              tools: [expect.objectContaining({ name: "demo_tool" })],
-            },
-          ],
-        },
-        { type: "message", role: "developer" },
-      ],
+      instructions: "Answer clearly.",
+      tools: [expect.objectContaining({ type: "function", name: "demo_tool" })],
+      reasoning: { effort: "xhigh", summary: "detailed" },
+      input: [],
     });
-    expect(capturedBody).not.toHaveProperty("instructions");
-    expect(capturedBody).not.toHaveProperty("tools");
-    expect(capturedOptions).toEqual({
-      signal: undefined,
-      maxRetries: 0,
-      headers: { "x-openai-internal-codex-responses-lite": "true" },
-    });
+    expect(capturedBody).not.toHaveProperty("parallel_tool_calls");
+    expect(capturedOptions).toEqual({ signal: undefined, maxRetries: 0 });
   });
 
   it("threads runRequest through to responses.create", async () => {

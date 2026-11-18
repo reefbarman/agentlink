@@ -106,8 +106,19 @@ const GPT_6_1_SOL_OAUTH_REASONING_EFFORTS = [
   "ultra",
 ] as const satisfies readonly CoreReasoningEffort[];
 
-/** OAuth models that Codex's bundled catalog marks `use_responses_lite`. */
-const CODEX_OAUTH_RESPONSES_LITE_MODELS = new Set<string>([
+/**
+ * OAuth models the ChatGPT backend only serves through Responses Lite.
+ *
+ * Codex's bundled catalog marks the GPT-6.x Astra and Sol models
+ * `use_responses_lite`, but the backend also serves them on full Responses
+ * (AgentLink already relies on that for hosted web search turns). Lite forces
+ * `parallel_tool_calls: false`, so only list a model here when full Responses
+ * is actually rejected for it.
+ */
+const CODEX_OAUTH_RESPONSES_LITE_MODELS = new Set<string>();
+
+/** OAuth models whose Codex catalog exposes the local `ultra` preset. */
+const CODEX_OAUTH_ULTRA_PRESET_MODELS = new Set<string>([
   "gpt-6.2-astra",
   "gpt-6.2-sol",
   "gpt-6-astra",
@@ -372,9 +383,10 @@ export function resolveCodexReasoningEffort(params: {
         defaultEffort,
       )
     : defaultEffort;
-  // `ultra` is a Codex client preset. The Astra and 6.1 Sol catalogs map that
+  // `ultra` is a Codex client preset. The Astra and Sol catalogs map that
   // local preset to xhigh for the actual Responses request.
-  return usesCodexResponsesLite(params.modelId, params.authMethod) &&
+  return params.authMethod === "oauth" &&
+    CODEX_OAUTH_ULTRA_PRESET_MODELS.has(params.modelId) &&
     resolvedEffort === "ultra"
     ? "xhigh"
     : resolvedEffort;
@@ -820,7 +832,7 @@ const CODEX_OAUTH_MODEL_OVERRIDES: Record<
     >
   >
 > = {
-  // Codex's bundled catalog: Responses Lite, 872K max window (272K default,
+  // Codex's bundled catalog: 872K max window (272K default,
   // so the host's default condense target already fits), `ultra` preset, and
   // a low default effort over the ChatGPT backend.
   "gpt-6.2-astra": {
@@ -842,7 +854,7 @@ const CODEX_OAUTH_MODEL_OVERRIDES: Record<
     reasoningEfforts: [...GPT_6_ASTRA_OAUTH_REASONING_EFFORTS],
     defaultReasoningEffort: "low",
   },
-  // Codex's bundled catalog (rust-v0.159.1): Responses Lite, 872K max window,
+  // Codex's bundled catalog (rust-v0.159.1): 872K max window,
   // `ultra` preset, and a low default effort over the ChatGPT backend.
   // Codex raised the ChatGPT-backed default window to 500K (Oct 2026), with no
   // long-context fee on subscription usage. API keys keep the host's default

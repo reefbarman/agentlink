@@ -1898,8 +1898,8 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });
 
-  it.each(["gpt-6-astra", "gpt-6.1-sol"])(
-    "sends %s thinking summaries through the OAuth Responses Lite contract",
+  it.each(["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-astra", "gpt-6.1-sol"])(
+    "sends OAuth %s through full Responses so tool calls can run in parallel",
     async (model) => {
       const captured = captureBodyOnce();
       const provider = new CodexProvider(makeAuthManager() as never);
@@ -1910,29 +1910,33 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
         messages: [{ role: "user", content: "ping" }],
         maxTokens: 64,
         reasoningEffort: "ultra",
+        tools: [
+          {
+            name: "read_file",
+            description: "Read a file",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
       })) {
         // drain
       }
 
       expect(captured.current).toMatchObject({
         model,
-        parallel_tool_calls: false,
-        reasoning: {
-          effort: "xhigh",
-          summary: "detailed",
-          context: "all_turns",
-        },
-        input: [
-          { type: "additional_tools", role: "developer" },
-          { type: "message", role: "developer" },
-          { role: "user" },
+        instructions: "system",
+        tools: [{ type: "function", name: "read_file" }],
+        reasoning: { effort: "xhigh", summary: "detailed" },
+        input: [{ role: "user" }],
+      });
+      // Responses Lite forces this to false; full Responses leaves the
+      // default (parallel calls allowed).
+      expect(captured.current).not.toHaveProperty("parallel_tool_calls");
+      expect(captured.current?.reasoning).not.toHaveProperty("context");
+      expect(
+        (captured.options?.headers as Record<string, string> | undefined)?.[
+          "x-openai-internal-codex-responses-lite"
         ],
-      });
-      expect(captured.current).not.toHaveProperty("instructions");
-      expect(captured.current).not.toHaveProperty("tools");
-      expect(captured.options).toMatchObject({
-        headers: { "x-openai-internal-codex-responses-lite": "true" },
-      });
+      ).toBeUndefined();
     },
   );
 
@@ -1993,7 +1997,7 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
       metadata: {
         model: "gpt-6-astra",
         authMethod: "oauth",
-        transport: "responses_lite",
+        transport: "responses",
         providerReturnedBody: false,
         requestId: "req-astra",
         cfRay: "ray-astra",

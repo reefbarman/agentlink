@@ -1,5 +1,6 @@
 import {
   CODEX_DEFAULT_MODEL,
+  CODEX_MODELS,
   CODEX_OAUTH_CHEAP_MODEL,
   CODEX_ROUTING_TIER_GROUPS,
   getCodexModelCapabilities,
@@ -173,9 +174,9 @@ describe("Codex model resolution", () => {
       defaultReasoningEffort: "low",
     });
     expect(oauth.maxInputTokens).toBeUndefined();
-    expect(getCodexResponsesRequestHeaders("gpt-6.1-sol", "oauth")).toEqual({
-      "x-openai-internal-codex-responses-lite": "true",
-    });
+    expect(
+      getCodexResponsesRequestHeaders("gpt-6.1-sol", "oauth"),
+    ).toBeUndefined();
     expect(
       getCodexResponsesRequestHeaders("gpt-6.1-sol", "apiKey"),
     ).toBeUndefined();
@@ -230,9 +231,7 @@ describe("Codex model resolution", () => {
         defaultReasoningEffort: "low",
       });
       expect(oauth.maxInputTokens).toBeUndefined();
-      expect(getCodexResponsesRequestHeaders(model, "oauth")).toEqual({
-        "x-openai-internal-codex-responses-lite": "true",
-      });
+      expect(getCodexResponsesRequestHeaders(model, "oauth")).toBeUndefined();
       expect(getCodexResponsesRequestHeaders(model, "apiKey")).toBeUndefined();
       expect(
         resolveCodexReasoningEffort({
@@ -460,15 +459,13 @@ describe("Codex hosted web capabilities", () => {
 });
 
 describe("Codex auth-adjusted context windows", () => {
-  it("marks only OAuth Astra requests for Responses Lite", () => {
-    expect(getCodexResponsesRequestHeaders("gpt-6-astra", "oauth")).toEqual({
-      "x-openai-internal-codex-responses-lite": "true",
-    });
-    expect(
-      getCodexResponsesRequestHeaders("gpt-6-astra", "apiKey"),
-    ).toBeUndefined();
-    for (const model of ["gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol"]) {
-      expect(getCodexResponsesRequestHeaders(model, "oauth")).toBeUndefined();
+  it("sends full Responses (no Lite header) for every current model", () => {
+    // Lite forces parallel_tool_calls off, so it is reserved for models the
+    // backend rejects on full Responses. No current model needs it.
+    for (const model of CODEX_MODELS.map(({ id }) => id)) {
+      for (const auth of ["oauth", "apiKey"] as const) {
+        expect(getCodexResponsesRequestHeaders(model, auth)).toBeUndefined();
+      }
     }
   });
 

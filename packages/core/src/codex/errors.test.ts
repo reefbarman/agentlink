@@ -176,7 +176,7 @@ describe("Codex error classification", () => {
       metadata: {
         model: "gpt-6-astra",
         authMethod: "oauth",
-        transport: "responses_lite",
+        transport: "responses",
         providerReturnedBody: false,
         requestId: "req-astra",
         cfRay: "ray-astra",

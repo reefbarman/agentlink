@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- GPT-6.2 Astra, GPT-6.2 Sol, GPT-6 Astra and GPT-6.1 Sol now use the full Responses API over ChatGPT/Codex sign-in instead of Responses Lite, so they can call several tools in one reply instead of one per request. Lite forces `parallel_tool_calls: false` and is now kept only for models the backend requires it for (none currently). The `ultra` preset still maps to `xhigh`, and API-key requests are unchanged.
+
 ## 1.99.0
 
 - The routing eval harness now answers a todo-only reply with a stub result and grades the following reply, so single-call Codex models are scored fairly; it also ships the 1.97.1 dogfood version bump.

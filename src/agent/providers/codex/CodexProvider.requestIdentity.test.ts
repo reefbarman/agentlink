@@ -132,7 +132,7 @@ describe("Codex request identity production wiring", () => {
             userAgent: "distinct-client/9.8.7",
             version: null,
             openAIBeta: null,
-            responsesLite: "true",
+            responsesLite: null,
           },
           {
             transport: "websocket",
@@ -140,7 +140,7 @@ describe("Codex request identity production wiring", () => {
             userAgent: "distinct-client/9.8.7",
             version: null,
             openAIBeta: "responses_websockets=2026-02-06",
-            responsesLite: "true",
+            responsesLite: null,
           },
         ]);
         expect(identities.join("\n")).not.toContain("PRIVATE_");

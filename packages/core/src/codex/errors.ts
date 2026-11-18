@@ -206,7 +206,7 @@ export function buildCodexAstraOAuthBodylessError(
   return {
     message: [
       "Codex rejected GPT-6 Astra for this ChatGPT account (HTTP 400 with no response body).",
-      "AgentLink sent the required Responses Lite request, but the server returned no exact reason.",
+      "The server returned no exact reason.",
       "Astra access may not have reached this account yet; try again later or use an OpenAI API key/project with Astra access.",
       diagnosticSuffix,
     ]
@@ -222,7 +222,7 @@ export function buildCodexAstraOAuthBodylessError(
     metadata: {
       model: "gpt-6-astra",
       authMethod: "oauth",
-      transport: "responses_lite",
+      transport: "responses",
       providerReturnedBody: false,
       ...diagnostics,
     },

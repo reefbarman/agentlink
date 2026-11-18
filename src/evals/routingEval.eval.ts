@@ -31,9 +31,10 @@
  *
  * When a reply contains only todo_write calls, the eval answers them with a
  * stub result and also grades the next reply: single-call models cannot open
- * the TODO list the prompt asks for and act in the same reply. Codex
- * responses-lite models (gpt-6.x sol/astra on OAuth) are single-call: the
- * backend rejects parallel_tool_calls=true with HTTP 400 (checked 2026-11-18).
+ * the TODO list the prompt asks for and act in the same reply. Any Codex
+ * Responses Lite request is single-call: the backend rejects
+ * parallel_tool_calls=true with HTTP 400 (checked 2026-11-18). AgentLink now
+ * sends gpt-6.x sol/astra on full Responses, so they are no longer affected.
  */
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";

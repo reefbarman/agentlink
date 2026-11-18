@@ -126,7 +126,7 @@ describe("Codex screenshot composition audit (no live capture or transport)", ()
         return { callId, capture, text, data, fixture };
       });
       const { input, lite, wire } = request(messages, method);
-      expect(lite).toBe(method === "oauth");
+      expect(lite).toBe(false);
       expect(input).toHaveLength(6);
       const items = wire.input.slice(-6);
       captures.forEach(({ callId, capture, text, data, fixture }, index) => {

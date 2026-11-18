@@ -10,7 +10,9 @@ Desktop and Browser Ask Agent retain the saved model and thinking level while pr
 
 ## Codex thinking summaries
 
-AgentLink requests detailed reasoning summaries for reasoning-enabled OpenAI/Codex requests, including GPT-6.2 Astra/Sol, GPT-6 Astra and GPT-6.1 Sol through the subscription Responses Lite endpoint. Summaries appear as thinking blocks when the provider returns them, over both WebSocket and HTTP/SSE transport. These are provider-supplied summaries, not the model's full internal reasoning; a request can reason without returning a visible summary.
+AgentLink requests detailed reasoning summaries for reasoning-enabled OpenAI/Codex requests, including GPT-6.2 Astra/Sol, GPT-6 Astra and GPT-6.1 Sol over a ChatGPT/Codex subscription.
+
+ChatGPT/Codex subscription requests use the full Responses API for every model, so a model can call several tools in one reply. Codex's own catalog marks the GPT-6.x Astra and Sol models for the lighter Responses Lite format, but that format forces one tool call per reply and the backend accepts the full format for these models. AgentLink only switches a model to Lite if the backend requires it. Summaries appear as thinking blocks when the provider returns them, over both WebSocket and HTTP/SSE transport. These are provider-supplied summaries, not the model's full internal reasoning; a request can reason without returning a visible summary.
 
 This is separate from OpenAI-compatible connections such as Meridian. Those connections display visible thinking text returned in streamed `reasoning` or `reasoning_content` fields; reasoning-effort configuration alone does not guarantee visible thinking text.
 

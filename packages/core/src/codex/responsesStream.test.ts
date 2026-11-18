@@ -23,6 +23,24 @@ import {
   type CodexTurnRouting,
 } from "./turnRouting.js";
 
+// No current model requires Responses Lite. Treat these as Lite-only here so
+// the Lite transport path (header, socket separation) stays covered for a
+// model that may need it later.
+vi.mock("./models.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./models.js")>();
+  const liteModels = new Set(["gpt-6-astra", "gpt-6.1-sol"]);
+  const usesCodexResponsesLite = (model: string, authMethod?: string) =>
+    authMethod === "oauth" && liteModels.has(model);
+  return {
+    ...actual,
+    usesCodexResponsesLite,
+    getCodexResponsesRequestHeaders: (model: string, authMethod?: string) =>
+      usesCodexResponsesLite(model, authMethod)
+        ? { [actual.CODEX_RESPONSES_LITE_HEADER]: "true" }
+        : undefined,
+  };
+});
+
 async function* toAsyncIterable(
   events: Array<Record<string, unknown>>,
 ): AsyncGenerator<Record<string, unknown>> {
