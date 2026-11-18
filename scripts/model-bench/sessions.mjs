@@ -90,6 +90,65 @@ export function todoMetrics(sessionDir) {
   };
 }
 
+/**
+ * Per-request stats from a chat's activity trace: model requests, replies
+ * whose only tool calls were todo_write, replies with more than one tool
+ * call, and input tokens split into cached and uncached. Kept in
+ * attempt.json so bench folders stay comparable after session history is
+ * cleaned up. Null when the session has no trace.
+ */
+export function requestStats(sessionDir) {
+  let text;
+  try {
+    text = fs.readFileSync(
+      path.join(sessionDir, "activity-trace.jsonl"),
+      "utf8",
+    );
+  } catch {
+    return null;
+  }
+  const stats = {
+    requests: 0,
+    todoOnlyReplies: 0,
+    multiToolReplies: 0,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    uncachedInputTokens: 0,
+    outputTokens: 0,
+  };
+  let reply = null;
+  const closeReply = () => {
+    if (!reply?.length) return;
+    if (reply.every((name) => name === "todo_write")) stats.todoOnlyReplies++;
+    if (reply.length > 1) stats.multiToolReplies++;
+  };
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (event.kind === "api_request") {
+      closeReply();
+      reply = [];
+      const payload = event.payload ?? {};
+      const input = Number(payload.inputTokens) || 0;
+      const cached = Number(payload.cacheReadTokens) || 0;
+      stats.requests++;
+      stats.inputTokens += input;
+      stats.cachedInputTokens += cached;
+      stats.uncachedInputTokens += Math.max(0, input - cached);
+      stats.outputTokens += Number(payload.outputTokens) || 0;
+    } else if (event.kind === "tool_start" && reply) {
+      reply.push(event.payload?.toolName);
+    }
+  }
+  closeReply();
+  return stats;
+}
+
 export function firstUserText(sessionDir) {
   const messages = loadMessages(sessionDir);
   const first = messages.find((message) => message?.role === "user");

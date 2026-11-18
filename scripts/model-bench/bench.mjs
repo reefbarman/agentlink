@@ -29,6 +29,12 @@
 //   codex-login [--force]             Check or add the Codex (ChatGPT subscription)
 //                                     sign-in shared with AgentLink in VS Code.
 //   report [--out <dir>]              Write report/index.html, summary.md, data.json.
+//   compare <before> <after> [--out <file>] [--backfill]
+//                                     Before/after tables per model and per task for
+//                                     two bench folders (paths, or folder names under
+//                                     telemetry-reports/). --backfill first stores
+//                                     per-request stats in older attempt.json files
+//                                     whose session history still exists.
 //
 // Output lives in telemetry-reports/model-bench (ignored), or MODEL_BENCH_DIR.
 
@@ -45,9 +51,20 @@ import {
   loadTask,
   scoreWorkspace,
 } from "./scoring.mjs";
+import {
+  backfillRequestStats,
+  compareBenchDirs,
+  renderComparison,
+  resolveBenchDir,
+} from "./compare.mjs";
 import { buildSchedule, resolveLimits, runAttempt } from "./runner.mjs";
 import { createGatewayClient, findGatewayInstance } from "./gateway.mjs";
-import { findTaskSessions, listSessions, todoMetrics } from "./sessions.mjs";
+import {
+  findTaskSessions,
+  listSessions,
+  requestStats,
+  todoMetrics,
+} from "./sessions.mjs";
 
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -99,6 +116,7 @@ async function main() {
     todos: (args) => runLiveEval(args, LIVE_EVALS.todos),
     "codex-login": runCodexLogin,
     report: runReport,
+    compare: runCompare,
   };
   const handler = commands[command];
   if (!handler) {
@@ -273,6 +291,7 @@ function recordAttempt({
   const state = readJson(STATE_FILE);
   const session = sessionId ? loadSession(sessionId) : undefined;
   const todo = sessionId ? todoMetrics(sessionDir(sessionId)) : null;
+  const requests = sessionId ? requestStats(sessionDir(sessionId)) : null;
   const traceSummary = summaryPath
     ? readJson(summaryPath)
     : session?.traceSummary;
@@ -327,6 +346,7 @@ function recordAttempt({
         }
       : null,
     todo,
+    requests,
     verdict,
   };
   fs.writeFileSync(
@@ -608,6 +628,37 @@ function runReport(args) {
   console.log(
     `  ${path.relative(REPO_ROOT, path.join(written, "summary.md"))}`,
   );
+}
+
+function runCompare(args) {
+  const [beforeArg, afterArg] = args._;
+  if (!beforeArg || !afterArg) {
+    throw new Error(
+      "Usage: mise run bench:compare <before-dir> <after-dir> [--out <file>] [--backfill]",
+    );
+  }
+  const beforeDir = resolveBenchDir(String(beforeArg), REPO_ROOT);
+  const afterDir = resolveBenchDir(String(afterArg), REPO_ROOT);
+  if (args.backfill) {
+    for (const dir of [beforeDir, afterDir]) {
+      const updated = backfillRequestStats(dir, HISTORY_DIR);
+      console.log(
+        `Backfilled per-request stats into ${updated} attempt(s) in ${path.relative(REPO_ROOT, dir)}`,
+      );
+    }
+  }
+  const markdown = renderComparison({
+    beforeName: path.relative(REPO_ROOT, beforeDir),
+    afterName: path.relative(REPO_ROOT, afterDir),
+    comparison: compareBenchDirs(beforeDir, afterDir, HISTORY_DIR),
+  });
+  console.log(markdown);
+  if (args.out) {
+    const outFile = path.resolve(REPO_ROOT, String(args.out));
+    fs.mkdirSync(path.dirname(outFile), { recursive: true });
+    fs.writeFileSync(outFile, markdown);
+    console.log(`Wrote ${path.relative(REPO_ROOT, outFile)}`);
+  }
 }
 
 function sessionDir(sessionId) {

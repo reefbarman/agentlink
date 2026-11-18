@@ -4,6 +4,7 @@
 #   mise run bench:score --session <session-id>
 #   mise run bench:routing --only opus-5.5 --profiles compatibility,reasoning
 #   mise run bench:todos --runs 3
+#   mise run bench:compare model-bench-1.99.1-medium model-bench-1.99.5-medium
 # Step-by-step guide: scripts/model-bench/README.md
 
 [tasks."bench:calibrate"]
@@ -41,6 +42,10 @@ run = "node scripts/model-bench/bench.mjs todos"
 [tasks."bench:report"]
 description = "Build the comparison report (HTML charts, Markdown summary, JSON data)"
 run = "node scripts/model-bench/bench.mjs report"
+
+[tasks."bench:compare"]
+description = "Compare two bench folders: before/after tables per model and per task"
+run = "node scripts/model-bench/bench.mjs compare"
 
 [tasks."bench:open"]
 description = "Build and open the comparison report"

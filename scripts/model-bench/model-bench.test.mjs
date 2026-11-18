@@ -11,6 +11,13 @@ import {
 } from "./scoring.mjs";
 import { afterEach, test } from "node:test";
 import {
+  attemptRequestStats,
+  attemptRows,
+  backfillRequestStats,
+  compareRuns,
+  renderComparison,
+} from "./compare.mjs";
+import {
   buildCharts,
   checkScore,
   median,
@@ -20,7 +27,12 @@ import {
   writeReport,
 } from "./report.mjs";
 import { buildSchedule, resolveLimits, runAttempt } from "./runner.mjs";
-import { findTaskSessions, listSessions, todoMetrics } from "./sessions.mjs";
+import {
+  findTaskSessions,
+  listSessions,
+  requestStats,
+  todoMetrics,
+} from "./sessions.mjs";
 
 import assert from "node:assert/strict";
 import { parseArgs } from "./bench.mjs";
@@ -584,4 +596,163 @@ test("report shows TODO eval results and per-attempt TODO counts", () => {
   );
   assert.match(markdown, /\| 3 \| 3 \| 1\/1 \|/);
   assert.match(markdown, /TODO decision pass rate by probe/);
+});
+
+function writeTrace(sessionDir, events) {
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(sessionDir, "activity-trace.jsonl"),
+    events.map((event) => JSON.stringify(event)).join("\n") + "\n",
+  );
+}
+
+const request = (inputTokens, cacheReadTokens, outputTokens = 5) => ({
+  kind: "api_request",
+  payload: { inputTokens, cacheReadTokens, outputTokens },
+});
+const toolStart = (toolName) => ({ kind: "tool_start", payload: { toolName } });
+
+test("request stats count replies, TODO-only and multi-tool replies, and cache split", () => {
+  const dir = makeTempDirectory();
+  writeTrace(dir, [
+    request(1000, 0),
+    toolStart("todo_write"),
+    request(1200, 1000),
+    toolStart("read_file"),
+    toolStart("todo_write"),
+    request(1500, 1200),
+    toolStart("todo_write"),
+    toolStart("todo_write"),
+    request(1600, 1500),
+  ]);
+  assert.deepEqual(requestStats(dir), {
+    requests: 4,
+    todoOnlyReplies: 2,
+    multiToolReplies: 2,
+    inputTokens: 5300,
+    cachedInputTokens: 3700,
+    uncachedInputTokens: 1600,
+    outputTokens: 20,
+  });
+  assert.equal(requestStats(makeTempDirectory()), null);
+});
+
+test("attempt stats prefer attempt.json, then session history, then run totals", () => {
+  const history = makeTempDirectory();
+  writeTrace(path.join(history, "s1"), [request(100, 40)]);
+  const stored = { requests: 9, inputTokens: 1 };
+  assert.equal(
+    attemptRequestStats(attempt("a", "t", true, { requests: stored }), history)
+      .source,
+    "attempt",
+  );
+  const rebuilt = attemptRequestStats(
+    attempt("a", "t", true, { sessionId: "s1" }),
+    history,
+  );
+  assert.equal(rebuilt.source, "history");
+  assert.equal(rebuilt.uncachedInputTokens, 60);
+  const totals = attemptRequestStats(
+    attempt("a", "t", true, { sessionId: "gone" }),
+    history,
+  );
+  assert.equal(totals.source, "totals");
+  assert.equal(totals.requests, 4);
+  assert.equal(totals.multiToolReplies, null);
+});
+
+test("compare averages per attempt, skips infra and flags effort changes", () => {
+  const stats = (requests, input, cached) => ({
+    requests,
+    todoOnlyReplies: 0,
+    multiToolReplies: 1,
+    inputTokens: input,
+    cachedInputTokens: cached,
+    uncachedInputTokens: input - cached,
+    outputTokens: 10,
+  });
+  const before = attemptRows(
+    [
+      attempt("m", "t1", true, {
+        reasoningEffort: "medium",
+        requests: stats(10, 1000, 500),
+      }),
+      attempt("m", "t1", false, {
+        reasoningEffort: "medium",
+        terminalReason: "infra",
+        requests: stats(99, 1, 0),
+      }),
+    ],
+    undefined,
+  );
+  const after = attemptRows(
+    [
+      attempt("m", "t1", true, {
+        reasoningEffort: "high",
+        requests: stats(6, 800, 600),
+      }),
+      attempt("m", "t1", true, {
+        reasoningEffort: "high",
+        requests: stats(4, 1200, 1000),
+      }),
+      attempt("n", "t1", true, { requests: stats(5, 100, 50) }),
+    ],
+    undefined,
+  );
+  const comparison = compareRuns(before, after);
+  const model = comparison.models.find((entry) => entry.key === "m");
+  assert.equal(model.before.attempts, 1);
+  assert.equal(model.before.requests, 10);
+  assert.equal(model.after.requests, 5);
+  assert.equal(model.before.cachedShare, 0.5);
+  assert.equal(model.after.cachedShare, 0.8);
+  assert.equal(
+    comparison.models.find((entry) => entry.key === "n").before,
+    null,
+  );
+  assert.equal(comparison.tasks[0].key, "m / t1");
+
+  const markdown = renderComparison({
+    beforeName: "old",
+    afterName: "new",
+    comparison,
+  });
+  assert.match(markdown, /## Per model\n/);
+  assert.match(markdown, /## Per model and task/);
+  assert.match(
+    markdown,
+    /\| m \| 1\/1, medium → 2\/2, high \| 10\.0 → 5\.0 \(-50%\)/,
+  );
+  assert.match(markdown, /50% → 80% \(\+30 pts\)/);
+  assert.match(markdown, /Reasoning effort differs for m/);
+  assert.match(markdown, /\| n \| none → 1\/1, default \|/);
+});
+
+test("backfill stores rebuilt request stats only where they are missing", () => {
+  const history = makeTempDirectory();
+  writeTrace(path.join(history, "s1"), [request(100, 40)]);
+  const benchDir = makeTempDirectory();
+  const write = (name, value) => {
+    const dir = path.join(benchDir, "attempts", name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "attempt.json"), JSON.stringify(value));
+  };
+  write("old", attempt("a", "t", true, { sessionId: "s1" }));
+  write(
+    "new",
+    attempt("a", "t", true, { sessionId: "s1", requests: { requests: 7 } }),
+  );
+  write("gone", attempt("a", "t", true, { sessionId: "missing" }));
+
+  assert.equal(backfillRequestStats(benchDir, history), 1);
+  const read = (name) =>
+    JSON.parse(
+      fs.readFileSync(
+        path.join(benchDir, "attempts", name, "attempt.json"),
+        "utf8",
+      ),
+    );
+  assert.equal(read("old").requests.requests, 1);
+  assert.equal(read("new").requests.requests, 7);
+  assert.equal(read("gone").requests, undefined);
 });

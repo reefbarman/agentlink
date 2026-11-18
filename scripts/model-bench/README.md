@@ -226,6 +226,19 @@ MODEL_BENCH_DIR=telemetry-reports/bench-nov mise run bench:routing
 
 Use the same `MODEL_BENCH_DIR` for prepare, score and report in that campaign.
 
+## Comparing two runs
+
+Give each campaign a descriptive folder (for example `telemetry-reports/model-bench-1.100.0-gpt-high`), then compare it with an earlier one:
+
+```sh
+mise run bench:compare model-bench-1.99.1-medium model-bench-1.99.5-medium
+mise run bench:compare <before> <after> --out telemetry-reports/compare.md
+```
+
+Folders can be paths or names under `telemetry-reports/`. It prints Markdown tables, per model and per model and task, with before → after averages per attempt: requests, tool calls, TODO-only replies, replies with several tool calls, input, uncached input, cached share, output and time. Infra failures are excluded. It warns when reasoning effort differs between the two folders, since that mixes effort with any harness change.
+
+Each `attempt.json` stores these per-request stats under `requests`, so folders stay comparable after `.agentlink/history` is cleaned up. Attempts recorded before that use the session history if it still exists, otherwise the run totals (multi-tool replies then show `n/a`). Add `--backfill` to write the rebuilt stats into older `attempt.json` files while their history is still there.
+
 ## models.json
 
 ```json
@@ -275,6 +288,7 @@ Point `--models <file>` or `MODEL_BENCH_MODELS` at a private copy for endpoints 
 | `mise run bench:score`                 | Verify the fixture and record an attempt (`--session`, `--model`, `--intervened`, `--note`)                                                                                       |
 | `mise run bench:sessions`              | List recent chats and their session IDs (`--limit n`)                                                                                                                             |
 | `mise run bench:report` / `bench:open` | Build (and open) the report                                                                                                                                                       |
+| `mise run bench:compare <a> <b>`       | Before/after tables for two bench folders (`--out <file>`, `--backfill`)                                                                                                          |
 | `mise run bench:test`                  | The bench's own tests                                                                                                                                                             |
 
 ## Limits
