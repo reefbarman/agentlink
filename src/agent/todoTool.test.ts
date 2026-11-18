@@ -12,7 +12,7 @@ import type { TodoItem } from "./todoTool.js";
 describe("todoTool", () => {
   it("points final completion to set_task_status", () => {
     expect(todoTool.description).toContain("completeTodos=true");
-    expect(todoTool.description).toContain("instead of a final todo_write");
+    expect(todoTool.description).toContain("not a final todo_write");
   });
 
   it("requires continuous reconciliation and completed-history compaction", () => {

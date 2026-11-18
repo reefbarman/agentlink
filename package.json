@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink: AI Coding Agent",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
-  "version": "1.99.1",
+  "version": "1.99.3",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -1268,7 +1268,8 @@
     "release:plan": "node scripts/release-coordinator.mjs plan",
     "audit:assistant-runtime": "node scripts/audit-assistant-runtime.mjs",
     "benchmark:codex-oauth-models": "node --experimental-strip-types scripts/benchmark-codex-oauth-models.mts",
-    "eval:routing": "npm run build:workspaces && vitest run --config vitest.eval.config.mts --silent=false",
+    "eval:routing": "npm run build:workspaces && vitest run --config vitest.eval.config.mts --silent=false src/evals/routingEval.eval.ts",
+    "eval:todos": "npm run build:workspaces && vitest run --config vitest.eval.config.mts --silent=false src/evals/todoEval.eval.ts",
     "benchmark:browser-gateway-bundle": "node esbuild.mjs --browser-gateway-report=benchmarks/browser-gateway-bundle-baseline.json",
     "desktop:build": "npm run build",
     "desktop:package": "npm run build && npm run package --workspace @agentlink/desktop --",

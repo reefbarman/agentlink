@@ -208,7 +208,8 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
   },
 ];
 
-function effectiveToolName(call: ObservedToolCall): string {
+/** The tool actually invoked, with call_native_tool unwrapped to its target. */
+export function effectiveToolName(call: ObservedToolCall): string {
   if (call.name !== "call_native_tool") return call.name;
   const input = call.input as { name?: unknown } | null | undefined;
   return typeof input?.name === "string" ? input.name : call.name;

@@ -1,12 +1,15 @@
-// Aggregates routing-eval reports and scored attempts into a comparison
-// report: data.json, summary.md (tables plus vega-lite fences, which
-// AgentLink's chat renders) and a standalone index.html with Vega-Lite charts.
+// Aggregates routing and TODO eval reports and scored attempts into a
+// comparison report: data.json, summary.md (tables plus vega-lite fences,
+// which AgentLink's chat renders) and a standalone index.html with Vega-Lite
+// charts.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export function loadRoutingReports(benchDir) {
-  const dir = path.join(benchDir, "routing");
+const EMPTY_EVAL = { rows: [], taskRows: [] };
+
+export function loadRoutingReports(benchDir, subdir = "routing") {
+  const dir = path.join(benchDir, subdir);
   if (!fs.existsSync(dir)) return [];
   return fs
     .readdirSync(dir)
@@ -29,7 +32,10 @@ export function loadAttempts(benchDir) {
     .sort((a, b) => String(a.scoredAt).localeCompare(String(b.scoredAt)));
 }
 
-/** Latest routing report per (label, prompt profile); older ones are history. */
+/**
+ * Latest live-eval report per (label, prompt profile); older ones are
+ * history. Used for routing and TODO eval reports, which share a shape.
+ */
 export function summarizeRouting(reports) {
   const latest = new Map();
   for (const report of reports) {
@@ -58,6 +64,7 @@ export function summarizeRouting(reports) {
       errors,
       passed,
       passRate: valid > 0 ? passed / valid : null,
+      todoOnlyReplies: report.todoOnlyReplies ?? null,
       file: report.file,
     });
     for (const taskId of new Set(results.map((result) => result.taskId))) {
@@ -121,6 +128,11 @@ export function summarizeAttempts(attempts) {
           attempt.elapsedMs == null ? null : attempt.elapsedMs / 1000,
         ),
       ),
+      medianTodoCalls: median(group.map((attempt) => attempt.todo?.calls)),
+      medianTodoOnlyRequests: median(
+        group.map((attempt) => attempt.todo?.todoOnlyRequests),
+      ),
+      listsStarted: group.filter((attempt) => attempt.todo?.listStarted).length,
       verifierVersions: [
         ...new Set(group.map((attempt) => attempt.verdict.verifierVersion)),
       ],
@@ -167,7 +179,34 @@ export function median(values) {
     : (numbers[middle - 1] + numbers[middle]) / 2;
 }
 
-export function buildCharts(routing, endToEnd) {
+function passRateHeatmap(title, evalSummary) {
+  return {
+    title,
+    spec: {
+      $schema: "https://vega.github.io/schema/vega-lite/v5.json",
+      data: {
+        values: evalSummary.taskRows.map((row) => ({
+          ...row,
+          series: `${row.label} (${row.promptProfile})`,
+        })),
+      },
+      mark: "rect",
+      encoding: {
+        x: { field: "series", type: "nominal", title: null },
+        y: { field: "task", type: "nominal", title: null },
+        color: {
+          field: "passRate",
+          type: "quantitative",
+          scale: { domain: [0, 1], scheme: "redyellowgreen" },
+          title: "Pass rate",
+        },
+        tooltip: ["series", "task", "passed", "valid"],
+      },
+    },
+  };
+}
+
+export function buildCharts(routing, endToEnd, todos = EMPTY_EVAL) {
   const charts = [];
   if (routing.rows.length) {
     charts.push({
@@ -199,30 +238,10 @@ export function buildCharts(routing, endToEnd) {
         },
       },
     });
-    charts.push({
-      title: "Routing pass rate by probe",
-      spec: {
-        $schema: "https://vega.github.io/schema/vega-lite/v5.json",
-        data: {
-          values: routing.taskRows.map((row) => ({
-            ...row,
-            series: `${row.label} (${row.promptProfile})`,
-          })),
-        },
-        mark: "rect",
-        encoding: {
-          x: { field: "series", type: "nominal", title: null },
-          y: { field: "task", type: "nominal", title: null },
-          color: {
-            field: "passRate",
-            type: "quantitative",
-            scale: { domain: [0, 1], scheme: "redyellowgreen" },
-            title: "Pass rate",
-          },
-          tooltip: ["series", "task", "passed", "valid"],
-        },
-      },
-    });
+    charts.push(passRateHeatmap("Routing pass rate by probe", routing));
+  }
+  if (todos.rows.length) {
+    charts.push(passRateHeatmap("TODO decision pass rate by probe", todos));
   }
   if (endToEnd.length) {
     charts.push({
@@ -284,7 +303,39 @@ export function buildCharts(routing, endToEnd) {
   return charts;
 }
 
-export function renderMarkdown({ generatedAt, routing, endToEnd, charts }) {
+const TODO_EVAL_HEADERS = [
+  "Model",
+  "Profile",
+  "Transport",
+  "Pass rate",
+  "Passed",
+  "Responses",
+  "TODO-only replies",
+  "Errors",
+  "Revision",
+];
+
+function todoEvalCells(row) {
+  return [
+    row.label,
+    row.promptProfile,
+    transportLabel(row),
+    percent(row.passRate),
+    row.passed,
+    row.responses,
+    row.todoOnlyReplies ?? "n/a",
+    row.errors,
+    row.harnessRevision ?? "unknown",
+  ];
+}
+
+export function renderMarkdown({
+  generatedAt,
+  routing,
+  endToEnd,
+  charts,
+  todos = EMPTY_EVAL,
+}) {
   const lines = [
     `# AgentLink model bench`,
     ``,
@@ -323,6 +374,17 @@ export function renderMarkdown({ generatedAt, routing, endToEnd, charts }) {
   } else {
     lines.push(`No routing reports yet. Run \`mise run bench:routing\`.`, ``);
   }
+  lines.push(`## TODO decision points`, ``);
+  if (todos.rows.length) {
+    lines.push(
+      table(TODO_EVAL_HEADERS, todos.rows.map(todoEvalCells)),
+      ``,
+      `Each probe replays a scripted conversation up to one TODO decision and grades the next reply (see src/evals/todoTasks.ts). TODO-only replies spent a whole model request on todo_write alone.`,
+      ``,
+    );
+  } else {
+    lines.push(`No TODO eval reports yet. Run \`mise run bench:todos\`.`, ``);
+  }
   lines.push(`## End-to-end fixture tasks`, ``);
   if (endToEnd.length) {
     lines.push(
@@ -339,6 +401,9 @@ export function renderMarkdown({ generatedAt, routing, endToEnd, charts }) {
           "Median requests",
           "Median tool calls",
           "Median elapsed (s)",
+          "Median TODO calls",
+          "Median TODO-only requests",
+          "Lists started",
         ],
         endToEnd.map((row) => [
           row.task,
@@ -354,10 +419,13 @@ export function renderMarkdown({ generatedAt, routing, endToEnd, charts }) {
           row.medianElapsedSec == null
             ? "n/a"
             : Math.round(row.medianElapsedSec),
+          row.medianTodoCalls ?? "n/a",
+          row.medianTodoOnlyRequests ?? "n/a",
+          `${row.listsStarted ?? 0}/${row.attempts}`,
         ]),
       ),
       ``,
-      `Solved means every held-out, public and static check passed without intervention. Mean check score is the average share of checks passed, which shows partial progress on longer tasks. Stopped counts attempts ended by a time or request cap, a question the model needed answered, or a chat error. Infra failures (harness or gateway problems) are excluded from the attempt count. Integrity flags count attempts that changed tests, package.json or files outside the task's expected set.`,
+      `Solved means every held-out, public and static check passed without intervention. Mean check score is the average share of checks passed, which shows partial progress on longer tasks. Stopped counts attempts ended by a time or request cap, a question the model needed answered, or a chat error. Infra failures (harness or gateway problems) are excluded from the attempt count. Integrity flags count attempts that changed tests, package.json or files outside the task's expected set. TODO-only requests are model requests whose only tool calls were todo_write.`,
       ``,
     );
   } else {
@@ -379,7 +447,13 @@ export function renderMarkdown({ generatedAt, routing, endToEnd, charts }) {
   return lines.join("\n");
 }
 
-export function renderHtml({ generatedAt, routing, endToEnd, charts }) {
+export function renderHtml({
+  generatedAt,
+  routing,
+  endToEnd,
+  charts,
+  todos = EMPTY_EVAL,
+}) {
   const embed = (chart, index) =>
     `<section><h2>${escapeHtml(chart.title)}</h2><div id="chart-${index}"></div></section>`;
   const specs = JSON.stringify(
@@ -433,6 +507,7 @@ ${htmlTable(
     row.harnessRevision ?? "unknown",
   ]),
 )}
+${htmlTable("TODO decision points", TODO_EVAL_HEADERS, todos.rows.map(todoEvalCells))}
 ${htmlTable(
   "End-to-end fixture tasks",
   [
@@ -446,6 +521,9 @@ ${htmlTable(
     "Integrity flags",
     "Median requests",
     "Median elapsed (s)",
+    "Median TODO calls",
+    "Median TODO-only requests",
+    "Lists started",
   ],
   endToEnd.map((row) => [
     row.task,
@@ -458,6 +536,9 @@ ${htmlTable(
     row.integrityFlags,
     row.medianApiCalls ?? "n/a",
     row.medianElapsedSec == null ? "n/a" : Math.round(row.medianElapsedSec),
+    row.medianTodoCalls ?? "n/a",
+    row.medianTodoOnlyRequests ?? "n/a",
+    `${row.listsStarted ?? 0}/${row.attempts}`,
   ]),
 )}
 ${charts.map(embed).join("\n")}
@@ -472,23 +553,24 @@ specs.forEach((spec, index) => vegaEmbed("#chart-" + index, spec, { actions: fal
 
 export function writeReport(benchDir, outDir = path.join(benchDir, "report")) {
   const routing = summarizeRouting(loadRoutingReports(benchDir));
+  const todos = summarizeRouting(loadRoutingReports(benchDir, "todos"));
   const attempts = loadAttempts(benchDir);
   const endToEnd = summarizeAttempts(attempts);
-  const charts = buildCharts(routing, endToEnd);
+  const charts = buildCharts(routing, endToEnd, todos);
   const generatedAt = new Date().toISOString();
-  const model = { generatedAt, routing, endToEnd, charts };
+  const model = { generatedAt, routing, endToEnd, charts, todos };
   fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(
     path.join(outDir, "data.json"),
     JSON.stringify(
-      { generatedAt, routing, endToEnd, attempts: attempts.length },
+      { generatedAt, routing, todos, endToEnd, attempts: attempts.length },
       null,
       2,
     ),
   );
   fs.writeFileSync(path.join(outDir, "summary.md"), renderMarkdown(model));
   fs.writeFileSync(path.join(outDir, "index.html"), renderHtml(model));
-  return { outDir, routing, endToEnd };
+  return { outDir, routing, endToEnd, todos };
 }
 
 function table(headers, rows) {

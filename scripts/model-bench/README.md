@@ -2,12 +2,13 @@
 
 Compare how different models perform inside AgentLink, using AgentLink's real system prompt, tools and editor. Use it to decide whether a new model is ready, and to find prompt or tool problems worth fixing.
 
-The bench has two parts:
+The bench has three parts:
 
-| Part                 | What it measures                                                                                                                  | How it runs                                                 |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| **Routing**          | Whether the model picks the right tool on its first reply, across 14 probes (`src/evals/goldenTasks.ts`). Tools are not executed. | Fully automated                                             |
-| **End-to-end tasks** | Whether the model actually completes a small coding task in a VS Code chat, and how many requests, tool calls and tokens it uses. | Fully automated with `bench:run` (or by hand if you prefer) |
+| Part                 | What it measures                                                                                                                                                                     | How it runs                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
+| **Routing**          | Whether the model picks the right tool on its first reply, across 14 probes (`src/evals/goldenTasks.ts`). Tools are not executed.                                                    | Fully automated                                             |
+| **TODO decisions**   | Whether the model starts, updates and finishes TODO lists in proportion to the task, across 10 scripted mid-task decision points (`src/evals/todoTasks.ts`). Tools are not executed. | Fully automated                                             |
+| **End-to-end tasks** | Whether the model actually completes a small coding task in a VS Code chat, and how many requests, tool calls, tokens and TODO-only requests it uses.                                | Fully automated with `bench:run` (or by hand if you prefer) |
 
 End-to-end results are verified by the bench, never by the agent's own claim. The scorer copies the finished workspace, restores the original tests, then runs hidden behaviour checks, the original public test and file checks. Edited tests can't earn a pass.
 
@@ -61,6 +62,23 @@ mise run bench:routing --profiles compatibility,reasoning  # force each prompt p
 Run it natively, not in the AgentLink sandbox: it needs localhost (Meridian) and the Keychain (Codex).
 
 Each run writes a JSON report to `telemetry-reports/model-bench/routing/`. Errors (timeouts, HTTP failures) are counted separately and left out of the pass rate.
+
+### TODO decisions (automated)
+
+```sh
+mise run bench:todos                       # every model in models.json
+mise run bench:todos --runs 3 --only gpt-6.2-sol
+mise run bench:todos --tasks transition-batched,finish-with-list
+```
+
+It takes the same options as `bench:routing` and writes reports to `telemetry-reports/model-bench/todos/`. Each probe replays a scripted conversation up to one TODO decision and grades only the next reply:
+
+- Small, well-specified tasks (a fix in a named file, a short rename, a question) get no list.
+- Investigations and requests with several deliverables start a list in the same reply as their first action.
+- Progress inside an item leaves the list alone; finishing an item updates it together with the next item's first action.
+- Finishing ticks the list off through `set_task_status` `completeTodos`, never a separate final `todo_write`.
+
+The report counts **TODO-only replies**: replies whose only tool call was `todo_write`. Each one costs a whole model request for bookkeeping. To run one model without the bench, use `npm run eval:todos` with the same `AGENTLINK_EVAL_*` variables as `npm run eval:routing` (see `src/evals/evalModelClient.ts`).
 
 ## Step 2: End-to-end tasks (automated)
 
@@ -186,6 +204,7 @@ Routing uses the latest report per model and profile. End-to-end rows include ev
 - **Mean check score**: the average share of the verifier's checks that passed. Use it for `minesweeper-app`, where a model can get most of the way. On the small tasks it isn't meaningful (an untouched workspace already passes about half the checks), so read solves there instead.
 - **Integrity flags**: attempts that edited tests or `package.json`, or touched files outside the task. Look at these even when the task was solved.
 - **Median requests, tool calls, elapsed time**: efficiency. On these small tasks, strong models often all solve everything, so efficiency is the more useful comparison.
+- **Median TODO calls, TODO-only requests, lists started**: how much of an attempt went on TODO bookkeeping. On the small tasks, a list or any TODO-only request is overhead. Attempts scored before this was added show `n/a`.
 - **Routing per probe**: shows which kinds of tool choice a model gets wrong, for example searching when it should read a known file.
 - **Two runs per cell is a smoke test, not a ranking.** It shows clear differences, not close ones.
 
@@ -250,6 +269,7 @@ Point `--models <file>` or `MODEL_BENCH_MODELS` at a private copy for endpoints 
 | `mise run bench:calibrate`             | Check every task's checks against no-change, half-done and correct controls                                                                                                       |
 | `mise run bench:codex-login`           | Show or add the Codex sign-in (`--force` adds another account)                                                                                                                    |
 | `mise run bench:routing`               | Routing eval per model (`--only`, `--runs`, `--tasks`, `--profiles`, `--models`)                                                                                                  |
+| `mise run bench:todos`                 | TODO decision-point eval per model (same options as `bench:routing`)                                                                                                              |
 | `mise run bench:run`                   | Run every task for every model in VS Code chat tabs and score them (`--only`, `--tasks`, `--rounds`, `--max-minutes`, `--max-requests`, `--on-input`, `--keep-tabs`, `--dry-run`) |
 | `mise run bench:prepare <task>`        | Reset the fixture and print the prompt                                                                                                                                            |
 | `mise run bench:score`                 | Verify the fixture and record an attempt (`--session`, `--model`, `--intervened`, `--note`)                                                                                       |

@@ -85,24 +85,27 @@ export const todoTool: ToolDefinition = {
   name: TODO_TOOL_NAME,
   description: `Create and manage a structured task list to track your progress on complex tasks. The entire todo list is replaced each call — always include all items (completed, in-progress, and pending).
 
-Use this in your first response for any task needing more than one quick step, including:
+Start a list in your first response for:
 - Investigations, debugging, and "I've noticed X" questions, even if they look small at first
-- Implementation work, or when the user provides multiple tasks
-- Any work where the user benefits from seeing progress
-Skip it only for single-step answers such as one file read or one command.
+- Multi-phase or multi-file work, or a request with several deliverables or separate tasks
+- Any longer task where the user benefits from seeing progress
+Skip it for small, well-specified tasks, such as a fix in a named file, a short rename, or a single question or command.
+
+Keep it cheap:
+- Never call todo_write alone; it costs a full model request. Pair it with the next real action: your first read or search when you create the list, the next item's first edit or command when you move on
+- Update only when an item finishes or the plan or scope changes, not for progress within an item
+- When all visible todos are complete, finish with set_task_status status="completed" and completeTodos=true, not a final todo_write
 
 Task rules:
 - Exactly ONE task should be in_progress at a time
 - Treat the list as user-visible execution state, not a loose plan or end-of-turn recap
 - Before starting substantive work, make sure the list reflects the actual scope and current item
 - Before moving from one item to the next, call todo_write in the same transition: mark the finished item completed and the next item in_progress
-- Mark an item completed immediately after its outcome is achieved and verified; do not batch status updates until the end
 - Tool calls, edits, and narration do not update the visible list by themselves. Call todo_write at each real task transition, in the same response where the transition happens
 - After new evidence, user direction, or scope changes, promptly add, revise, reorder, or remove items so descriptions and statuses remain true
 - Never silently drop unfinished items. Remove one only when it is no longer part of the user's ask or is explicitly superseded, and preserve completed items as progress history
 - ${TODO_COMPACTION_GUIDANCE}
 - If the list looks stale after condensing or resuming, reconcile it against the conversation and current workspace before continuing. Update stale statuses; do not redo completed work merely because an item still says pending
-- When finishing the turn and all visible todos are complete, use set_task_status with status="completed" and completeTodos=true instead of a final todo_write only to mark todos complete
 - Use nested children (up to ${TODO_SCHEMA_NESTING_LEVELS} levels including the top level) to break complex tasks into sub-steps
 - Every item, including children, requires id, content, activeForm, and status
 - content: imperative form ("Run tests")

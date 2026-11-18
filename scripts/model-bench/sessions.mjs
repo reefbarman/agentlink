@@ -40,9 +40,58 @@ export function findTaskSessions(historyDir, prompt, since) {
   );
 }
 
-export function firstUserText(sessionDir) {
+function loadMessages(sessionDir) {
   const stored = readJson(path.join(sessionDir, "messages.json"));
-  const messages = Array.isArray(stored) ? stored : (stored?.messages ?? []);
+  return Array.isArray(stored) ? stored : (stored?.messages ?? []);
+}
+
+/**
+ * How a chat used its TODO list: todo_write calls, model requests (assistant
+ * messages) whose only tool calls were todo_write, whether a list was ever
+ * started, and whether the final status ticked it off with completeTodos.
+ * Null when the session has no stored messages.
+ */
+export function todoMetrics(sessionDir) {
+  const messages = loadMessages(sessionDir);
+  if (messages.length === 0) return null;
+  let calls = 0;
+  let todoOnlyRequests = 0;
+  let completedViaStatus = false;
+  for (const message of messages) {
+    if (message?.role !== "assistant" || !Array.isArray(message.content)) {
+      continue;
+    }
+    const names = message.content
+      .filter((block) => block?.type === "tool_use")
+      .map((block) =>
+        block.name === "call_native_tool" &&
+        typeof block.input?.name === "string"
+          ? block.input.name
+          : block.name,
+      );
+    const todos = names.filter((name) => name === "todo_write").length;
+    calls += todos;
+    if (todos > 0 && todos === names.length) todoOnlyRequests++;
+    for (const block of message.content) {
+      if (
+        block?.type === "tool_use" &&
+        block.name === "set_task_status" &&
+        block.input?.completeTodos === true
+      ) {
+        completedViaStatus = true;
+      }
+    }
+  }
+  return {
+    calls,
+    todoOnlyRequests,
+    listStarted: calls > 0,
+    completedViaStatus,
+  };
+}
+
+export function firstUserText(sessionDir) {
+  const messages = loadMessages(sessionDir);
   const first = messages.find((message) => message?.role === "user");
   if (!first) return "";
   if (typeof first.content === "string") return first.content;

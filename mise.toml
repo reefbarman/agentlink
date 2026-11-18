@@ -3,6 +3,7 @@
 #   mise run bench:prepare multi-file-refactor
 #   mise run bench:score --session <session-id>
 #   mise run bench:routing --only opus-5.5 --profiles compatibility,reasoning
+#   mise run bench:todos --runs 3
 # Step-by-step guide: scripts/model-bench/README.md
 
 [tasks."bench:calibrate"]
@@ -32,6 +33,10 @@ run = "node scripts/model-bench/bench.mjs codex-login"
 [tasks."bench:routing"]
 description = "Run the live first-turn routing eval for each model in scripts/model-bench/models.json"
 run = "node scripts/model-bench/bench.mjs routing"
+
+[tasks."bench:todos"]
+description = "Run the live TODO decision-point eval for each model in scripts/model-bench/models.json"
+run = "node scripts/model-bench/bench.mjs todos"
 
 [tasks."bench:report"]
 description = "Build the comparison report (HTML charts, Markdown summary, JSON data)"

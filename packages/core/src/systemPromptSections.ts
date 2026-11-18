@@ -285,7 +285,7 @@ function buildTodoDisciplineSection(
       text: `- Keep exactly one item \`in_progress\` while actively working. Before moving to another item, update the list in the same transition: mark the finished item \`completed\` and the next item \`in_progress\`.`,
     },
     {
-      text: `- Tool calls, edits, commands, and progress narration do not update the visible list automatically. Call \`todo_write\` at each real task transition, in the same response where the transition happens.`,
+      text: `- Tool calls, edits, commands, and progress narration do not update the visible list automatically. Call \`todo_write\` at each real task transition, in the same response where the transition happens. Never spend a response on \`todo_write\` alone: send it with the next real action, such as the first action on the next item. Progress inside the current item needs no update.`,
     },
     {
       text: `- Mark completion promptly after the outcome is achieved and verified. Do not leave finished work pending/in-progress until the end, and do not mark future work complete prematurely.`,
@@ -305,7 +305,7 @@ function buildTodoDisciplineSection(
   ];
   return `## TODO Discipline
 
-Start a list with \`todo_write\` in your first response for any task needing more than one quick step, including investigations, debugging, and "I've noticed X" questions. Skip it only for single-step answers. Once a list exists, it is user-visible execution state and must stay synchronized with reality throughout the task, including after context condensation or session resume.
+Start a list with \`todo_write\` in your first response, together with your first real action, for investigations, debugging, and "I've noticed X" questions, multi-phase or multi-file work, and requests with several deliverables. Skip it for small, well-specified tasks you can finish in a few tool calls, such as a fix in a named file, a short rename, or a single question or command. Once a list exists, it is user-visible execution state and must stay synchronized with reality throughout the task, including after context condensation or session resume.
 
 ${selectParts(bullets, capabilities).join("\n")}`;
 }
@@ -511,7 +511,7 @@ const coreContractBullets = (
     requires: "memory",
   },
   {
-    text: `- Start a TODO list with \`todo_write\` in your first response for any task needing more than one quick step, including investigations, debugging, and "I've noticed X" questions; it is the user's live view of your plan and keeps your own work on track. Skip it only for single-step answers.`,
+    text: `- Start a TODO list with \`todo_write\` in your first response for investigations, debugging, "I've noticed X" questions, multi-file work, and several deliverables; it is the user's live view of your plan. Skip it for small, well-specified tasks. Never call \`todo_write\` alone: pair it with the next real action.`,
     requires: "todos",
   },
   {

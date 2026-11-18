@@ -23,6 +23,9 @@
 //   routing [--models <file>] [--only a,b] [--runs n]
 //           [--profiles compatibility,reasoning] [--tasks a,b]
 //                                     Run the first-turn routing eval per model.
+//   todos [--models <file>] [--only a,b] [--runs n]
+//         [--profiles compatibility,reasoning] [--tasks a,b]
+//                                     Run the TODO decision-point eval per model.
 //   codex-login [--force]             Check or add the Codex (ChatGPT subscription)
 //                                     sign-in shared with AgentLink in VS Code.
 //   report [--out <dir>]              Write report/index.html, summary.md, data.json.
@@ -44,7 +47,7 @@ import {
 } from "./scoring.mjs";
 import { buildSchedule, resolveLimits, runAttempt } from "./runner.mjs";
 import { createGatewayClient, findGatewayInstance } from "./gateway.mjs";
-import { findTaskSessions, listSessions } from "./sessions.mjs";
+import { findTaskSessions, listSessions, todoMetrics } from "./sessions.mjs";
 
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -92,7 +95,8 @@ async function main() {
     score: runScore,
     sessions: runSessions,
     run: runCampaign,
-    routing: runRouting,
+    routing: (args) => runLiveEval(args, LIVE_EVALS.routing),
+    todos: (args) => runLiveEval(args, LIVE_EVALS.todos),
     "codex-login": runCodexLogin,
     report: runReport,
   };
@@ -268,6 +272,7 @@ function recordAttempt({
 }) {
   const state = readJson(STATE_FILE);
   const session = sessionId ? loadSession(sessionId) : undefined;
+  const todo = sessionId ? todoMetrics(sessionDir(sessionId)) : null;
   const traceSummary = summaryPath
     ? readJson(summaryPath)
     : session?.traceSummary;
@@ -321,6 +326,7 @@ function recordAttempt({
           traceTruncated: traceSummary.traceTruncated ?? null,
         }
       : null,
+    todo,
     verdict,
   };
   fs.writeFileSync(
@@ -495,12 +501,26 @@ async function runCodexLogin(args) {
   console.log(`Signed in as ${result.account.label}.`);
 }
 
-async function runRouting(args) {
+/** Live single-reply evals under src/evals, each with its own report folder. */
+export const LIVE_EVALS = {
+  routing: {
+    title: "Routing eval",
+    file: "src/evals/routingEval.eval.ts",
+    subdir: "routing",
+  },
+  todos: {
+    title: "TODO eval",
+    file: "src/evals/todoEval.eval.ts",
+    subdir: "todos",
+  },
+};
+
+async function runLiveEval(args, suite) {
   const models = loadModels(args);
   const profiles = args.profiles
     ? String(args.profiles).split(",")
     : [undefined];
-  const reportDir = path.join(BENCH_DIR, "routing");
+  const reportDir = path.join(BENCH_DIR, suite.subdir);
 
   const build = spawnSync("npm", ["run", "build:workspaces"], {
     cwd: REPO_ROOT,
@@ -516,7 +536,7 @@ async function runRouting(args) {
   for (const entry of models) {
     for (const profile of profiles) {
       const name = `${entry.label}${profile ? ` (${profile})` : ""}`;
-      console.log(`\n=== Routing eval: ${name} ===`);
+      console.log(`\n=== ${suite.title}: ${name} ===`);
       const apiKey = entry.apiKeyEnv ? process.env[entry.apiKeyEnv] : undefined;
       if (entry.apiKeyEnv && !apiKey) {
         console.warn(`Skipping ${name}: ${entry.apiKeyEnv} is not set.`);
@@ -560,6 +580,7 @@ async function runRouting(args) {
           "--config",
           "vitest.eval.config.mts",
           "--silent=false",
+          suite.file,
         ],
         { cwd: REPO_ROOT, stdio: "inherit", env },
       );
@@ -567,7 +588,7 @@ async function runRouting(args) {
     }
   }
   if (failures.length) {
-    console.error(`\nRouting eval failed for: ${failures.join(", ")}`);
+    console.error(`\n${suite.title} failed for: ${failures.join(", ")}`);
     process.exitCode = 1;
   }
   console.log(`\nReports in ${path.relative(REPO_ROOT, reportDir)}`);
@@ -589,8 +610,12 @@ function runReport(args) {
   );
 }
 
+function sessionDir(sessionId) {
+  return path.join(HISTORY_DIR, sessionId);
+}
+
 function loadSession(sessionId) {
-  const dir = path.join(REPO_ROOT, ".agentlink", "history", sessionId);
+  const dir = sessionDir(sessionId);
   if (!fs.existsSync(dir)) {
     throw new Error(`No AgentLink session history at ${dir}`);
   }

@@ -20,7 +20,7 @@ import {
   writeReport,
 } from "./report.mjs";
 import { buildSchedule, resolveLimits, runAttempt } from "./runner.mjs";
-import { findTaskSessions, listSessions } from "./sessions.mjs";
+import { findTaskSessions, listSessions, todoMetrics } from "./sessions.mjs";
 
 import assert from "node:assert/strict";
 import { parseArgs } from "./bench.mjs";
@@ -512,5 +512,76 @@ test("empty bench dir still produces a report with next steps", () => {
     charts: [],
   });
   assert.match(markdown, /bench:routing/);
+  assert.match(markdown, /bench:todos/);
   assert.match(markdown, /bench:prepare/);
+});
+
+test("todo metrics count TODO-only requests and completeTodos finishes", () => {
+  const dir = makeTempDirectory();
+  const use = (name, input = {}) => ({ type: "tool_use", name, input });
+  fs.writeFileSync(
+    path.join(dir, "messages.json"),
+    JSON.stringify([
+      { role: "user", content: "task" },
+      { role: "assistant", content: [use("todo_write")] },
+      {
+        role: "assistant",
+        content: [use("read_file"), use("todo_write"), use("list_files")],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "updating" },
+          use("call_native_tool", { name: "todo_write", input: {} }),
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "done" }] },
+      {
+        role: "assistant",
+        content: [use("set_task_status", { completeTodos: true })],
+      },
+    ]),
+  );
+  assert.deepEqual(todoMetrics(dir), {
+    calls: 3,
+    todoOnlyRequests: 2,
+    listStarted: true,
+    completedViaStatus: true,
+  });
+  assert.equal(todoMetrics(makeTempDirectory()), null);
+});
+
+test("report shows TODO eval results and per-attempt TODO counts", () => {
+  const benchDir = makeTempDirectory();
+  fs.mkdirSync(path.join(benchDir, "todos"));
+  fs.writeFileSync(
+    path.join(benchDir, "todos", "todos-1.json"),
+    JSON.stringify({
+      ...routingReport("a", "reasoning", [{ taskId: "p1", pass: true }], "1"),
+      todoOnlyReplies: 3,
+    }),
+  );
+  const attemptDir = path.join(benchDir, "attempts", "one");
+  fs.mkdirSync(attemptDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(attemptDir, "attempt.json"),
+    JSON.stringify(
+      attempt("a", "small-ts-bugfix", true, {
+        todo: { calls: 3, todoOnlyRequests: 3, listStarted: true },
+      }),
+    ),
+  );
+
+  const { outDir, todos, endToEnd } = writeReport(benchDir);
+  assert.equal(todos.rows[0].todoOnlyReplies, 3);
+  assert.equal(endToEnd[0].medianTodoOnlyRequests, 3);
+  assert.equal(endToEnd[0].listsStarted, 1);
+  const markdown = fs.readFileSync(path.join(outDir, "summary.md"), "utf8");
+  assert.match(markdown, /## TODO decision points/);
+  assert.match(
+    markdown,
+    /\| a \| reasoning \| chat-completions \| 100% \| 1 \| 1 \| 3 \|/,
+  );
+  assert.match(markdown, /\| 3 \| 3 \| 1\/1 \|/);
+  assert.match(markdown, /TODO decision pass rate by probe/);
 });
