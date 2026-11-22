@@ -28,6 +28,21 @@ interface ValidationResult {
   strippedCommand?: string;
 }
 
+export interface ValidateCommandOptions {
+  /**
+   * Allow terminal reads (cat/head/tail/grep/sed -n/PDF tools) and piped
+   * output filters (| head/tail/grep). These rejections exist so the user sees
+   * full output and file reads in their editor; under Approve for Me the user
+   * is not watching each step, so they are preferences rather than guards.
+   *
+   * File-write rejections (sed -i, tee, redirects, inline-script writes) are
+   * never relaxed: they keep edits reviewable and checkpointed. Read
+   * rejections are only relaxed when the preferred reader tool is available,
+   * so a restricted tool inventory still cannot be widened through the shell.
+   */
+  relaxReadAndOutputFilterGuards?: boolean;
+}
+
 /**
  * Validate a command for disallowed patterns.
  * Returns null if the command is clean, or a result with a rejection message.
@@ -35,13 +50,17 @@ interface ValidationResult {
 export function validateCommand(
   command: string,
   availableToolNames?: ReadonlySet<string>,
+  options: ValidateCommandOptions = {},
 ): ValidationResult | null {
+  const relax = options.relaxReadAndOutputFilterGuards === true;
+
   // Check 1: Direct file-reading commands (head/tail/cat/grep used standalone)
   const directViolation =
-    checkDirectFileCommands(command, availableToolNames) ??
+    checkDirectFileCommands(command, availableToolNames, relax) ??
     checkDirectFileCommands(
       maskCommandSubstitutions(command),
       availableToolNames,
+      relax,
     );
   if (directViolation) return directViolation;
 
@@ -50,6 +69,7 @@ export function validateCommand(
   if (inlineScriptWriteViolation) return inlineScriptWriteViolation;
 
   // Check 3: Piped filtering (cmd | head/tail/grep)
+  if (relax) return null;
   return detectPipedFiltering(command);
 }
 
@@ -138,7 +158,10 @@ function readToolGuidance(
 function checkDirectFileCommands(
   command: string,
   availableToolNames?: ReadonlySet<string>,
+  relaxReads = false,
 ): ValidationResult | null {
+  const canRelaxRead = (tool: string) =>
+    relaxReads && availableToolNames?.has(tool) === true;
   const subCommands = splitOnCompoundOperators(command);
 
   // Redirect targets written by sub-commands before the current one. A later
@@ -170,7 +193,9 @@ function checkDirectFileCommands(
         segmentTokens,
         availableToolNames,
       );
-      if (pdfReadViolation) return pdfReadViolation;
+      if (pdfReadViolation && !canRelaxRead("read_file")) {
+        return pdfReadViolation;
+      }
 
       if (segmentCmd === "tee") {
         const teeFiles = findTeeFileTargets(segmentTokens.slice(1));
@@ -269,6 +294,7 @@ function checkDirectFileCommands(
           (/^-[a-hj-mo-zA-Z]*n/.test(a) && !a.startsWith("--")),
       );
       if (hasQuietFlag) {
+        if (canRelaxRead("read_file")) continue;
         return {
           type: "direct",
           message: [
@@ -283,6 +309,8 @@ function checkDirectFileCommands(
       // transform that should use our editing tools instead
       const sedFileArg = findSedFileArg(sedArgs);
       if (sedFileArg) {
+        // Without -i this only previews a transform on stdout.
+        if (relaxReads) continue;
         return {
           type: "direct",
           message: [
@@ -317,9 +345,11 @@ function checkDirectFileCommands(
       continue;
     }
 
+    const readerAvailable = availableToolNames?.has(info.tool) === true;
+    if (canRelaxRead(info.tool)) continue;
+
     // Build a helpful message
     const lines: string[] = [];
-    const readerAvailable = availableToolNames?.has(info.tool) === true;
     const readerGuidance = readToolGuidance(
       info.tool === "search_files" ? "search_files" : "read_file",
       availableToolNames,

@@ -7782,6 +7782,27 @@ describe("handleExecuteCommand", () => {
     });
   });
 
+  it("relaxes read and output-filter guards only under Approve for Me", async () => {
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    validateCommand.mockClear();
+
+    await handleExecuteCommand(
+      { command: "ls | head -5" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-relax",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    ).catch(() => undefined);
+
+    expect(validateCommand).toHaveBeenCalledWith("ls | head -5", undefined, {
+      relaxReadAndOutputFilterGuards: true,
+    });
+  });
+
   it("materializes inline files, substitutes temp paths, and cleans up", async () => {
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
@@ -7800,6 +7821,7 @@ describe("handleExecuteCommand", () => {
     expect(validateCommand).toHaveBeenCalledWith(
       expect.stringMatching(/^gh pr comment 1 --body-file '\/.*\/body\.md'$/),
       undefined,
+      { relaxReadAndOutputFilterGuards: false },
     );
     expect(executeCommand).toHaveBeenCalledTimes(1);
     const executedOptions = executeCommand.mock.calls[0][0];

@@ -213,6 +213,8 @@ Read-only command profiles recognise bounded Git branch queries, including `git 
 
 Output-filter checks distinguish balanced `$()` command substitutions used to compute arguments or select inputs from visible terminal pipelines. For example, `files=$(list | head -3)` is not an output-filter violation, while `command | head -3` still requires `output_head`. Nested or quoted substitutions preserve this distinction; unresolved syntax remains conservative. File-write checks and command approval still apply.
 
+With Approve for Me on, `execute_command` no longer rejects piped `head`/`tail`/`grep` filters or terminal file reads (`cat`, `head`, `tail`, `grep`, `sed -n`, `sed` previews without `-i`, and PDF tools), because you are not watching each step's output. Reads are allowed only when the matching reader tool (`read_file` or `search_files`) is available to that agent, so a restricted tool set cannot be widened through the shell. File-write checks (`sed -i`, `tee` to files, `echo`/`printf`/`cat` redirection, inline-script writes) and command approval still apply.
+
 Exact command-tool parameters: [terminal tools](complete-reference.md#execute_command).
 
 ### Ask Agent scratch folder (Desktop and Browser Ask Agent)

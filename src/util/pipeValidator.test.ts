@@ -72,6 +72,53 @@ describe("validateCommand", () => {
     });
   });
 
+  describe("Approve for Me relaxation", () => {
+    const relaxed = (
+      command: string,
+      tools: ReadonlySet<string> = new Set(["read_file", "search_files"]),
+    ) =>
+      validateCommandImpl(command, tools, {
+        relaxReadAndOutputFilterGuards: true,
+      });
+
+    it.each([
+      "ls -la | head -5",
+      "git log | tail -20",
+      "ps aux | grep node | head -5",
+      "git status || head README.md",
+      "cat README.md",
+      "head -20 server.log",
+      "tail -50 app.log",
+      "grep -i error server.log",
+      "sed -n '1,5p' file.txt",
+      "sed 's/old/new/' file.txt",
+      "pdftotext docs/spec.pdf -",
+    ])("allows reads and output filters (%s)", (command) => {
+      expect(relaxed(command)).toBeNull();
+    });
+
+    it.each([
+      "sed -i 's/a/b/' file.txt",
+      "echo hi | tee out.txt",
+      "echo hello > out.txt",
+      "cat <<EOF > output.txt\nhello\nEOF",
+      `python3 -c 'open("out.txt", "w").write("x")'`,
+      "cat README.md && sed -i 's/a/b/' file.txt",
+    ])("keeps file-write guards (%s)", (command) => {
+      expect(relaxed(command)?.type).toBe("direct");
+    });
+
+    it("keeps read guards when the preferred reader is not available", () => {
+      expect(
+        relaxed("cat private.txt", new Set(["execute_command"]))?.message,
+      ).toContain("No authorized file-reading tool");
+      expect(
+        relaxed("pdftotext private.pdf -", new Set(["search_files"]))?.message,
+      ).toContain("No authorized file-reading tool");
+      expect(relaxed("ls | head -5", new Set(["execute_command"]))).toBeNull();
+    });
+  });
+
   describe("cat (read context)", () => {
     it("rejects cat with a file argument", () => {
       const result = validateCommand("cat somefile.txt");

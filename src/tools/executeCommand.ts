@@ -2750,10 +2750,16 @@ async function executeCommandWithAudit(
         };
       }
 
-      // Reject disallowed command patterns (direct head/tail/cat/grep, piped filtering)
+      // Reject disallowed command patterns (direct head/tail/cat/grep, piped
+      // filtering). Under Approve for Me, read and output-filter preferences
+      // are relaxed; file-write guards always apply.
       const commandViolation = validateCommand(
         commandToRun,
         providers.availableToolNames,
+        {
+          relaxReadAndOutputFilterGuards:
+            approvalMode.commandApprovalPolicy === "approve-for-me",
+        },
       );
       if (commandViolation) {
         // force=true can only bypass "direct" violations (shell expansion false positives),
@@ -3367,6 +3373,7 @@ async function executeCommandWithAudit(
               cwd,
               params.command,
               providers.availableToolNames,
+              approvalMode.commandApprovalPolicy === "approve-for-me",
             );
             if (editedValidation) return editedValidation;
             if (
@@ -5794,6 +5801,7 @@ function validateCommandBeforeExecution(
   cwd: string,
   originalCommand?: string,
   availableToolNames?: ReadonlySet<string>,
+  relaxReadAndOutputFilterGuards = false,
 ): ToolResult | null {
   const malformedCommandReason = validateMalformedShellCommand(command);
   if (malformedCommandReason) {
@@ -5821,7 +5829,9 @@ function validateCommandBeforeExecution(
     };
   }
 
-  const commandViolation = validateCommand(command, availableToolNames);
+  const commandViolation = validateCommand(command, availableToolNames, {
+    relaxReadAndOutputFilterGuards,
+  });
   if (commandViolation) {
     return {
       content: [
