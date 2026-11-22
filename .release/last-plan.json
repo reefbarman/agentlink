@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "6c00ba921a672a0e97be9de0ed4d801088b5c3df",
-  "createdAt": "2026-11-22T02:18:03.962Z",
+  "sourceSha": "4388d3e1a49c6804245a65fd6ad913d29f24cc1b",
+  "createdAt": "2026-11-22T03:55:21.856Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,190 +10,154 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.101.1",
-      "baselineRef": "v1.101.1",
-      "reserved": "1.101.1",
+      "published": "1.102.0",
+      "baselineRef": "v1.102.0",
+      "reserved": "1.102.0",
       "commits": [
-        "4265c1368ab708ad1560abd4d17cc8c63331c692",
-        "6c00ba921a672a0e97be9de0ed4d801088b5c3df"
+        "8b7031d601313cecdf5268f2f8ed28831b66bd60",
+        "4388d3e1a49c6804245a65fd6ad913d29f24cc1b"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.102.0",
-      "effectiveBump": "minor",
+      "version": "1.102.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.102.0",
+      "tag": "v1.102.1",
       "notes": [
         {
-          "sha": "4265c1368ab708ad1560abd4d17cc8c63331c692",
-          "subject": "feat(tools): accept apply_patch-style hunks in apply_diff and hint converted blocks",
-          "summary": "apply_diff now accepts Codex apply_patch-style hunks with space/-/+ prefixes and bare @@ separators, and failed blocks return a patch_syntax hint with a converted SEARCH/REPLACE diff.",
+          "sha": "8b7031d601313cecdf5268f2f8ed28831b66bd60",
+          "subject": "chore(tools): restore original execute_command piped-filter wording",
+          "summary": "Restores the original execute_command tool description wording about piped grep/head/tail being rejected and preferring output_grep, output_head, or output_tail.",
           "breaking": false
         },
         {
-          "sha": "6c00ba921a672a0e97be9de0ed4d801088b5c3df",
-          "subject": "feat(tools): relax read and output-filter command guards under Approve for Me",
-          "summary": "Under Approve for Me, execute_command no longer rejects piped head/tail/grep filters or terminal file reads when the matching reader tool is available; file-write guards and command approval still apply.",
+          "sha": "4388d3e1a49c6804245a65fd6ad913d29f24cc1b",
+          "subject": "build(vscode): suffix local VSIX versions without reserving releases",
+          "summary": "Local VSIX builds now get a unique +dev.<build-id> version suffix without changing the tracked release version, and the bundled documentation describes the local build and install workflow.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.101.1",
-      "baselineRef": "desktop-v0.101.1",
-      "reserved": "0.101.1",
+      "published": "0.102.0",
+      "baselineRef": "desktop-v0.102.0",
+      "reserved": "0.102.0",
       "commits": [
-        "4265c1368ab708ad1560abd4d17cc8c63331c692",
-        "6c00ba921a672a0e97be9de0ed4d801088b5c3df"
+        "8b7031d601313cecdf5268f2f8ed28831b66bd60",
+        "4388d3e1a49c6804245a65fd6ad913d29f24cc1b"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.102.0",
-      "effectiveBump": "minor",
+      "version": "0.102.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.102.0",
+      "tag": "desktop-v0.102.1",
       "notes": [
         {
-          "sha": "4265c1368ab708ad1560abd4d17cc8c63331c692",
-          "subject": "feat(tools): accept apply_patch-style hunks in apply_diff and hint converted blocks",
-          "summary": "apply_diff now accepts Codex apply_patch-style hunks with space/-/+ prefixes and bare @@ separators, and failed blocks return a patch_syntax hint with a converted SEARCH/REPLACE diff.",
+          "sha": "8b7031d601313cecdf5268f2f8ed28831b66bd60",
+          "subject": "chore(tools): restore original execute_command piped-filter wording",
+          "summary": "Restores the original execute_command tool description wording about piped grep/head/tail being rejected and preferring output_grep, output_head, or output_tail.",
           "breaking": false
         },
         {
-          "sha": "6c00ba921a672a0e97be9de0ed4d801088b5c3df",
-          "subject": "feat(tools): relax read and output-filter command guards under Approve for Me",
-          "summary": "Under Approve for Me, execute_command no longer rejects piped head/tail/grep filters or terminal file reads when the matching reader tool is available; file-write guards and command approval still apply.",
+          "sha": "4388d3e1a49c6804245a65fd6ad913d29f24cc1b",
+          "subject": "build(vscode): suffix local VSIX versions without reserving releases",
+          "summary": "Local VSIX builds now get a unique +dev.<build-id> version suffix without changing the tracked release version, and the bundled documentation describes the local build and install workflow.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.71.0",
-      "baselineRef": "cli-v0.71.0",
-      "reserved": "0.71.0",
-      "commits": ["4265c1368ab708ad1560abd4d17cc8c63331c692"],
+      "published": "0.72.0",
+      "baselineRef": "cli-v0.72.0",
+      "reserved": "0.72.0",
+      "commits": ["4388d3e1a49c6804245a65fd6ad913d29f24cc1b"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.72.0",
-      "effectiveBump": "minor",
+      "version": "0.72.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.72.0",
+      "tag": "cli-v0.72.1",
       "notes": [
         {
-          "sha": "4265c1368ab708ad1560abd4d17cc8c63331c692",
-          "subject": "feat(tools): accept apply_patch-style hunks in apply_diff and hint converted blocks",
-          "summary": "apply_diff now accepts Codex apply_patch-style hunks with space/-/+ prefixes and bare @@ separators, and failed blocks return a patch_syntax hint with a converted SEARCH/REPLACE diff.",
+          "sha": "4388d3e1a49c6804245a65fd6ad913d29f24cc1b",
+          "subject": "build(vscode): suffix local VSIX versions without reserving releases",
+          "summary": "Local VSIX builds now get a unique +dev.<build-id> version suffix without changing the tracked release version, and the bundled documentation describes the local build and install workflow.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.57.0",
-      "baselineRef": "sdk-v0.57.0",
-      "reserved": "0.57.0",
-      "commits": ["4265c1368ab708ad1560abd4d17cc8c63331c692"],
+      "published": "0.58.0",
+      "baselineRef": "sdk-v0.58.0",
+      "reserved": "0.58.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.58.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.58.0",
-      "notes": [
-        {
-          "sha": "4265c1368ab708ad1560abd4d17cc8c63331c692",
-          "subject": "feat(tools): accept apply_patch-style hunks in apply_diff and hint converted blocks",
-          "summary": "apply_diff now accepts Codex apply_patch-style hunks with space/-/+ prefixes and bare @@ separators, and failed blocks return a patch_syntax hint with a converted SEARCH/REPLACE diff.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.71.0",
-      "baselineRef": "assistant-v0.71.0",
-      "reserved": "0.71.0",
+      "published": "0.72.0",
+      "baselineRef": "assistant-v0.72.0",
+      "reserved": "0.72.0",
       "commits": [
-        "4265c1368ab708ad1560abd4d17cc8c63331c692",
-        "6c00ba921a672a0e97be9de0ed4d801088b5c3df"
+        "8b7031d601313cecdf5268f2f8ed28831b66bd60",
+        "4388d3e1a49c6804245a65fd6ad913d29f24cc1b"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.72.0",
-      "effectiveBump": "minor",
+      "version": "0.72.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.72.0",
+      "tag": "assistant-v0.72.1",
       "notes": [
         {
-          "sha": "4265c1368ab708ad1560abd4d17cc8c63331c692",
-          "subject": "feat(tools): accept apply_patch-style hunks in apply_diff and hint converted blocks",
-          "summary": "apply_diff now accepts Codex apply_patch-style hunks with space/-/+ prefixes and bare @@ separators, and failed blocks return a patch_syntax hint with a converted SEARCH/REPLACE diff.",
+          "sha": "8b7031d601313cecdf5268f2f8ed28831b66bd60",
+          "subject": "chore(tools): restore original execute_command piped-filter wording",
+          "summary": "Restores the original execute_command tool description wording about piped grep/head/tail being rejected and preferring output_grep, output_head, or output_tail.",
           "breaking": false
         },
         {
-          "sha": "6c00ba921a672a0e97be9de0ed4d801088b5c3df",
-          "subject": "feat(tools): relax read and output-filter command guards under Approve for Me",
-          "summary": "Under Approve for Me, execute_command no longer rejects piped head/tail/grep filters or terminal file reads when the matching reader tool is available; file-write guards and command approval still apply.",
+          "sha": "4388d3e1a49c6804245a65fd6ad913d29f24cc1b",
+          "subject": "build(vscode): suffix local VSIX versions without reserving releases",
+          "summary": "Local VSIX builds now get a unique +dev.<build-id> version suffix without changing the tracked release version, and the bundled documentation describes the local build and install workflow.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "ef6deec62bd3a55214e35efb1cc06de08052b186": {
+    "8b7031d601313cecdf5268f2f8ed28831b66bd60": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "The todo_write tool now shows as complete immediately instead of appearing to spin until long-running sibling tool calls in the same batch finish.",
+      "summary": "Restores the original execute_command tool description wording about piped grep/head/tail being rejected and preferring output_grep, output_head, or output_tail.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "1efe30e542abce26ba3ec3217c4c43c08670f20e": {
-      "bump": "none",
+    "4388d3e1a49c6804245a65fd6ad913d29f24cc1b": {
+      "bump": "patch",
       "breakingUnits": [],
-      "summary": "Adds a bench:compare developer task and per-request stats to the model-bench evaluation scripts; this is internal tooling that does not affect shipped products.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "e27c848cb3a55c0a1bea75e2e6720b42c547374d": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "write_file and apply_diff now warn, without blocking the edit, when a saved .md, .mdx or .txt file introduces new backslash-quote sequences, listing the affected line numbers.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "4265c1368ab708ad1560abd4d17cc8c63331c692": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "apply_diff now accepts Codex apply_patch-style hunks with space/-/+ prefixes and bare @@ separators, and failed blocks return a patch_syntax hint with a converted SEARCH/REPLACE diff.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "6c00ba921a672a0e97be9de0ed4d801088b5c3df": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Under Approve for Me, execute_command no longer rejects piped head/tail/grep filters or terminal file reads when the matching reader tool is available; file-write guards and command approval still apply.",
+      "summary": "Local VSIX builds now get a unique +dev.<build-id> version suffix without changing the tracked release version, and the bundled documentation describes the local build and install workflow.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

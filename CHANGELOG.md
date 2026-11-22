@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.102.1
+
+- Restores the original execute_command tool description wording about piped grep/head/tail being rejected and preferring output_grep, output_head, or output_tail.
+- Local VSIX builds now get a unique +dev.<build-id> version suffix without changing the tracked release version, and the bundled documentation describes the local build and install workflow.
+
 ## 1.102.0
 
 - `apply_diff` now accepts Codex `apply_patch`-style hunks (space/-/+ prefixed lines separated by bare `@@` lines, optionally wrapped in `*** Begin Patch`/`*** End Patch`), as whole input or inside a SEARCH block that has no divider. These hunks must match exactly. When a block fails because its lines kept patch prefixes, the error now includes `patch_syntax` with a converted SEARCH/REPLACE diff to retry. MAI Code 2 failed about a third of its edits by mixing these formats.
