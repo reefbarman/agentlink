@@ -20,7 +20,7 @@ Press F5 in VS Code to launch the Extension Development Host for testing.
 npm run release -- --install
 ```
 
-Bumps patch version, builds, packages VSIX, and installs into VS Code. Use `--major` or `--minor` for non-patch bumps.
+Builds and installs a local VSIX with a unique `+dev.<build-id>` version suffix without changing the tracked release version. Omit `--install` to build the VSIX only. See [Release automation](.release/README.md) for intentional numeric version bumps.
 
 ## Dev-Only Tools
 

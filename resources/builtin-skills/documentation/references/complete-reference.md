@@ -2419,9 +2419,10 @@ Compose costs are observational, unmatched enabled/disabled cohorts—not measur
 
 The session-outcome reporter covers turn timing, task status, background-agent outcomes, and approval cards that interrupted **Approve for Me**. Approval-interruption events contain only bounded categories: approval kind, interruption reason, Guardian status/outcome/risk, and host-owned route/permission classifications. They never include command text, target paths, user prompts, reviewer rationale, or approval-card detail. `ask_user` remains ordinary user-question telemetry rather than an approval interruption.
 
-To release:
+To build and install a local VSIX from source:
 
 ```sh
-npm run release -- --install   # bump patch, build, package VSIX, install
-npm run release -- --minor     # minor version bump
+npm run release -- --install
 ```
+
+The local VSIX gets a unique `+dev.<build-id>` version suffix without changing the tracked release version. Omit `--install` to package it without installing.

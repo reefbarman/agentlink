@@ -29,6 +29,10 @@ code --install-extension agentlink-*.vsix --force
 
 The installer supports macOS (`darwin`) on `arm64` only, and `linux`, `alpine`, and `win32` targets on `arm64` and `x64`. Intel Macs are no longer supported. It verifies the release's SHA-256 checksum when one is published (releases before checksums were added skip verification with a notice). Add `--version X.Y.Z` to install a specific release or `--dry-run` to print the selected release without installing. See the [complete reference](complete-reference.md#installation) for source builds, platform details, and AgentLink Terminal requirements.
 
+### Build a local VS Code extension from source
+
+From the AgentLink source checkout, run `npm run release -- --install` to build and install a local VSIX, then reload VS Code. Omit `--install` to only build the VSIX. Each build gets a unique `+dev.<build-id>` suffix in its packaged version without changing the tracked release version or reserving a version for CI. Build again from source to update it; AgentLink's release updater does not offer published updates for these local builds.
+
 ### Install standalone previews from a terminal
 
 The same installer handles the macOS Desktop and CLI previews. Each surface has its own release series (`desktop-vX.Y.Z`, `cli-vX.Y.Z`), and the installer picks the newest published release for that surface:

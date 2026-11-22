@@ -25,7 +25,7 @@ const target = resolveRetrievalRuntimeTarget();
 const manifest = JSON.parse(
   readFileSync(path.join(repoRoot, "package.json"), "utf8"),
 );
-const { version } = manifest;
+const version = process.argv[3] ?? manifest.version;
 const outputPath = process.argv[2] ?? `agentlink-${version}-${target}.vsix`;
 const commandEnvironment = {
   ...process.env,
@@ -87,6 +87,9 @@ const packaging = spawnSync(
     "--",
     "vsce",
     "package",
+    ...(version === manifest.version
+      ? []
+      : [version, "--no-update-package-json"]),
     "--no-dependencies",
     "--allow-star-activation",
     "--target",

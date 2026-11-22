@@ -36,12 +36,14 @@ The VS Code, Desktop, and CLI jobs generate deterministic `agentlink-update.json
 
 App update checks fetch only the public release listing and this bounded JSON asset. They do not download or install binaries. A newer release without valid compatibility metadata remains installable through existing installers, but cannot produce a compatible-update notice. Shared code under `src/updates/**` is attributed to all three app release units.
 
-## Local version bumps (`npm run release`)
+## Local VS Code builds (`npm run release`)
 
-Only the VS Code extension version is bumped locally:
+`npm run release` builds a VSIX with a unique `+dev.<build-id>` suffix. Add `--install` to install it into VS Code. The suffix is written only to the VSIX, so local builds do not reserve a release version or change the tracked manifests, lockfile, or release intent.
 
-- `npm run release -- --install` makes a patch bump. Commit it with the work as usual; the coordinator treats it as a reservation and either uses it or raises it to a minor.
-- `--minor` or `--major` also writes `intents/vscode.json`. Commit that file to make the target explicit. A major intent is the only way to publish a new VS Code major.
+Use a bump flag only when intentionally setting a public release version:
+
+- `--patch` reserves a numeric patch version. The coordinator reuses it or raises it to a minor.
+- `--minor` or `--major` also writes `intents/vscode.json`. Commit that file with the version bump to make the target explicit. A major intent is the only way to publish a new VS Code major.
 
 Desktop, CLI, and SDK local builds never change their versions.
 
