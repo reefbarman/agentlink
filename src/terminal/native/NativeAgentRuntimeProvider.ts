@@ -370,7 +370,9 @@ class PersistentNativeChannel {
         }
         process.start();
         try {
-          this.onData(`${request.command}\r\n`);
+          // The terminal renders a bare LF as "down one row" without a
+          // carriage return, so multi-line commands would staircase.
+          this.onData(`${request.command.replace(/\r\n|\r|\n/g, "\r\n")}\r\n`);
           this.pty.write(`${commandArtifact.dispatchCommand}\r`);
         } catch (error) {
           this.abandon(process);

@@ -279,6 +279,36 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     );
   });
 
+  it("echoes multi-line commands with carriage returns so lines start at column 0", async () => {
+    const pty = new FakeNodePtyProcess();
+    const runtime = new NodePtyNativeAgentRuntimeProvider({
+      spawn: vi.fn(() => pty),
+    });
+    const channel = launch(runtime);
+    await emitInitialPrompt(pty, channel.ready);
+    channel.rawData.length = 0;
+
+    const command = runtime.createCommand({
+      cwd: "/workspace",
+      channelId: "native-agent-1",
+      commandId: "native-command-multiline",
+      generation: 1,
+      command: "echo one\necho two\r\necho three",
+    });
+    command.process.onEvent(() => undefined);
+    command.start();
+
+    // A bare LF moves the cursor down without returning to column 0, which
+    // renders a staircase in xterm. The display echo must use CRLF.
+    const echoed = channel.rawData.join("");
+    expect(echoed).toBe("echo one\r\necho two\r\necho three\r\n");
+    expect(echoed).not.toMatch(/(?<!\r)\n/);
+    // Only the display echo is normalized; the shell still gets one dispatch.
+    expect(pty.writes).toEqual([artifactDispatch]);
+    const artifact = fs.readFileSync(dispatchedArtifactPath(pty), "utf8");
+    expect(artifact).toContain("echo one\necho two\r\necho three");
+  });
+
   it("dispatches complex commands through a verified private artifact and removes it", async () => {
     const artifactRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "agentlink-native-artifact-test-"),
