@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "ef6deec62bd3a55214e35efb1cc06de08052b186",
-  "createdAt": "2026-11-18T09:27:42.163Z",
+  "sourceSha": "6c00ba921a672a0e97be9de0ed4d801088b5c3df",
+  "createdAt": "2026-11-22T02:18:03.962Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,67 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.101.0",
-      "baselineRef": "v1.101.0",
-      "reserved": "1.101.0",
-      "commits": ["ef6deec62bd3a55214e35efb1cc06de08052b186"],
+      "published": "1.101.1",
+      "baselineRef": "v1.101.1",
+      "reserved": "1.101.1",
+      "commits": [
+        "4265c1368ab708ad1560abd4d17cc8c63331c692",
+        "6c00ba921a672a0e97be9de0ed4d801088b5c3df"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.101.1",
-      "effectiveBump": "patch",
+      "version": "1.102.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.101.1",
+      "tag": "v1.102.0",
       "notes": [
         {
-          "sha": "ef6deec62bd3a55214e35efb1cc06de08052b186",
-          "subject": "fix(agent): emit todo_write completion before sibling tools settle",
-          "summary": "The todo_write tool now shows as complete immediately instead of appearing to spin until long-running sibling tool calls in the same batch finish.",
+          "sha": "4265c1368ab708ad1560abd4d17cc8c63331c692",
+          "subject": "feat(tools): accept apply_patch-style hunks in apply_diff and hint converted blocks",
+          "summary": "apply_diff now accepts Codex apply_patch-style hunks with space/-/+ prefixes and bare @@ separators, and failed blocks return a patch_syntax hint with a converted SEARCH/REPLACE diff.",
+          "breaking": false
+        },
+        {
+          "sha": "6c00ba921a672a0e97be9de0ed4d801088b5c3df",
+          "subject": "feat(tools): relax read and output-filter command guards under Approve for Me",
+          "summary": "Under Approve for Me, execute_command no longer rejects piped head/tail/grep filters or terminal file reads when the matching reader tool is available; file-write guards and command approval still apply.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.101.0",
-      "baselineRef": "desktop-v0.101.0",
-      "reserved": "0.101.0",
-      "commits": ["ef6deec62bd3a55214e35efb1cc06de08052b186"],
+      "published": "0.101.1",
+      "baselineRef": "desktop-v0.101.1",
+      "reserved": "0.101.1",
+      "commits": [
+        "4265c1368ab708ad1560abd4d17cc8c63331c692",
+        "6c00ba921a672a0e97be9de0ed4d801088b5c3df"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.101.1",
-      "effectiveBump": "patch",
+      "version": "0.102.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.101.1",
+      "tag": "desktop-v0.102.0",
       "notes": [
         {
-          "sha": "ef6deec62bd3a55214e35efb1cc06de08052b186",
-          "subject": "fix(agent): emit todo_write completion before sibling tools settle",
-          "summary": "The todo_write tool now shows as complete immediately instead of appearing to spin until long-running sibling tool calls in the same batch finish.",
+          "sha": "4265c1368ab708ad1560abd4d17cc8c63331c692",
+          "subject": "feat(tools): accept apply_patch-style hunks in apply_diff and hint converted blocks",
+          "summary": "apply_diff now accepts Codex apply_patch-style hunks with space/-/+ prefixes and bare @@ separators, and failed blocks return a patch_syntax hint with a converted SEARCH/REPLACE diff.",
+          "breaking": false
+        },
+        {
+          "sha": "6c00ba921a672a0e97be9de0ed4d801088b5c3df",
+          "subject": "feat(tools): relax read and output-filter command guards under Approve for Me",
+          "summary": "Under Approve for Me, execute_command no longer rejects piped head/tail/grep filters or terminal file reads when the matching reader tool is available; file-write guards and command approval still apply.",
           "breaking": false
         }
       ]
@@ -61,40 +79,93 @@
       "published": "0.71.0",
       "baselineRef": "cli-v0.71.0",
       "reserved": "0.71.0",
-      "commits": [],
+      "commits": ["4265c1368ab708ad1560abd4d17cc8c63331c692"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.72.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.72.0",
+      "notes": [
+        {
+          "sha": "4265c1368ab708ad1560abd4d17cc8c63331c692",
+          "subject": "feat(tools): accept apply_patch-style hunks in apply_diff and hint converted blocks",
+          "summary": "apply_diff now accepts Codex apply_patch-style hunks with space/-/+ prefixes and bare @@ separators, and failed blocks return a patch_syntax hint with a converted SEARCH/REPLACE diff.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.57.0",
       "baselineRef": "sdk-v0.57.0",
       "reserved": "0.57.0",
-      "commits": [],
+      "commits": ["4265c1368ab708ad1560abd4d17cc8c63331c692"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.58.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.58.0",
+      "notes": [
+        {
+          "sha": "4265c1368ab708ad1560abd4d17cc8c63331c692",
+          "subject": "feat(tools): accept apply_patch-style hunks in apply_diff and hint converted blocks",
+          "summary": "apply_diff now accepts Codex apply_patch-style hunks with space/-/+ prefixes and bare @@ separators, and failed blocks return a patch_syntax hint with a converted SEARCH/REPLACE diff.",
+          "breaking": false
+        }
+      ]
     },
     "assistant": {
       "published": "0.71.0",
       "baselineRef": "assistant-v0.71.0",
       "reserved": "0.71.0",
-      "commits": [],
+      "commits": [
+        "4265c1368ab708ad1560abd4d17cc8c63331c692",
+        "6c00ba921a672a0e97be9de0ed4d801088b5c3df"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.72.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.72.0",
+      "notes": [
+        {
+          "sha": "4265c1368ab708ad1560abd4d17cc8c63331c692",
+          "subject": "feat(tools): accept apply_patch-style hunks in apply_diff and hint converted blocks",
+          "summary": "apply_diff now accepts Codex apply_patch-style hunks with space/-/+ prefixes and bare @@ separators, and failed blocks return a patch_syntax hint with a converted SEARCH/REPLACE diff.",
+          "breaking": false
+        },
+        {
+          "sha": "6c00ba921a672a0e97be9de0ed4d801088b5c3df",
+          "subject": "feat(tools): relax read and output-filter command guards under Approve for Me",
+          "summary": "Under Approve for Me, execute_command no longer rejects piped head/tail/grep filters or terminal file reads when the matching reader tool is available; file-write guards and command approval still apply.",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
+    "ef6deec62bd3a55214e35efb1cc06de08052b186": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The todo_write tool now shows as complete immediately instead of appearing to spin until long-running sibling tool calls in the same batch finish.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
     "1efe30e542abce26ba3ec3217c4c43c08670f20e": {
       "bump": "none",
       "breakingUnits": [],
@@ -111,10 +182,18 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "ef6deec62bd3a55214e35efb1cc06de08052b186": {
-      "bump": "patch",
+    "4265c1368ab708ad1560abd4d17cc8c63331c692": {
+      "bump": "minor",
       "breakingUnits": [],
-      "summary": "The todo_write tool now shows as complete immediately instead of appearing to spin until long-running sibling tool calls in the same batch finish.",
+      "summary": "apply_diff now accepts Codex apply_patch-style hunks with space/-/+ prefixes and bare @@ separators, and failed blocks return a patch_syntax hint with a converted SEARCH/REPLACE diff.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "6c00ba921a672a0e97be9de0ed4d801088b5c3df": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Under Approve for Me, execute_command no longer rejects piped head/tail/grep filters or terminal file reads when the matching reader tool is available; file-write guards and command approval still apply.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

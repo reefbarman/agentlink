@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.58.0 — 2026-11-22
+
+- apply_diff now accepts Codex apply_patch-style hunks with space/-/+ prefixes and bare @@ separators, and failed blocks return a patch_syntax hint with a converted SEARCH/REPLACE diff.
+
 ## 0.57.0 — 2026-11-18
 
 - Restores prompt caching for GPT-6.2 Sol and Astra over ChatGPT sign-in by sending tools and instructions as leading input items while keeping full Responses and parallel tool calls.

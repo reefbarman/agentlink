@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.102.0
+
 - `apply_diff` now accepts Codex `apply_patch`-style hunks (space/-/+ prefixed lines separated by bare `@@` lines, optionally wrapped in `*** Begin Patch`/`*** End Patch`), as whole input or inside a SEARCH block that has no divider. These hunks must match exactly. When a block fails because its lines kept patch prefixes, the error now includes `patch_syntax` with a converted SEARCH/REPLACE diff to retry. MAI Code 2 failed about a third of its edits by mixing these formats.
 - With Approve for Me on, `execute_command` now runs piped `head`/`tail`/`grep` filters and terminal file reads (`cat`, `head`, `tail`, `grep`, `sed -n`, PDF tools) instead of rejecting them and telling the agent to use `output_*` parameters or `read_file`/`search_files`. These rejections existed so you could see full output in the terminal, which matters less when you are not approving each step. Reads still require the matching reader tool to be available to that agent, and file-write checks (`sed -i`, `tee`, redirection, inline-script writes) are unchanged.
 
