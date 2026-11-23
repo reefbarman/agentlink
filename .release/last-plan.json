@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "577a42dfba623220e5c8de7020360f941f776ea1",
-  "createdAt": "2026-11-23T08:03:56.612Z",
+  "sourceSha": "0d9867ec1b25c83f263ec6093cde9f8cf202c9f2",
+  "createdAt": "2026-11-23T09:01:02.710Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.102.3",
-      "baselineRef": "v1.102.3",
-      "reserved": "1.102.3",
-      "commits": ["577a42dfba623220e5c8de7020360f941f776ea1"],
+      "published": "1.103.0",
+      "baselineRef": "v1.103.0",
+      "reserved": "1.103.0",
+      "commits": ["0d9867ec1b25c83f263ec6093cde9f8cf202c9f2"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.103.0",
+      "version": "1.104.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.103.0",
+      "tag": "v1.104.0",
       "notes": [
         {
-          "sha": "577a42dfba623220e5c8de7020360f941f776ea1",
-          "subject": "fix: address triaged tool reliability feedback",
-          "summary": "Repo maps now link Go imports to packages in the nearest go.mod, and native terminal launch failures return a structured native_shell_launch_failed diagnostic with repair guidance instead of a raw spawn error.",
+          "sha": "0d9867ec1b25c83f263ec6093cde9f8cf202c9f2",
+          "subject": "feat: address triaged tool feedback",
+          "summary": "Read-only sessions can now run tsc/tsgo --noEmit --incremental false type checks, background and read-only research agents get workspace session-history tools, and git rm --dry-run is treated as a Git metadata writer.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.102.3",
-      "baselineRef": "desktop-v0.102.3",
-      "reserved": "0.102.3",
-      "commits": ["577a42dfba623220e5c8de7020360f941f776ea1"],
+      "published": "0.103.0",
+      "baselineRef": "desktop-v0.103.0",
+      "reserved": "0.103.0",
+      "commits": ["0d9867ec1b25c83f263ec6093cde9f8cf202c9f2"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.103.0",
+      "version": "0.104.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.103.0",
+      "tag": "desktop-v0.104.0",
       "notes": [
         {
-          "sha": "577a42dfba623220e5c8de7020360f941f776ea1",
-          "subject": "fix: address triaged tool reliability feedback",
-          "summary": "Repo maps now link Go imports to packages in the nearest go.mod, and native terminal launch failures return a structured native_shell_launch_failed diagnostic with repair guidance instead of a raw spawn error.",
+          "sha": "0d9867ec1b25c83f263ec6093cde9f8cf202c9f2",
+          "subject": "feat: address triaged tool feedback",
+          "summary": "Read-only sessions can now run tsc/tsgo --noEmit --incremental false type checks, background and read-only research agents get workspace session-history tools, and git rm --dry-run is treated as a Git metadata writer.",
           "breaking": false
         }
       ]
@@ -61,31 +61,7 @@
       "published": "0.72.2",
       "baselineRef": "cli-v0.72.2",
       "reserved": "0.72.2",
-      "commits": [],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "sdk": {
-      "published": "0.58.1",
-      "baselineRef": "sdk-v0.58.1",
-      "reserved": "0.58.1",
-      "commits": [],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "assistant": {
-      "published": "0.72.3",
-      "baselineRef": "assistant-v0.72.3",
-      "reserved": "0.72.3",
-      "commits": ["577a42dfba623220e5c8de7020360f941f776ea1"],
+      "commits": ["0d9867ec1b25c83f263ec6093cde9f8cf202c9f2"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
@@ -95,12 +71,60 @@
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.73.0",
+      "tag": "cli-v0.73.0",
       "notes": [
         {
-          "sha": "577a42dfba623220e5c8de7020360f941f776ea1",
-          "subject": "fix: address triaged tool reliability feedback",
-          "summary": "Repo maps now link Go imports to packages in the nearest go.mod, and native terminal launch failures return a structured native_shell_launch_failed diagnostic with repair guidance instead of a raw spawn error.",
+          "sha": "0d9867ec1b25c83f263ec6093cde9f8cf202c9f2",
+          "subject": "feat: address triaged tool feedback",
+          "summary": "Read-only sessions can now run tsc/tsgo --noEmit --incremental false type checks, background and read-only research agents get workspace session-history tools, and git rm --dry-run is treated as a Git metadata writer.",
+          "breaking": false
+        }
+      ]
+    },
+    "sdk": {
+      "published": "0.58.1",
+      "baselineRef": "sdk-v0.58.1",
+      "reserved": "0.58.1",
+      "commits": ["0d9867ec1b25c83f263ec6093cde9f8cf202c9f2"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.59.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.59.0",
+      "notes": [
+        {
+          "sha": "0d9867ec1b25c83f263ec6093cde9f8cf202c9f2",
+          "subject": "feat: address triaged tool feedback",
+          "summary": "Read-only sessions can now run tsc/tsgo --noEmit --incremental false type checks, background and read-only research agents get workspace session-history tools, and git rm --dry-run is treated as a Git metadata writer.",
+          "breaking": false
+        }
+      ]
+    },
+    "assistant": {
+      "published": "0.73.0",
+      "baselineRef": "assistant-v0.73.0",
+      "reserved": "0.73.0",
+      "commits": ["0d9867ec1b25c83f263ec6093cde9f8cf202c9f2"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.74.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.74.0",
+      "notes": [
+        {
+          "sha": "0d9867ec1b25c83f263ec6093cde9f8cf202c9f2",
+          "subject": "feat: address triaged tool feedback",
+          "summary": "Read-only sessions can now run tsc/tsgo --noEmit --incremental false type checks, background and read-only research agents get workspace session-history tools, and git rm --dry-run is treated as a Git metadata writer.",
           "breaking": false
         }
       ]
@@ -119,6 +143,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Repo maps now link Go imports to packages in the nearest go.mod, and native terminal launch failures return a structured native_shell_launch_failed diagnostic with repair guidance instead of a raw spawn error.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "0d9867ec1b25c83f263ec6093cde9f8cf202c9f2": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Read-only sessions can now run tsc/tsgo --noEmit --incremental false type checks, background and read-only research agents get workspace session-history tools, and git rm --dry-run is treated as a Git metadata writer.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

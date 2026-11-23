@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.59.0 — 2026-11-23
+
+- Read-only sessions can now run tsc/tsgo --noEmit --incremental false type checks, background and read-only research agents get workspace session-history tools, and git rm --dry-run is treated as a Git metadata writer.
+
 ## 0.58.1 — 2026-11-23
 
 - Thinking blocks from OpenAI-compatible providers now get a unique ID per response, so thinking after a tool round appears as a new block instead of being appended to the first one.
