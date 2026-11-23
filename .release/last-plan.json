@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "ce1da971c77bf9a87b8d42221a101a084b1ca35c",
-  "createdAt": "2026-11-23T05:00:44.743Z",
+  "sourceSha": "577a42dfba623220e5c8de7020360f941f776ea1",
+  "createdAt": "2026-11-23T08:03:56.612Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.102.2",
-      "baselineRef": "v1.102.2",
-      "reserved": "1.102.2",
-      "commits": ["ce1da971c77bf9a87b8d42221a101a084b1ca35c"],
+      "published": "1.102.3",
+      "baselineRef": "v1.102.3",
+      "reserved": "1.102.3",
+      "commits": ["577a42dfba623220e5c8de7020360f941f776ea1"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.102.3",
-      "effectiveBump": "patch",
+      "version": "1.103.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.102.3",
+      "tag": "v1.103.0",
       "notes": [
         {
-          "sha": "ce1da971c77bf9a87b8d42221a101a084b1ca35c",
-          "subject": "fix(tools): improve save, reference and command recovery",
-          "summary": "get_references now times out after 15 seconds with a reference_provider_timeout error, save transformations more reliably request a re-read, and sandboxed Metal Toolchain retry guidance now handles inline-file commands correctly.",
+          "sha": "577a42dfba623220e5c8de7020360f941f776ea1",
+          "subject": "fix: address triaged tool reliability feedback",
+          "summary": "Repo maps now link Go imports to packages in the nearest go.mod, and native terminal launch failures return a structured native_shell_launch_failed diagnostic with repair guidance instead of a raw spawn error.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.102.2",
-      "baselineRef": "desktop-v0.102.2",
-      "reserved": "0.102.2",
-      "commits": ["ce1da971c77bf9a87b8d42221a101a084b1ca35c"],
+      "published": "0.102.3",
+      "baselineRef": "desktop-v0.102.3",
+      "reserved": "0.102.3",
+      "commits": ["577a42dfba623220e5c8de7020360f941f776ea1"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.102.3",
-      "effectiveBump": "patch",
+      "version": "0.103.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.102.3",
+      "tag": "desktop-v0.103.0",
       "notes": [
         {
-          "sha": "ce1da971c77bf9a87b8d42221a101a084b1ca35c",
-          "subject": "fix(tools): improve save, reference and command recovery",
-          "summary": "get_references now times out after 15 seconds with a reference_provider_timeout error, save transformations more reliably request a re-read, and sandboxed Metal Toolchain retry guidance now handles inline-file commands correctly.",
+          "sha": "577a42dfba623220e5c8de7020360f941f776ea1",
+          "subject": "fix: address triaged tool reliability feedback",
+          "summary": "Repo maps now link Go imports to packages in the nearest go.mod, and native terminal launch failures return a structured native_shell_launch_failed diagnostic with repair guidance instead of a raw spawn error.",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.72.2",
-      "baselineRef": "assistant-v0.72.2",
-      "reserved": "0.72.2",
-      "commits": ["ce1da971c77bf9a87b8d42221a101a084b1ca35c"],
+      "published": "0.72.3",
+      "baselineRef": "assistant-v0.72.3",
+      "reserved": "0.72.3",
+      "commits": ["577a42dfba623220e5c8de7020360f941f776ea1"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.72.3",
-      "effectiveBump": "patch",
+      "version": "0.73.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.72.3",
+      "tag": "assistant-v0.73.0",
       "notes": [
         {
-          "sha": "ce1da971c77bf9a87b8d42221a101a084b1ca35c",
-          "subject": "fix(tools): improve save, reference and command recovery",
-          "summary": "get_references now times out after 15 seconds with a reference_provider_timeout error, save transformations more reliably request a re-read, and sandboxed Metal Toolchain retry guidance now handles inline-file commands correctly.",
+          "sha": "577a42dfba623220e5c8de7020360f941f776ea1",
+          "subject": "fix: address triaged tool reliability feedback",
+          "summary": "Repo maps now link Go imports to packages in the nearest go.mod, and native terminal launch failures return a structured native_shell_launch_failed diagnostic with repair guidance instead of a raw spawn error.",
           "breaking": false
         }
       ]
@@ -111,6 +111,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "get_references now times out after 15 seconds with a reference_provider_timeout error, save transformations more reliably request a re-read, and sandboxed Metal Toolchain retry guidance now handles inline-file commands correctly.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "577a42dfba623220e5c8de7020360f941f776ea1": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Repo maps now link Go imports to packages in the nearest go.mod, and native terminal launch failures return a structured native_shell_launch_failed diagnostic with repair guidance instead of a raw spawn error.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
