@@ -81,6 +81,11 @@ export async function* parseOpenAiCompatibleStreamEvents(
   const textToolParsers = new Map<number, TextToolCallParser>();
   const availableToolNames = new Set(options.availableToolNames ?? []);
   let textToolCallSequence = 0;
+  // Thinking IDs must be unique across responses: the transcript dedupes
+  // thinking blocks by ID, so a fixed per-choice default would make thinking
+  // after a tool round append to the first response's block instead of
+  // opening a new block at its place in the timeline.
+  const streamId = globalThis.crypto.randomUUID();
   let providerResponseId: string | undefined;
   let reportedUsage: OpenAiCompatibleUsage | undefined;
   let sawChunk = false;
@@ -169,7 +174,7 @@ export async function* parseOpenAiCompatibleStreamEvents(
             choice.thinkingStarted = true;
             choice.thinkingId =
               options.createThinkingId?.(choiceIndex) ??
-              `openai-compatible-thinking-${choiceIndex}`;
+              `openai-compatible-thinking-${streamId}-${choiceIndex}`;
             markOutputStarted(options);
             yield {
               type: "thinking_start",

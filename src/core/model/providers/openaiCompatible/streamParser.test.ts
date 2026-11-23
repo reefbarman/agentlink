@@ -228,6 +228,37 @@ describe("parseOpenAiCompatibleStreamEvents", () => {
     });
   });
 
+  it("defaults to a thinking ID that is unique per response stream", async () => {
+    const thinkingIds = async (): Promise<string[]> => {
+      const ids: string[] = [];
+      for await (const event of parseOpenAiCompatibleStreamEvents(
+        chunks([
+          {
+            choices: [
+              {
+                index: 0,
+                delta: { reasoning_content: "plan" },
+                finish_reason: "stop",
+              },
+            ],
+          },
+        ]),
+        { providerId: "openai-compatible:test", estimatedInputTokens: 1 },
+      )) {
+        if (event.type === "thinking_start") ids.push(event.thinkingId);
+      }
+      return ids;
+    };
+
+    // Each model round after a tool call is a new stream; reusing an ID would
+    // make the transcript append new thinking to the earlier block.
+    const [first] = await thinkingIds();
+    const [second] = await thinkingIds();
+    expect(first).toMatch(/^openai-compatible-thinking-/);
+    expect(second).toMatch(/^openai-compatible-thinking-/);
+    expect(first).not.toBe(second);
+  });
+
   it("assembles parallel interleaved tool calls and tolerates repeated complete IDs/names", async () => {
     const state = { outputStarted: false };
     const events = await collect(
