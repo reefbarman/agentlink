@@ -18,6 +18,14 @@
       "model": "gpt-6.2-sol",
       "transport": "codex",
       "reasoningEffort": "medium"
+    },
+    {
+      "label": "mai-code-2",
+      "model": "mai-code-2",
+      "baseUrl": "http://127.0.0.1:3456/copilot/v1",
+      "family": "openai",
+      "promptProfile": "reasoning",
+      "reasoningEffort": "medium"
     }
   ]
 }
