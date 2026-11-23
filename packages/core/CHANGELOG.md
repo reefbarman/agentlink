@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.58.1 — 2026-11-23
+
+- Thinking blocks from OpenAI-compatible providers now get a unique ID per response, so thinking after a tool round appears as a new block instead of being appended to the first one.
+
 ## 0.58.0 — 2026-11-22
 
 - apply_diff now accepts Codex apply_patch-style hunks with space/-/+ prefixes and bare @@ separators, and failed blocks return a patch_syntax hint with a converted SEARCH/REPLACE diff.

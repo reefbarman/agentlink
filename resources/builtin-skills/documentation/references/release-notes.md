@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.102.2
+
 - The browser gateway now distinguishes local `+dev` builds of the same release version. Older VS Code windows running this fix cannot restart a newer helper, and automatic startup waits for an in-progress restart before deciding which helper to use.
 
 ## 1.102.1
