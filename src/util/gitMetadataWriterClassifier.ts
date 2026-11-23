@@ -356,6 +356,10 @@ function classifyRm(args: readonly string[]): boolean {
     args,
     new Set([
       "-r",
+      // `git rm` takes the index lock before honouring a dry run, so it still
+      // fails in the sandbox.
+      "-n",
+      "--dry-run",
       "--cached",
       "--ignore-unmatch",
       "--sparse",

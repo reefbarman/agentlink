@@ -1980,15 +1980,14 @@ export class AgentSessionManager {
 
   /**
    * Bind past-session history for the executing session's own project. Only
-   * persisted, project-scoped foreground sessions receive it; the binding is
-   * captured with the session, never re-resolved from the foreground tab.
+   * project-scoped sessions (foreground or background) receive it; the binding
+   * is captured with the session, never re-resolved from the foreground tab.
    */
   private workspaceSessionHistoryContext(
     session: AgentSession,
   ): Pick<ToolDispatchContext, "workspaceSessionHistory"> {
     const scope = session.projectScope;
     if (
-      session.background ||
       !this.persistence ||
       !this.workspaceSessionHistoryIndexFactory ||
       isProjectlessSessionScope(scope)

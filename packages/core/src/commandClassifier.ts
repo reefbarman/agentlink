@@ -271,6 +271,10 @@ export class StaticCommandTierClassifier implements CommandTierClassifier {
       if (redirection) return redirection;
       return classifyStaticFileInspection("dyld_info", args.slice(1), ctx);
     }
+    if (command === "tsc" || command === "tsgo") {
+      const check = classifyTypeScriptNoEmitCheck(command, args, ctx);
+      if (check) return redirection ?? check;
+    }
 
     const semanticClassification =
       command === "git"
@@ -1423,6 +1427,72 @@ function isAppleSystemImagePath(resolved: string, physical: string): boolean {
       candidate.startsWith(`${root}${path.sep}`),
     );
   return inside(path.normalize(resolved)) && inside(path.normalize(physical));
+}
+
+const TYPESCRIPT_CHECK_FLAGS = new Set([
+  "--pretty",
+  "--skipLibCheck",
+  "--strict",
+  "--noErrorTruncation",
+  "--diagnostics",
+  "--extendedDiagnostics",
+  "--listFiles",
+  "--explainFiles",
+]);
+
+/**
+ * A closed grammar for a TypeScript compiler type check that writes nothing:
+ * `--noEmit` suppresses output and an explicit `--incremental false` stops the
+ * `.tsbuildinfo` write (composite projects reject that override instead of
+ * writing). Only bare `tsc`/`tsgo` from PATH qualify; build mode, watch mode,
+ * traces and every other option fall back to the unrecognized-command path.
+ */
+function classifyTypeScriptNoEmitCheck(
+  command: string,
+  args: string[],
+  ctx: CommandTierContext,
+): CommandTierResult | undefined {
+  let noEmit = false;
+  let incrementalDisabled = false;
+  const paths: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    const next = args[index + 1];
+    if (arg === "--noEmit") {
+      noEmit = true;
+      if (next === "true") index++;
+      continue;
+    }
+    if (arg === "--incremental") {
+      if (next !== "false") return undefined;
+      incrementalDisabled = true;
+      index++;
+      continue;
+    }
+    if (arg === "-p" || arg === "--project") {
+      if (!next || next.startsWith("-")) return undefined;
+      paths.push(next);
+      index++;
+      continue;
+    }
+    if (TYPESCRIPT_CHECK_FLAGS.has(arg)) {
+      if (next === "true" || next === "false") index++;
+      continue;
+    }
+    if (!arg || arg.startsWith("-")) return undefined;
+    paths.push(arg);
+  }
+  if (!noEmit || !incrementalDisabled) return undefined;
+  for (const value of paths) {
+    const resolved = resolvePathLike(value, ctx.cwd);
+    if (
+      isSecretPath(resolved) ||
+      !isCommandPathInsideWorkspace(resolved, ctx.workspaceRoots)
+    ) {
+      return undefined;
+    }
+  }
+  return safe(`type check without emit (${command})`, "read_only", command);
 }
 
 function classifyReadPathGuard(

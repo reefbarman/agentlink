@@ -5792,16 +5792,20 @@ describe("dispatchToolCall", () => {
       getAgentTools(...args).map((tool) => tool.name);
     const codeMode = BUILT_IN_MODES.find((mode) => mode.slug === "code")!;
 
-    it("offers the tools to foreground read-capable modes only", () => {
+    it("offers the tools to foreground and background read-capable modes", () => {
       expect(names(codeMode)).toEqual(expect.arrayContaining(WORKSPACE_TOOLS));
-      const background = names(codeMode, undefined, true);
-      for (const tool of WORKSPACE_TOOLS) {
-        expect(background).not.toContain(tool);
-      }
-      expect(background).toContain("search_session_history");
+      expect(names(codeMode, undefined, true)).toEqual(
+        expect.arrayContaining(WORKSPACE_TOOLS),
+      );
     });
 
-    it.each(["review", "readonly-research", "btw", "worktree-setup"])(
+    it("offers them to background readonly-research agents", () => {
+      expect(names(undefined, undefined, true, "readonly-research")).toEqual(
+        expect.arrayContaining(WORKSPACE_TOOLS),
+      );
+    });
+
+    it.each(["review", "btw", "worktree-setup"])(
       "keeps them out of the bounded %s profile",
       (profile) => {
         const profileNames = names(undefined, undefined, false, profile);

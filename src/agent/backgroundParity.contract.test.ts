@@ -7,9 +7,6 @@ import { getAgentTools } from "./toolAdapter.js";
 const FOREGROUND_ONLY_TOOLS = new Set([
   "compose",
   "respond_to_background_question",
-  // Cross-session history is bound only to foreground sessions.
-  "search_workspace_sessions",
-  "read_workspace_session_excerpt",
 ]);
 
 const mcpTools = [

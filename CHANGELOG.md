@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Read-only agents can run a TypeScript type check with bare `tsc` or `tsgo` when it passes both `--noEmit` and `--incremental false`, so nothing (including `.tsbuildinfo`) is written. Build, watch and trace modes and path-qualified compilers still need normal approval.
+- Background agents, including read-only research agents, can now search and read earlier sessions in the same project with `search_workspace_sessions` and `read_workspace_session_excerpt`, so a delegated history-mining task no longer has to fall back to reading code.
+- `git rm -n`/`--dry-run` is now recognised as a protected Git metadata writer, because Git takes the index lock even for a dry run. Sandboxed calls get the reviewed native retry guidance before launch instead of failing on `.git/index.lock` first.
+
 ## 1.103.0
 
 - Go repo maps now read real import declarations, resolve packages in the nearest workspace Go module, and label exported Go symbols without implying Go has an `export` keyword.

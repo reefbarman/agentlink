@@ -315,15 +315,6 @@ const SKILL_SESSION_CONTEXT_TOOLS = new Set([
   "search_session_history",
   "read_session_excerpt",
 ]);
-/**
- * Cross-session history is bound only to foreground sessions. Unlike the
- * current-session recall tools, these are not skill-exempt and are absent from
- * bounded profiles and background agents.
- */
-const WORKSPACE_SESSION_HISTORY_TOOLS = new Set([
-  "search_workspace_sessions",
-  "read_workspace_session_excerpt",
-]);
 const ALWAYS_AVAILABLE_DEV_TOOLS = new Set(["send_feedback"]);
 
 const EXCLUDED_TOOLS = new Set([
@@ -794,6 +785,10 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "execute_command",
     "search_session_history",
     "read_session_excerpt",
+    // Past sessions are bound to the executing session's own project, so a
+    // research agent can mine earlier work without the foreground.
+    "search_workspace_sessions",
+    "read_workspace_session_excerpt",
     "diagnose_activity",
     "recall_memory",
     "web_search",
@@ -942,9 +937,6 @@ export function getAgentTools(
       ([name]) =>
         name !== "compose" ||
         (composeEnabled === true && !isBackground && toolProfile === undefined),
-    )
-    .filter(
-      ([name]) => !WORKSPACE_SESSION_HISTORY_TOOLS.has(name) || !isBackground,
     )
     .filter(
       ([name]) =>
@@ -1873,7 +1865,7 @@ export interface ToolDispatchContext {
   sessionActivityDiagnosticsProvider?: import("../core/sessionActivityDiagnostics.js").SessionActivityDiagnosticsProvider;
   /**
    * Past-session history bound to the executing session's own project. Absent
-   * for background, projectless and unpersisted sessions.
+   * for projectless and unpersisted sessions.
    */
   workspaceSessionHistory?: import("@agentlink/core/workspace-session-history").WorkspaceSessionHistoryBinding;
   /** Returns the set of skills explicitly advertised to the current session. */

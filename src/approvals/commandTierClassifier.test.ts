@@ -25,6 +25,34 @@ function tier(command: string, override: Partial<CommandTierContext> = {}) {
 }
 
 describe("command tier classifier", () => {
+  it.each([
+    "tsc --noEmit --incremental false -p tsconfig.json",
+    "tsgo --noEmit --incremental false --project packages/core/tsconfig.json",
+    "tsc --noEmit --incremental false --pretty false --skipLibCheck src/a.ts",
+  ])("allows a no-write TypeScript check: %s", (command) => {
+    expect(tier(command)).toBe("safe");
+    expect(isCommandEligibleForReadOnlyExecution(command, ctx)).toEqual({
+      eligible: true,
+    });
+  });
+
+  it.each([
+    // Incremental metadata is still written without the explicit override.
+    "tsc --noEmit -p tsconfig.json",
+    "tsc --incremental false -p tsconfig.json",
+    "tsc --noEmit --incremental true",
+    "tsc -b --noEmit --incremental false",
+    "tsc --noEmit --incremental false --watch",
+    "tsc --noEmit --incremental false --generateTrace trace",
+    "tsc --noEmit --incremental false -p ../outside/tsconfig.json",
+    "./node_modules/.bin/tsc --noEmit --incremental false",
+  ])("does not clear other TypeScript invocations: %s", (command) => {
+    expect(tier(command)).not.toBe("safe");
+    expect(isCommandEligibleForReadOnlyExecution(command, ctx).eligible).toBe(
+      false,
+    );
+  });
+
   it("classifies read-only commands as safe", () => {
     expect(tier("git status --short")).toBe("safe");
     expect(tier("git ls-files 'src/**'")).toBe("safe");

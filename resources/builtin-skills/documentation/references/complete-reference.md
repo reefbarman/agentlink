@@ -1057,7 +1057,7 @@ The range may span at most 10 message positions, and the formatted output is cap
 
 ### search_workspace_sessions
 
-Search earlier saved foreground sessions that belong to the executing session's own project. The project is fixed by the host when the turn starts; tool input cannot select another project, storage path or scope. The executing session (use `search_session_history`), background and fleet sessions, sessions of other projects and sessions without a durable project identity are excluded. Available only to foreground VS Code sessions with saved history; not offered to background agents or bounded profiles, and not exempt from a skill's `allowed-tools`.
+Search earlier saved foreground sessions that belong to the executing session's own project. The project is fixed by the host when the turn starts; tool input cannot select another project, storage path or scope. The executing session (use `search_session_history`), background and fleet sessions, sessions of other projects and sessions without a durable project identity are excluded. Available to VS Code sessions with saved history, including background agents and the read-only research profile; not offered to the review, `/btw` or worktree-setup profiles, and not exempt from a skill's `allowed-tools`.
 
 | Parameter           | Type     | Description                                                              |
 | ------------------- | -------- | ------------------------------------------------------------------------ |
