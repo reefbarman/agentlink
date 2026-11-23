@@ -127,7 +127,7 @@ describe("edit durability classification", () => {
     expect(result.durability).toMatchObject({
       status: "durable",
       outcome: "transformed",
-      requires_reread: false,
+      requires_reread: true,
     });
     expect(result.formatOnSaveReport?.format_on_save_edits).toContain(
       "+const value = { a: 1 };",
@@ -136,6 +136,29 @@ describe("edit durability classification", () => {
       "save_without_formatting=true",
     );
     expect(result.formatOnSaveReport?.hint).toContain("new reviewed edit");
+  });
+
+  it("requires a reread when a small save transformation changes grouping", () => {
+    const approvedContent = 'if (explicit === ("mineCount" in options)) {}\n';
+    const content = 'if (explicit === "mineCount" in options) {}\n';
+    const result = classify({
+      relativePath: "src/game.js",
+      approvedContent,
+      editorContent: content,
+      disk: { status: "readable", content },
+    });
+
+    expect(result.durability).toMatchObject({
+      status: "durable",
+      outcome: "transformed",
+      requires_reread: true,
+    });
+    expect(result.formatOnSaveReport?.format_on_save_edits).toContain(
+      `+${content}`,
+    );
+    expect(result.formatOnSaveReport?.hint).toContain(
+      "may have changed its meaning",
+    );
   });
 
   it("treats EOL-only changes as transformed rather than divergent", () => {
@@ -148,6 +171,7 @@ describe("edit durability classification", () => {
     expect(result.durability).toMatchObject({
       status: "durable",
       outcome: "transformed",
+      requires_reread: false,
     });
     expect(result.formatOnSaveReport).toMatchObject({
       format_on_save: true,

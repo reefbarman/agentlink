@@ -605,6 +605,32 @@ describe("createVscodeReferencesProvider", () => {
     });
   });
 
+  it("returns a timeout when the VS Code reference provider does not answer", async () => {
+    vi.useFakeTimers();
+    try {
+      executeCommand.mockReturnValueOnce(new Promise(() => {}));
+      const provider = createVscodeReferencesProvider({} as never, {} as never);
+      const pending = provider.getReferences({
+        path: "src/file.ts",
+        line: 2,
+        column: 3,
+        sessionId: "session-1",
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      const result = await pending;
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(textPayload(result))).toMatchObject({
+        reason: "reference_provider_timeout",
+        timeout_ms: 15_000,
+        error: expect.stringContaining("regex search_files"),
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the declaration when include_declaration is omitted", async () => {
     executeCommand.mockResolvedValue([
       {

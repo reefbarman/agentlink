@@ -8491,103 +8491,154 @@ describe("handleExecuteCommand", () => {
     expect(textPayload(result).approval).toEqual({ by: "explicit_rule" });
   });
 
-  it("lets the reviewer approve a bounded inline-file copy in a verified sandbox", async () => {
-    getConfiguration.mockReturnValue({
-      get: vi.fn((key: string, fallback?: unknown) =>
-        key === "masterBypass" ? false : fallback,
-      ),
-    });
-    const enqueueCommandApproval = vi.fn();
-    const review = vi.fn(async (input) => {
-      expect(input).toMatchObject({
-        command:
-          "mkdir -p tmp && cp $AL_FILE(input) tmp/approve-for-me-smoke.txt",
-        inlineFiles: [
-          {
-            name: "input",
-            bytes: 14,
-            preview: "sandbox smoke\n",
-            executable: false,
-            truncated: false,
-          },
-        ],
+  it.each(["success", "metal failure", "edited metal failure"])(
+    "cleans up reviewed sandbox inline files (%s)",
+    async (scenario) => {
+      const metalFailure = scenario !== "success";
+      const edited = scenario === "edited metal failure";
+      const editedCommand = "xcrun metal -c edited.metal";
+      const command = metalFailure
+        ? "sh $AL_FILE(input)"
+        : "mkdir -p tmp && cp $AL_FILE(input) tmp/approve-for-me-smoke.txt";
+      const content = metalFailure
+        ? "xcrun metal -c shader.metal\n"
+        : "sandbox smoke\n";
+      getConfiguration.mockReturnValue({
+        get: vi.fn((key: string, fallback?: unknown) =>
+          key === "masterBypass" ? false : fallback,
+        ),
       });
-      return {
-        outcome: "allow" as const,
-        risk: "medium" as const,
-        userAuthorization: "high" as const,
-        rationale: "Bounded workspace file creation from immutable input",
-        model: "review-model",
-        status: "reviewed" as const,
-      };
-    });
-    let executedSourcePath = "";
-    const prepareExecution = vi.fn(async (options) => ({
-      security: {
-        auditId: "audit-inline-sandbox",
-        route: "sandbox" as const,
-        confinement: "verified-baseline" as const,
-        routeReason: "verified-local-macos" as const,
-        executionSurface: "verified-sandbox" as const,
-        requiredAuthority: "sandbox" as const,
-        permissionIntent: "default" as const,
-        approvalRequirement: "policy" as const,
-        authorityReason: "approval-policy" as const,
-        approvalPolicySnapshot: "on-request" as const,
-        approvalReviewerSnapshot: "auto-review" as const,
-        executionPresetSnapshot: "workspace-write" as const,
-        commandApprovalPolicySnapshot: "approve-for-me" as const,
-        executionPolicy: "sandbox-baseline-v2" as const,
-        preparedAt: 100,
-      },
-      execute: async () => {
-        executedSourcePath = options.sandboxInlineFiles?.[0]?.path ?? "";
-        expect(fs.existsSync(executedSourcePath)).toBe(true);
-        expect(fs.realpathSync(executedSourcePath)).toBe(executedSourcePath);
+      const enqueueCommandApproval = vi.fn(() => ({
+        promise: Promise.resolve({ decision: "edit", editedCommand }),
+      }));
+      const review = vi.fn(async (input) => {
+        expect(input).toMatchObject({
+          command,
+          inlineFiles: [
+            {
+              name: "input",
+              bytes: content.length,
+              preview: content,
+              executable: false,
+              truncated: false,
+            },
+          ],
+        });
         return {
-          exit_code: 0,
-          output: "",
-          output_captured: true,
-          terminal_id: "sandbox-inline-1",
+          outcome: "allow" as const,
+          risk: "medium" as const,
+          userAuthorization: "high" as const,
+          rationale: "Bounded workspace file creation from immutable input",
+          model: "review-model",
+          status: "reviewed" as const,
         };
-      },
-      dispose: vi.fn(),
-    }));
-    const { handleExecuteCommand } = await import("./executeCommand.js");
+      });
+      let executedSourcePath = "";
+      const prepareExecution = vi.fn(async (options) => ({
+        security: {
+          auditId: "audit-inline-sandbox",
+          route: "sandbox" as const,
+          confinement: "verified-baseline" as const,
+          routeReason: "verified-local-macos" as const,
+          executionSurface: "verified-sandbox" as const,
+          requiredAuthority: "sandbox" as const,
+          permissionIntent: "default" as const,
+          approvalRequirement: "policy" as const,
+          authorityReason: "approval-policy" as const,
+          approvalPolicySnapshot: "on-request" as const,
+          approvalReviewerSnapshot: "auto-review" as const,
+          executionPresetSnapshot: "workspace-write" as const,
+          commandApprovalPolicySnapshot: "approve-for-me" as const,
+          executionPolicy: "sandbox-baseline-v2" as const,
+          preparedAt: 100,
+        },
+        execute: async () => {
+          executedSourcePath = options.sandboxInlineFiles?.[0]?.path ?? "";
+          expect(fs.existsSync(executedSourcePath)).toBe(true);
+          expect(fs.realpathSync(executedSourcePath)).toBe(executedSourcePath);
+          return {
+            exit_code: metalFailure ? 1 : 0,
+            output: metalFailure
+              ? "cannot execute tool 'metal' due to missing Metal Toolchain"
+              : "",
+            output_captured: true,
+            terminal_id: "sandbox-inline-1",
+          };
+        },
+        dispose: vi.fn(),
+      }));
+      const { handleExecuteCommand } = await import("./executeCommand.js");
 
-    const result = await handleExecuteCommand(
-      {
-        command:
-          "mkdir -p tmp && cp $AL_FILE(input) tmp/approve-for-me-smoke.txt",
-        files: [{ name: "input", content: "sandbox smoke\n", ext: "txt" }],
-      },
-      {
-        isCommandApproved: () => false,
-        findMatchingCommandRule: () => undefined,
-      } as never,
-      {
-        isRecentlyApproved: () => false,
-        enqueueCommandApproval,
-      } as never,
-      "session-inline-reviewer",
-      undefined,
-      {
-        terminalProvider: { ...terminalProvider, prepareExecution },
-        getCommandApprovalPolicy: () => "approve-for-me",
-        commandApprovalReviewer: { review },
-        isSessionActive: () => true,
-      },
-    );
+      const result = await handleExecuteCommand(
+        {
+          command,
+          files: [{ name: "input", content, ext: "txt" }],
+        },
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: () => undefined,
+        } as never,
+        {
+          isRecentlyApproved: () => false,
+          enqueueCommandApproval,
+        } as never,
+        "session-inline-reviewer",
+        undefined,
+        {
+          terminalProvider: { ...terminalProvider, prepareExecution },
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: edited ? undefined : { review },
+          isSessionActive: () => true,
+        },
+      );
 
-    expect(review).toHaveBeenCalledTimes(1);
-    expect(enqueueCommandApproval).not.toHaveBeenCalled();
-    expect(executedSourcePath).toMatch(/\/agentlink-cmd-[^/]+\/input\.txt$/);
-    expect(fs.existsSync(executedSourcePath)).toBe(false);
-    expect(textPayload(result).approval).toMatchObject({
-      by: "model_reviewer",
-      model: "review-model",
-    });
-  });
+      expect(review).toHaveBeenCalledTimes(edited ? 0 : 1);
+      expect(enqueueCommandApproval).toHaveBeenCalledTimes(edited ? 1 : 0);
+      expect(executedSourcePath).toMatch(/\/agentlink-cmd-[^/]+\/input\.txt$/);
+      expect(fs.existsSync(executedSourcePath)).toBe(false);
+      const payload = textPayload(result);
+      if (!edited) {
+        expect(payload.approval).toMatchObject({
+          by: "model_reviewer",
+          model: "review-model",
+        });
+      }
+      if (edited) {
+        expect(payload.command_modified).toBe(true);
+        expect(payload.command).toBe(editedCommand);
+        expect(payload.retry_guidance).toMatchObject({
+          code: "sandbox_metal_toolchain_lookup",
+          automatic_retry: false,
+          options: [],
+        });
+        expect(JSON.stringify(payload.retry_guidance)).not.toContain(command);
+        expect(JSON.stringify(payload.retry_guidance)).not.toContain(
+          executedSourcePath,
+        );
+      } else if (metalFailure) {
+        expect(payload.command).toContain(executedSourcePath);
+        expect(payload.retry_guidance).toMatchObject({
+          code: "sandbox_metal_toolchain_lookup",
+          automatic_retry: false,
+          options: [
+            {
+              action: "reviewed_native_retry",
+              command,
+              requires_original_files: true,
+              sandbox_permissions: "require_escalated",
+              reviewed_native_execution: true,
+            },
+          ],
+        });
+        expect(JSON.stringify(payload.retry_guidance)).not.toContain(
+          executedSourcePath,
+        );
+        expect(prepareExecution).toHaveBeenCalledTimes(1);
+      } else {
+        expect(payload.retry_guidance).toBeUndefined();
+      }
+    },
+  );
 
   it("rejects edited inline-file commands with unresolved tokens", async () => {
     getConfiguration.mockReturnValue({

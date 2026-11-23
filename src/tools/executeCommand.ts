@@ -1572,8 +1572,9 @@ function attachSandboxMetalToolchainRetryGuidance(input: {
   result: TerminalCommandResult;
   command: string;
   output: string;
+  inlineReplay?: { commandTemplate?: string };
 }): void {
-  const { result, command, output } = input;
+  const { result, command, output, inlineReplay } = input;
   if (
     hasRetryGuidance(result) ||
     result.security?.route !== "sandbox" ||
@@ -1595,20 +1596,32 @@ function attachSandboxMetalToolchainRetryGuidance(input: {
     retry_guidance: {
       code: "sandbox_metal_toolchain_lookup",
       message:
-        "This may not mean the Metal Toolchain is missing. Inside AgentLink's sandbox, xcrun and xcodebuild cannot query the MobileAsset service that locates the downloaded Metal Toolchain, so Apple reports it as missing even when it is installed. To stay in the sandbox, list /private/var/run/com.apple.security.cryptexd/mnt/ to find the versioned com.apple.MobileAsset.MetalToolchain-* mount, run the tool directly from its Metal.xctoolchain/usr/bin/ directory, and pass -fmodules-cache-path=<a writable directory such as the workspace build folder> to metal. Otherwise use the reviewed native retry. The first attempt launched; AgentLink will not retry automatically.",
+        "This may not mean the Metal Toolchain is missing. Inside AgentLink's sandbox, xcrun and xcodebuild cannot query the MobileAsset service that locates the downloaded Metal Toolchain, so Apple reports it as missing even when it is installed. To stay in the sandbox, list /private/var/run/com.apple.security.cryptexd/mnt/ to find the versioned com.apple.MobileAsset.MetalToolchain-* mount, run the tool directly from its Metal.xctoolchain/usr/bin/ directory, and pass -fmodules-cache-path=<a writable directory such as the workspace build folder> to metal. The first attempt launched; AgentLink will not retry automatically." +
+        (inlineReplay
+          ? inlineReplay.commandTemplate
+            ? " For a reviewed native retry, resubmit the listed $AL_FILE template with the original files payload. Do not reuse the temporary paths."
+            : " No exact native retry is offered for this inline-file invocation. Do not reuse its temporary paths or automatically resubmit the original template."
+          : " Alternatively, use the reviewed native retry."),
       automatic_retry: false,
-      options: [
-        {
-          action: "reviewed_native_retry",
-          same_command: true,
-          sandbox_permissions: "require_escalated",
-          reason_required: true,
-          reviewed_native_execution: true,
-          command,
-          suggested_reason:
-            "xcrun cannot locate the installed Metal Toolchain inside the sandbox.",
-        },
-      ],
+      options:
+        inlineReplay && !inlineReplay.commandTemplate
+          ? []
+          : [
+              {
+                action: "reviewed_native_retry",
+                ...(!inlineReplay && { same_command: true }),
+                sandbox_permissions: "require_escalated",
+                reason_required: true,
+                reviewed_native_execution: true,
+                command: inlineReplay?.commandTemplate ?? command,
+                ...(inlineReplay && {
+                  requires_original_files: true,
+                  preserve_request_options: ["cwd", "env", "timeout", "files"],
+                }),
+                suggested_reason:
+                  "xcrun cannot locate the installed Metal Toolchain inside the sandbox.",
+              },
+            ],
       prohibited_workarounds: [
         "Do not reinstall the Metal Toolchain or Xcode because of this sandboxed error alone.",
         "Do not request broad mach-lookup access.",
@@ -3601,6 +3614,19 @@ async function executeCommandWithAudit(
         !params.terminal_id &&
         !params.terminal_name &&
         !params.split_from;
+      const metalInlineReplay = inlineFiles
+        ? {
+            commandTemplate:
+              commandEditedByUser ||
+              temporaryHome ||
+              readOnlyPolicy ||
+              params.terminal_id ||
+              params.terminal_name ||
+              params.split_from
+                ? undefined
+                : params.command,
+          }
+        : undefined;
       const hasHomeOverride = Boolean(
         params.env &&
         [
@@ -3651,6 +3677,7 @@ async function executeCommandWithAudit(
           result,
           command: commandToRun,
           output: result.output,
+          inlineReplay: metalInlineReplay,
         });
         attachSandboxHostIntegrationRetryGuidance({
           result,
@@ -4159,6 +4186,7 @@ async function executeCommandWithAudit(
           result,
           command: commandToRun,
           output: result.output,
+          inlineReplay: metalInlineReplay,
         });
         attachSandboxHostIntegrationRetryGuidance({
           result,

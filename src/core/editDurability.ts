@@ -209,7 +209,7 @@ export function createFormatOnSaveReport(
   const report: FormatOnSaveReport = { format_on_save: true };
   if (normalizedExpected !== normalizedFinal) {
     report.hint =
-      "If the saved formatting conflicts with the repository formatter, inspect the saved file and save-participant configuration. Compose a new reviewed edit with save_without_formatting=true when exact preservation is intended; do not repeat the same ordinary save or change the user's formatter settings automatically.";
+      "Re-read the saved file before relying on the edit. Save participants changed the reviewed text and may have changed its meaning. If the changes were unintended, inspect save-participant configuration and compose a new reviewed edit with save_without_formatting=true. Do not repeat the same ordinary save or change the user's formatter settings automatically.";
   }
   if (originalContent !== undefined && finalContent === originalContent) {
     report.format_on_save_reverted_proposal = true;
@@ -427,8 +427,7 @@ export function classifyEditDurability(
       ...common,
       ...finalFields,
       requires_reread:
-        formatOnSaveReport?.format_on_save_edits_omitted === "size_cap" ||
-        formatOnSaveReport?.format_on_save_exceeds_proposal === true,
+        formatOnSaveReport?.format_on_save_changed_lines !== undefined,
     },
     ...(formatOnSaveReport ? { formatOnSaveReport } : {}),
     ...(warnings ? { warnings } : {}),

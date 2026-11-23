@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- VS Code reference lookups return a timeout after 15 seconds instead of blocking the agent indefinitely when a language provider stalls.
+- Reviewed edits now request a reread when ordinary save participants change more than line endings, even when the change fits in the returned diff.
+- Metal Toolchain retry guidance for commands with inline files uses the original command template and asks for the original files, rather than pointing at deleted temporary paths.
+
 ## 1.102.2
 
 - The browser gateway now distinguishes local `+dev` builds of the same release version. Older VS Code windows running this fix cannot restart a newer helper, and automatic startup waits for an in-progress restart before deciding which helper to use.

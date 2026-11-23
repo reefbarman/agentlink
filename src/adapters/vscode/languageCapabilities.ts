@@ -100,11 +100,28 @@ export function createVscodeReferencesProvider(
       );
       const position = toPosition(params.line, params.column);
 
-      const locations = await vscode.commands.executeCommand<vscode.Location[]>(
-        "vscode.executeReferenceProvider",
-        uri,
-        position,
-      );
+      const timedOut = Symbol("reference_provider_timeout");
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const locations = await Promise.race([
+        vscode.commands.executeCommand<vscode.Location[]>(
+          "vscode.executeReferenceProvider",
+          uri,
+          position,
+        ),
+        new Promise<typeof timedOut>((resolve) => {
+          timer = setTimeout(() => resolve(timedOut), REFERENCE_TIMEOUT_MS);
+        }),
+      ]).finally(() => clearTimeout(timer));
+
+      if (locations === timedOut) {
+        return errorResult(
+          "VS Code's reference provider timed out. Use regex search_files for a text search instead.",
+          {
+            reason: "reference_provider_timeout",
+            timeout_ms: REFERENCE_TIMEOUT_MS,
+          },
+        );
+      }
 
       if (!locations || locations.length === 0) {
         return jsonResult({
@@ -1051,6 +1068,7 @@ const INLAY_HINT_KIND_NAMES: Record<number, string> = {
 const DEFAULT_COMPLETIONS_LIMIT = 50;
 const MAX_COMPLETION_DOC_LENGTH = 200;
 const MAX_REFERENCES = 200;
+const REFERENCE_TIMEOUT_MS = 15_000;
 const MAX_WORKSPACE_SYMBOLS = 100;
 
 const VALID_SEVERITIES = new Set([
