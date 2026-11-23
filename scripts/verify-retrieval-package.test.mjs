@@ -13,6 +13,12 @@ function inventory(...extraPaths) {
     "dist/browser-gateway.js",
     "dist/browser-gateway-monaco.js",
     "dist/browser-gateway-chunks/shared-ABC123.js",
+    "dist/sandbox-runtime/node_modules/node-pty/package.json",
+    "dist/sandbox-runtime/node_modules/node-pty/lib/index.js",
+    "dist/sandbox-runtime/node_modules/node-pty/prebuilds/darwin-arm64/pty.node",
+    "dist/sandbox-runtime/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
+    "dist/sandbox-runtime/node_modules/node-pty/prebuilds/darwin-x64/pty.node",
+    "dist/sandbox-runtime/node_modules/node-pty/prebuilds/darwin-x64/spawn-helper",
     "dist/monaco-editor.worker.js",
     "dist/monaco-json.worker.js",
     "dist/monaco-css.worker.js",
@@ -72,6 +78,23 @@ test("accepts VSIX archive paths with a lowercased extension readme", () => {
   );
 
   assert.equal(result.target, "darwin-arm64");
+});
+
+test("rejects an inventory without node-pty in the sandbox runtime", () => {
+  assert.throws(
+    () =>
+      verifyRetrievalPackageFiles(
+        inventory(
+          "dist/node_modules/@lancedb/lancedb-darwin-arm64/package.json",
+          "dist/node_modules/@lancedb/lancedb-darwin-arm64/lancedb.darwin-arm64.node",
+        ).replace(
+          "dist/sandbox-runtime/node_modules/node-pty/package.json",
+          "",
+        ),
+        "darwin-arm64",
+      ),
+    /missing required paths/u,
+  );
 });
 
 test("rejects an inventory without the focused getting-started guide", () => {

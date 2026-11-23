@@ -6,6 +6,7 @@ import {
   getRetrievalNativePackage,
   resolveRetrievalRuntimeTarget,
 } from "./package-retrieval-runtime.mjs";
+import { nodePtyPrebuildsFor } from "./package-sandbox-runtime.mjs";
 
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -68,8 +69,25 @@ export function verifyRetrievalPackageFiles(fileList, target) {
   const files = new Set(
     fileList.split(/\r?\n/u).map(normalizePackagePath).filter(Boolean),
   );
+  const nodePtyPrebuildPaths = nodePtyPrebuildsFor(expectedTarget).flatMap(
+    (prebuild) => [
+      `dist/sandbox-runtime/node_modules/node-pty/prebuilds/${prebuild}/pty.node`,
+      ...(prebuild.startsWith("darwin-")
+        ? [
+            `dist/sandbox-runtime/node_modules/node-pty/prebuilds/${prebuild}/spawn-helper`,
+          ]
+        : []),
+    ],
+  );
   const requiredPaths = [
     ...REQUIRED_PATHS,
+    ...(nodePtyPrebuildsFor(expectedTarget).length > 0
+      ? [
+          "dist/sandbox-runtime/node_modules/node-pty/package.json",
+          "dist/sandbox-runtime/node_modules/node-pty/lib/index.js",
+          ...nodePtyPrebuildPaths,
+        ]
+      : []),
     `dist/node_modules/${expectedNativePackage}/package.json`,
     ...(expectedKeychainPackage
       ? [

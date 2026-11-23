@@ -9,6 +9,7 @@ import type {
   StructuralSymbol,
 } from "./structuralGraph.js";
 
+import { canonicalizePath } from "../util/canonicalPath.js";
 import { inferCodeLanguage } from "./chunkQuality.js";
 import { resolveContainedCodeIndexPath } from "./codeIndexPaths.js";
 
@@ -17,7 +18,7 @@ import {
   type TsconfigPathResolver,
 } from "./tsconfigPaths.js";
 
-export const STRUCTURAL_EXTRACTOR_VERSION = 3;
+export const STRUCTURAL_EXTRACTOR_VERSION = 4;
 
 export interface StructuralExtractorMetrics {
   lineLookupComparisons: number;
@@ -92,18 +93,25 @@ export function extractStructuralFile(
   const language = getLanguage(canonicalOptions.absPath);
   const lines = canonicalOptions.content.split("\n");
   const lineStarts = buildLineStarts(lines);
-  const imports = extractImports(
-    canonicalOptions.content,
-    lines,
-    lineStarts,
-    canonicalOptions,
-  );
-  const exports = extractExports(lines, canonicalOptions);
+  const imports =
+    language === "go"
+      ? extractGoImports(canonicalOptions.content, lineStarts, canonicalOptions)
+      : extractImports(
+          canonicalOptions.content,
+          lines,
+          lineStarts,
+          canonicalOptions,
+        );
+  const exports =
+    language === "go" ? [] : extractExports(lines, canonicalOptions);
+  const hints = shouldUseTreeSitterSymbolHints(canonicalOptions.absPath)
+    ? normalizeStructuralSymbolHints(canonicalOptions.symbolHints ?? [])
+    : [];
   const symbols = dedupeSymbols([
-    ...extractSymbols(lines, exports),
-    ...(shouldUseTreeSitterSymbolHints(canonicalOptions.absPath)
-      ? normalizeStructuralSymbolHints(canonicalOptions.symbolHints ?? [])
-      : []),
+    ...(language === "go" && hints.length
+      ? []
+      : extractSymbols(lines, exports)),
+    ...hints,
   ]);
 
   return {
@@ -122,6 +130,173 @@ export function extractStructuralFile(
     exports,
     symbols,
   };
+}
+
+function extractGoImports(
+  content: string,
+  lineStarts: number[],
+  options: ExtractStructuralFileOptions,
+): StructuralImport[] {
+  // Go import declarations are only legal between the package clause and the
+  // first ordinary declaration. Tokenize just that prefix, ignoring comments.
+  const trivia = /(?:\s+|\/\/[^\n]*|\/\*[\s\S]*?\*\/)*/y;
+  const tokens =
+    /"(?:[^"\\\n]|\\[^\n])*"|`[^`]*`|[\p{L}_][\p{L}\p{Nd}_]*|[();.]/uy;
+  const next = () => {
+    trivia.lastIndex = tokens.lastIndex;
+    trivia.exec(content);
+    tokens.lastIndex = trivia.lastIndex;
+    return tokens.exec(content);
+  };
+  if (next()?.[0] !== "package" || !next()) return [];
+  const imports: StructuralImport[] = [];
+  function addImport(token: RegExpExecArray | null): boolean {
+    if (token && /^(?:\.|[\p{L}_][\p{L}\p{Nd}_]*)$/u.test(token[0])) {
+      token = next();
+    }
+    if (!token || !/^["`]/.test(token[0])) return false;
+    const specifier = token[0].slice(1, -1);
+    if (specifier) {
+      imports.push({
+        specifier,
+        kind: "static",
+        line: getLineNumberAtOffset(lineStarts, token.index, options.metrics),
+      });
+    }
+    return true;
+  }
+  declarations: for (let token = next(); token; token = next()) {
+    if (token[0] === ";") continue;
+    if (token[0] !== "import") break;
+    const first = next();
+    if (first?.[0] === "(") {
+      for (let item = next(); item?.[0] !== ")"; item = next()) {
+        if (item?.[0] !== ";" && !addImport(item)) break declarations;
+      }
+    } else if (!addImport(first)) {
+      break;
+    }
+  }
+  return resolveGoImports(dedupeImports(imports), options);
+}
+
+type GoModule = { directory: string; modulePath: string };
+
+function createGoResolutionCache() {
+  return {
+    modules: new Map<string, GoModule | undefined>(),
+    packages: new Map<string, string | undefined>(),
+  };
+}
+
+function resolveGoImports(
+  imports: StructuralImport[],
+  options: ExtractStructuralFileOptions,
+  cache = createGoResolutionCache(),
+): StructuralImport[] {
+  if (!imports.length) return imports;
+  const workspaceRoot = canonicalizePath(options.workspaceRoot);
+  let directory = path.dirname(options.absPath);
+  let module: GoModule | undefined;
+  const visited: string[] = [];
+  while (true) {
+    if (cache.modules.has(directory)) {
+      module = cache.modules.get(directory);
+      break;
+    }
+    visited.push(directory);
+    const manifest = resolveContainedCodeIndexPath(
+      workspaceRoot,
+      path.join(directory, "go.mod"),
+    );
+    try {
+      if (manifest && fs.statSync(manifest.absolutePath).isFile()) {
+        const goMod = fs.readFileSync(manifest.absolutePath, "utf8");
+        const match = /^[\t ]*module[\t ]+(?:"([^"\r\n]+)"|([^\s"]+))/m.exec(
+          goMod,
+        );
+        const modulePath = match?.[1] ?? match?.[2];
+        if (modulePath) module = { directory, modulePath };
+        break;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") break;
+    }
+    if (directory === workspaceRoot || path.dirname(directory) === directory)
+      break;
+    directory = path.dirname(directory);
+  }
+  for (const visitedDirectory of visited)
+    cache.modules.set(visitedDirectory, module);
+  return imports.map(
+    ({ resolvedRelPath: _previous, external: _external, ...item }) => {
+      const specifier = item.specifier;
+      const modulePath = module?.modulePath;
+      const relative =
+        modulePath &&
+        (specifier === modulePath
+          ? ""
+          : specifier.startsWith(`${modulePath}/`)
+            ? specifier.slice(modulePath.length + 1)
+            : undefined);
+      const packagePath =
+        module &&
+        relative !== undefined &&
+        (!relative ||
+          relative
+            .split("/")
+            .every(
+              (part) =>
+                part && part !== "." && part !== ".." && !part.includes("\\"),
+            ))
+          ? path.resolve(module.directory, relative)
+          : undefined;
+      if (packagePath && !cache.packages.has(packagePath)) {
+        cache.packages.set(
+          packagePath,
+          resolveGoPackage(workspaceRoot, packagePath),
+        );
+      }
+      const resolvedRelPath = packagePath
+        ? cache.packages.get(packagePath)
+        : undefined;
+      return {
+        ...item,
+        ...(resolvedRelPath ? { resolvedRelPath } : { external: true }),
+      };
+    },
+  );
+}
+
+function resolveGoPackage(
+  workspaceRoot: string,
+  packagePath: string,
+): string | undefined {
+  const directory =
+    packagePath === workspaceRoot
+      ? workspaceRoot
+      : resolveContainedCodeIndexPath(workspaceRoot, packagePath)?.absolutePath;
+  if (!directory) return undefined;
+  try {
+    const files = fs
+      .readdirSync(directory, { withFileTypes: true })
+      .filter(
+        (entry) =>
+          entry.isFile() &&
+          /^[^._].*\.go$/.test(entry.name) &&
+          !entry.name.endsWith("_test.go"),
+      )
+      .map((entry) => entry.name)
+      .sort();
+    const file = files.find((name) => name !== "doc.go") ?? files[0];
+    return (
+      file &&
+      resolveContainedCodeIndexPath(workspaceRoot, path.join(directory, file))
+        ?.portableRelativePath
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 function extractImports(
@@ -366,6 +541,7 @@ export function refreshStructuralAliasLinks(
   graph: StructuralGraphCache,
 ): StructuralGraphCache {
   const pathResolver = createTsconfigPathResolver(graph.workspaceRoot);
+  const goResolutionCache = createGoResolutionCache();
   const files = Object.fromEntries(
     Object.entries(graph.files).map(([key, entry]) => {
       const identity = resolveContainedCodeIndexPath(
@@ -386,11 +562,14 @@ export function refreshStructuralAliasLinks(
         key,
         {
           ...entry,
-          imports: entry.imports.map((item) =>
-            isRelativeSpecifier(item.specifier)
-              ? item
-              : buildImport({ ...item, options }),
-          ),
+          imports:
+            entry.language === "go"
+              ? resolveGoImports(entry.imports, options, goResolutionCache)
+              : entry.imports.map((item) =>
+                  isRelativeSpecifier(item.specifier)
+                    ? item
+                    : buildImport({ ...item, options }),
+                ),
           exports: entry.exports.map((item) => {
             if (!item.source || isRelativeSpecifier(item.source)) return item;
             const { resolvedRelPath: _previous, ...rest } = item;

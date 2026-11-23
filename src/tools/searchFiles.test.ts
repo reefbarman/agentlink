@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as os from "os";
 import * as path from "path";
 
@@ -49,6 +50,11 @@ vi.mock("./pathAccessUI.js", () => ({
   approveOutsideWorkspaceAccess,
 }));
 
+vi.mock("vscode", () => ({
+  env: { appRoot: path.resolve(".") },
+  workspace: { workspaceFolders: [] },
+}));
+
 describe("handleSearchFiles ripgrep args", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -64,6 +70,67 @@ describe("handleSearchFiles ripgrep args", () => {
       path.relative(resolvedPath, filePath).replaceAll(path.sep, "/"),
     );
     tryGetFirstWorkspaceRoot.mockReturnValue(resolvedPath);
+  });
+
+  it("reads a rewritten external file on each identical regex search", async ({
+    skip,
+  }) => {
+    const ripgrep =
+      await vi.importActual<typeof import("../util/ripgrep.js")>(
+        "../util/ripgrep.js",
+      );
+    let rgPath: string;
+    try {
+      rgPath = await ripgrep.getRipgrepBinPath();
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith("Could not find a usable ripgrep binary")
+      ) {
+        skip();
+        return;
+      }
+      throw error;
+    }
+    getRipgrepBinPath.mockResolvedValue(rgPath);
+    execRipgrepSearch.mockImplementation(ripgrep.execRipgrepSearch);
+
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agentlink-search-"));
+    try {
+      const logs = path.join(tmp, "logs");
+      const alias = path.join(tmp, "alias");
+      await fs.mkdir(logs);
+      await fs.symlink(logs, alias, "junction");
+      const file = path.join(alias, "test.log");
+      const realPaths =
+        await vi.importActual<typeof import("../util/paths.js")>(
+          "../util/paths.js",
+        );
+      resolveAndValidatePath.mockImplementation(
+        realPaths.resolveAndValidatePath,
+      );
+      const search = (inputPath: string) =>
+        handleSearchFiles(
+          { path: inputPath, regex: "check", context: 0 },
+          { isPathTrusted: () => true } as never,
+          {} as never,
+          "external-rewrite",
+        );
+      await fs.writeFile(file, "check FAIL\n");
+      expect((await search(file)).data).toMatchObject({
+        total_matches: 1,
+        results: expect.stringContaining("check FAIL"),
+      });
+      await fs.writeFile(file, "check PASS\n");
+      for (const inputPath of [file, await fs.realpath(file)]) {
+        expect((await search(inputPath)).data).toMatchObject({
+          total_matches: 1,
+          results: expect.stringContaining("check PASS"),
+        });
+      }
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 
   it("adds default .git and node_modules exclude globs", async () => {

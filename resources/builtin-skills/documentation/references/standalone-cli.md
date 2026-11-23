@@ -235,7 +235,7 @@ Coding chats and background children get `get_repo_map` (a budgeted skeleton of 
 - The index is built on first use and refreshed on every call: files git lists (tracked plus untracked, not ignored), or a bounded walk outside git, are compared by size and modification time, and only changed files are re-read. Importers of added or removed files are re-resolved, and tsconfig path aliases are re-applied each time. Symlinks, binary files and files over 1 MB are skipped, and at most 20,000 files are indexed (results then say `partial`).
 - It lives under `~/.agentlink/code-index`, one store per checkout, shared by every CLI and Desktop process on that folder. One process rebuilds at a time (a fenced writer lease); the others wait briefly, then use the last published map marked `stale`. Each result reports the index `state` and `generation`.
 - Results only include files the session may read: a background child limited to some folders sees only those files, and links into hidden files lose their resolved path.
-- Import resolution is strongest for JavaScript and TypeScript; other languages contribute files and symbols. This is a structural map, not a language server. VS Code's own `get_repo_map` still uses its code index for now.
+- Import resolution is strongest for JavaScript and TypeScript. Go import declarations link to a representative source file for packages in the nearest workspace `go.mod`. Go build tags, workspace modules, and replacement rules are not fully resolved. This is a structural map, not a language server. VS Code's own `get_repo_map` still uses its code index for now.
 
 ## TypeScript and JavaScript intelligence
 

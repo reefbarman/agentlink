@@ -565,7 +565,11 @@ function buildFileSummary(
     item.kind === "default" ? "default" : item.name,
   );
   const symbols = entry.symbols.map((item) => {
-    const exported = item.exported ? "export " : "";
+    const exported = item.exported
+      ? entry.language === "go"
+        ? "exported "
+        : "export "
+      : "";
     return `${exported}${item.kind} ${item.name}`;
   });
 

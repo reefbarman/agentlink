@@ -337,6 +337,23 @@ describe("buildRepoMapPayload", () => {
     ]);
   });
 
+  it("uses Go visibility rather than an export keyword in symbol labels", () => {
+    const graph = makeGraph();
+    graph.files["main.go"] = {
+      relPath: "main.go",
+      language: "go",
+      hash: "go",
+      indexedAt: graph.generatedAt,
+      imports: [],
+      exports: [],
+      symbols: [{ name: "Run", kind: "function", exported: true, line: 2 }],
+    };
+    const payload = buildRepoMapPayload({ graph, scopeRelPath: "main.go" });
+    expect(payload.files).toMatchObject({
+      items: [{ path: "main.go", symbols: ["exported function Run"] }],
+    });
+  });
+
   it("scopes to a directory", () => {
     const payload = buildRepoMapPayload({
       graph: makeGraph(),

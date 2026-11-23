@@ -612,6 +612,80 @@ describe("extractStructuralFile", () => {
     ]);
   });
 
+  it("extracts Go imports, resolves module-local packages, and keeps function export flags", () => {
+    writeFile("go.mod", 'module "example.com/acme"\n');
+    writeFile("root.go", "package acme\n");
+    writeFile("internal/logging/logging.go", "package logging\n");
+    const content = [
+      "package main",
+      "import (",
+      '\t"fmt"',
+      '\tlog /* ) */ "example.com/acme/internal/logging"',
+      ")",
+      'import _ "example.com/acme"; import . `example.com/elsewhere`',
+      "var another = `",
+      'import "not/a/package"',
+      "`",
+    ].join("\n");
+    const absPath = writeFile("cmd/server/main.go", content);
+    const entry = extractStructuralFile({
+      content,
+      absPath,
+      relPath: "cmd/server/main.go",
+      workspaceRoot,
+      hash: hashContent(content),
+      symbolHints: [
+        { name: "Run", kind: "function", exported: true, line: 9 },
+        { name: "run", kind: "function", exported: false, line: 13 },
+      ],
+    });
+
+    expect(entry.imports).toEqual([
+      { specifier: "fmt", kind: "static", external: true, line: 3 },
+      {
+        specifier: "example.com/acme/internal/logging",
+        kind: "static",
+        resolvedRelPath: "internal/logging/logging.go",
+        line: 4,
+      },
+      {
+        specifier: "example.com/acme",
+        kind: "static",
+        resolvedRelPath: "root.go",
+        line: 6,
+      },
+      {
+        specifier: "example.com/elsewhere",
+        kind: "static",
+        external: true,
+        line: 6,
+      },
+    ]);
+    const graph = {
+      version: 1 as const,
+      workspaceRoot,
+      generatedAt: "now",
+      files: { [entry.relPath]: entry },
+    };
+    expect(
+      refreshStructuralAliasLinks(graph).files[entry.relPath].imports,
+    ).toEqual(entry.imports);
+    writeFile("go.mod", "module example.com/changed\n");
+    expect(
+      refreshStructuralAliasLinks(graph).files[entry.relPath].imports[1],
+    ).toEqual({
+      specifier: "example.com/acme/internal/logging",
+      kind: "static",
+      external: true,
+      line: 4,
+    });
+    expect(entry.exports).toEqual([]);
+    expect(entry.symbols).toEqual([
+      { name: "Run", kind: "function", exported: true, line: 9 },
+      { name: "run", kind: "function", exported: false, line: 13 },
+    ]);
+  });
+
   it("preserves unresolved relative imports without claiming they are external", () => {
     const entry = extract(
       "src/foo.ts",

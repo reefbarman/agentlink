@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
+  NativeShellLaunchError,
   NativeShellStartupTimeoutError,
   type NativeShellStartupDiagnostic,
 } from "./NativeAgentExecutionError.js";
@@ -641,19 +642,71 @@ export class NodePtyNativeAgentRuntimeProvider implements NativeAgentRuntimeProv
       await existing.ready;
       return;
     }
-    const pty = this.nodePty.spawn(
-      request.launch.profile.shellPath,
-      [...request.launch.profile.shellArgs],
-      {
-        name: "xterm-256color",
-        cols: request.dimensions.columns,
-        rows: request.dimensions.rows,
-        cwd: request.launch.profile.cwd,
-        env: { ...request.launch.profile.environment },
-        encoding: "utf8",
-        handleFlowControl: false,
-      },
-    );
+    let pty: NodePtyProcess;
+    try {
+      pty = this.nodePty.spawn(
+        request.launch.profile.shellPath,
+        [...request.launch.profile.shellArgs],
+        {
+          name: "xterm-256color",
+          cols: request.dimensions.columns,
+          rows: request.dimensions.rows,
+          cwd: request.launch.profile.cwd,
+          env: { ...request.launch.profile.environment },
+          encoding: "utf8",
+          handleFlowControl: false,
+        },
+      );
+    } catch (error) {
+      const code =
+        error && typeof error === "object" && "code" in error
+          ? error.code
+          : undefined;
+      const message = error instanceof Error ? error.message : "";
+      const knownSpawnEnoentMessage =
+        message === "posix_spawn failed: No such file or directory" ||
+        message === "posix_spawnp failed: No such file or directory";
+      const shellMissing = (() => {
+        try {
+          fs.statSync(request.launch.profile.shellPath);
+          return false;
+        } catch (statError) {
+          return (
+            statError &&
+            typeof statError === "object" &&
+            "code" in statError &&
+            statError.code === "ENOENT"
+          );
+        }
+      })();
+      const cwdMissingOrInvalid = (() => {
+        try {
+          return !fs.statSync(request.launch.profile.cwd).isDirectory();
+        } catch (statError) {
+          return (
+            statError &&
+            typeof statError === "object" &&
+            "code" in statError &&
+            (statError.code === "ENOENT" || statError.code === "ENOTDIR")
+          );
+        }
+      })();
+      const category = shellMissing
+        ? "shell_missing"
+        : cwdMissingOrInvalid
+          ? "cwd_missing"
+          : code === "ENOENT" || knownSpawnEnoentMessage
+            ? "spawn_enoent_unresolved"
+            : "spawn_failed";
+      const launchError = new NativeShellLaunchError(category);
+      this.log?.(`[native-agent-terminal] ${launchError.message}`);
+      try {
+        await request.launch.cleanup();
+      } catch {
+        this.log?.("[native-agent-terminal] Shell bootstrap cleanup failed.");
+      }
+      throw launchError;
+    }
     let channel!: PersistentNativeChannel;
     channel = new PersistentNativeChannel(
       request.channelId,

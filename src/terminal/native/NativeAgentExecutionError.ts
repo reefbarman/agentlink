@@ -39,6 +39,30 @@ export interface NativeShellStartupDiagnostic {
     | "none_detected";
 }
 
+export type NativeShellLaunchFailureCategory =
+  | "shell_missing"
+  | "cwd_missing"
+  | "spawn_enoent_unresolved"
+  | "spawn_failed";
+
+export class NativeShellLaunchError extends Error {
+  readonly code = "native_shell_launch_failed";
+
+  constructor(readonly category: NativeShellLaunchFailureCategory) {
+    const description = {
+      shell_missing: "The configured host shell path does not exist.",
+      cwd_missing: "The host shell working directory does not exist.",
+      spawn_enoent_unresolved:
+        "The shell and working directory exist, but the PTY launch reported ENOENT. The missing executable or dependency could not be identified.",
+      spawn_failed: "The host shell PTY could not be started.",
+    }[category];
+    super(
+      `${description} Raw launch details and filesystem paths are omitted.`,
+    );
+    this.name = "NativeShellLaunchError";
+  }
+}
+
 export class NativeShellStartupTimeoutError extends Error {
   readonly code = "native_shell_startup_timeout";
 

@@ -84,6 +84,7 @@ class FakeNodePtyProcess implements NodePtyProcess {
 function launch(
   runtime: NodePtyNativeAgentRuntimeProvider,
   shell: "bash" | "zsh" = "zsh",
+  options: { shellPath?: string; cwd?: string } = {},
 ) {
   const cleanup = vi.fn(async () => undefined);
   const closed = vi.fn();
@@ -98,9 +99,9 @@ function launch(
       profile: {
         profileName: "zsh",
         provenance: "configured",
-        shellPath: "/bin/zsh",
+        shellPath: options.shellPath ?? "/bin/zsh",
         shellArgs: ["-l", "-i"],
-        cwd: "/workspace",
+        cwd: options.cwd ?? "/workspace",
         environment: { PATH: "/usr/bin:/bin", ZDOTDIR: "/bootstrap" },
       },
     },
@@ -128,6 +129,62 @@ async function emitInitialPrompt(
 }
 
 describe("NodePtyNativeAgentRuntimeProvider", () => {
+  it.each([
+    ["shell_missing", "/missing/native-agent-shell", os.tmpdir()],
+    ["cwd_missing", "/bin/zsh", path.join(os.tmpdir(), "missing-agent-cwd")],
+    ["spawn_enoent_unresolved", "/bin/zsh", os.tmpdir()],
+  ] as const)(
+    "classifies persistent PTY ENOENT as %s without exposing paths or skipping cleanup",
+    async (category, shellPath, cwd) => {
+      const spawnError = Object.assign(
+        new Error(
+          "posix_spawn failed: No such file or directory /private/path",
+        ),
+        { code: "ENOENT" },
+      );
+      const log = vi.fn();
+      const runtime = new NodePtyNativeAgentRuntimeProvider({
+        spawn: vi.fn(() => {
+          throw spawnError;
+        }),
+      });
+      runtime.log = log;
+      const channel = launch(runtime, "zsh", {
+        shellPath:
+          category === "spawn_enoent_unresolved" ? process.execPath : shellPath,
+        cwd,
+      });
+
+      await expect(channel.ready).rejects.toMatchObject({
+        code: "native_shell_launch_failed",
+        category,
+      });
+      expect(channel.cleanup).toHaveBeenCalledOnce();
+      expect(JSON.stringify(log.mock.calls)).not.toContain("/private/path");
+    },
+  );
+
+  it("classifies the exact node-pty ENOENT message when code is absent", async () => {
+    const spawnError = new Error(
+      "posix_spawn failed: No such file or directory",
+    );
+    const runtime = new NodePtyNativeAgentRuntimeProvider({
+      spawn: vi.fn(() => {
+        throw spawnError;
+      }),
+    });
+    const channel = launch(runtime, "zsh", {
+      shellPath: process.execPath,
+      cwd: os.tmpdir(),
+    });
+
+    await expect(channel.ready).rejects.toMatchObject({
+      code: "native_shell_launch_failed",
+      category: "spawn_enoent_unresolved",
+    });
+    expect(channel.cleanup).toHaveBeenCalledOnce();
+  });
+
   it("keeps one interactive shell and resolves commands from integration markers", async () => {
     const pty = new FakeNodePtyProcess();
     const nodePty: NodePtyModule = { spawn: vi.fn(() => pty) };

@@ -6,6 +6,7 @@ import {
 } from "../terminal/sandbox/AgentTerminalProviderRouter.js";
 import {
   NativeCommandEnvironmentError,
+  NativeShellLaunchError,
   NativeShellStartupTimeoutError,
 } from "../terminal/native/NativeAgentExecutionError.js";
 import {
@@ -13164,6 +13165,49 @@ describe("handleExecuteCommand", () => {
         /secret-value|\/private\/path/,
       );
       expect(executeCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "shell_missing",
+    "cwd_missing",
+    "spawn_enoent_unresolved",
+    "spawn_failed",
+  ] as const)(
+    "returns safe, non-escalating native launch guidance for %s",
+    async (category) => {
+      executeCommand.mockRejectedValue(new NativeShellLaunchError(category));
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const result = await handleExecuteCommand(
+        { command: "pwd", terminal_name: "named terminal" },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "native-shell-launch",
+        undefined,
+        { terminalProvider },
+      );
+      const payload = textPayload(result);
+      expect(payload).toMatchObject({
+        status: "retry_required",
+        error_code: "native_shell_launch_failed",
+        launch_diagnostic: { category },
+        command_sent: false,
+        process_launched: false,
+        retry_safe: true,
+        failure_stage: "launch",
+        retry_guidance: {
+          code: "native_shell_launch_failed",
+          automatic_retry: false,
+          options: [{ action: "inspect_and_repair_host_shell_launch" }],
+          prohibited_workarounds: ["change_execution_route_to_bypass_failure"],
+        },
+      });
+      expect(JSON.stringify(payload)).not.toMatch(
+        /\/private\/path|posix_spawn|escalat|require_escalated/i,
+      );
+      expect(payload).not.toHaveProperty("isError");
+      expect(result).not.toHaveProperty("isError");
+      expect(executeCommand).toHaveBeenCalledOnce();
     },
   );
 

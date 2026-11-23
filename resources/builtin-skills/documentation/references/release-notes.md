@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Go repo maps now read real import declarations, resolve packages in the nearest workspace Go module, and label exported Go symbols without implying Go has an `export` keyword.
+- Native terminal failures before shell startup now distinguish a missing shell, a missing working directory, and an unresolved launch failure, with guidance to repair the host configuration before retrying.
+- VSIX verification now rejects extension packages that omit the native terminal runtime for their target platform, alongside the existing check for the compose runtime.
+
 ## 1.102.3
 
 - VS Code reference lookups return a timeout after 15 seconds instead of blocking the agent indefinitely when a language provider stalls.

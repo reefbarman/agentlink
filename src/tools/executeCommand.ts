@@ -36,6 +36,7 @@ import { SandboxAvailabilityError } from "../terminal/sandbox/AgentTerminalProvi
 import { SandboxPreparationError } from "../terminal/sandbox/SandboxPreparationError.js";
 import {
   NativeCommandEnvironmentError,
+  NativeShellLaunchError,
   NativeShellStartupTimeoutError,
 } from "../terminal/native/NativeAgentExecutionError.js";
 import {
@@ -467,6 +468,7 @@ type ExecuteCommandRetryGuidance = {
     | "managed_network_connect_timeout"
     | "pnpm_store_mismatch"
     | "native_shell_startup_timeout"
+    | "native_shell_launch_failed"
     | "native_command_environment_mismatch"
     | "sandbox_unavailable";
   message: string;
@@ -4804,6 +4806,48 @@ async function executeCommandWithAudit(
       };
     }
     const lowerMessage = message.toLowerCase();
+    if (err instanceof NativeShellLaunchError) {
+      const guidance = {
+        shell_missing:
+          "The configured host shell path is missing. Check the VS Code terminal profile or host-shell configuration, repair it, then request a fresh execution. Do not retry unchanged and do not switch execution routes to bypass the failure.",
+        cwd_missing:
+          "The host shell working directory is missing or is not a directory. Restore that directory or choose an existing working directory, then request a fresh execution. Do not retry unchanged or change execution routes to bypass the failure.",
+        spawn_enoent_unresolved:
+          "The configured shell and working directory exist, but node-pty could not resolve which launch executable or dependency is missing. Inspect the host shell and native PTY/runtime installation, repair the identified issue, then request a fresh execution. Do not repeatedly close/recreate terminals or switch execution routes to bypass the failure.",
+        spawn_failed:
+          "The native PTY could not start. Inspect the host shell and native PTY/runtime configuration before requesting a fresh execution. Do not retry unchanged or switch execution routes to bypass the failure.",
+      }[err.category];
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "retry_required",
+              error: err.message,
+              error_code: err.code,
+              launch_diagnostic: { category: err.category },
+              command: commandToRun,
+              ...(commandToRun !== params.command
+                ? { original_command: params.command, command_modified: true }
+                : {}),
+              command_sent: false,
+              process_launched: false,
+              retry_safe: true,
+              failure_stage: "launch",
+              retry_guidance: {
+                code: err.code,
+                message: guidance,
+                automatic_retry: false,
+                options: [{ action: "inspect_and_repair_host_shell_launch" }],
+                prohibited_workarounds: [
+                  "change_execution_route_to_bypass_failure",
+                ],
+              } satisfies ExecuteCommandRetryGuidance,
+            }),
+          },
+        ],
+      };
+    }
     if (
       lowerMessage.includes("native agent shell integration startup timed out")
     ) {
