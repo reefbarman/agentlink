@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.102.3
+
 - VS Code reference lookups return a timeout after 15 seconds instead of blocking the agent indefinitely when a language provider stalls.
 - Reviewed edits now request a reread when ordinary save participants change more than line endings, even when the change fits in the returned diff.
 - Metal Toolchain retry guidance for commands with inline files uses the original command template and asks for the original files, rather than pointing at deleted temporary paths.
