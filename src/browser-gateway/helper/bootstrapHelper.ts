@@ -2,7 +2,12 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawn, type ChildProcess } from "child_process";
 
-import { readBrowserGatewayHelperDiscovery } from "../browserGatewayHelperDiscovery.js";
+import {
+  getBrowserGatewayHelperDiscoveryPath,
+  readBrowserGatewayHelperDiscovery,
+} from "../browserGatewayHelperDiscovery.js";
+import { BrowserGatewayHelperAdminClient } from "./BrowserGatewayHelperAdminClient.js";
+import { withBrowserGatewayHelperLock } from "./browserGatewayHelperLock.js";
 import {
   BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
   type BrowserGatewayHelperDiscoveryRecord,
@@ -17,6 +22,8 @@ export interface BrowserGatewayHelperBootstrapOptions {
   helperVersion: string;
   idleShutdownMs?: number;
   startupTimeoutMs?: number;
+  /** Explicitly restart a compatible helper, but never downgrade it. */
+  restart?: boolean;
   /** Refuse to terminate a healthy but incompatible helper. Default false. */
   replaceIncompatibleHelper?: boolean;
   /** Additional environment for the helper process, such as Electron's Node mode. */
@@ -92,13 +99,15 @@ function supportsPromptProfilePolicy(
 type ReleaseVersion = {
   core: [number, number, number];
   prerelease: Array<number | string>;
+  devTimestamp: number;
 };
 
 function parseReleaseVersion(value: string): ReleaseVersion | null {
+  if (typeof value !== "string") return null;
   const match = value
     .trim()
     .match(
-      /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/,
+      /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/,
     );
   if (!match) return null;
   return {
@@ -108,6 +117,9 @@ function parseReleaseVersion(value: string): ReleaseVersion | null {
           .split(".")
           .map((part) => (/^\d+$/.test(part) ? Number(part) : part))
       : [],
+    devTimestamp: Number(
+      /^dev\.(\d{13})\.[0-9a-f]{8}$/.exec(match[5] ?? "")?.[1] ?? 0,
+    ),
   };
 }
 
@@ -123,7 +135,10 @@ export function compareHelperReleaseVersions(
     if (difference !== 0) return Math.sign(difference);
   }
   if (leftVersion.prerelease.length === 0) {
-    return rightVersion.prerelease.length === 0 ? 0 : 1;
+    if (rightVersion.prerelease.length > 0) return 1;
+    // Only the local VSIX build stamp affects helper freshness, not arbitrary
+    // SemVer build metadata. The random build ID is not a clock.
+    return Math.sign(leftVersion.devTimestamp - rightVersion.devTimestamp);
   }
   if (rightVersion.prerelease.length === 0) return -1;
   const length = Math.max(
@@ -261,11 +276,12 @@ async function terminateStaleHelper(
   const versionOrder = requestedVersion
     ? compareHelperReleaseVersions(discovery.helperVersion, requestedVersion)
     : null;
-  if (
-    discovery.protocolVersion === BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION &&
-    versionOrder !== null &&
-    versionOrder > 0
-  ) {
+  if (versionOrder !== null && versionOrder > 0) {
+    if (discovery.protocolVersion !== BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION) {
+      throw new Error(
+        `helper_incompatible:running=${discovery.helperVersion}:requested=${requestedVersion}`,
+      );
+    }
     log(
       `[browser-gateway-helper] preserving newer helper pid=${discovery.pid} runningVersion=${discovery.helperVersion} requestedVersion=${requestedVersion}`,
     );
@@ -323,6 +339,16 @@ export function shouldAttachToCompatibleHelper(params: {
 export async function bootstrapBrowserGatewayHelper(
   options: BrowserGatewayHelperBootstrapOptions,
 ): Promise<BrowserGatewayHelperBootstrapResult> {
+  return await withBrowserGatewayHelperLock(
+    getBrowserGatewayHelperDiscoveryPath(),
+    options.log,
+    () => bootstrapLocked(options),
+  );
+}
+
+async function bootstrapLocked(
+  options: BrowserGatewayHelperBootstrapOptions,
+): Promise<BrowserGatewayHelperBootstrapResult> {
   const startupTimeoutMs =
     options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
   const desired: DesiredHelperConfig = {
@@ -333,10 +359,9 @@ export async function bootstrapBrowserGatewayHelper(
     promptProfilePolicyRevision: PROMPT_PROFILE_POLICY_REVISION,
   };
 
-  const existing = await resolveHealthyDiscoveredHelper(
-    options.browserGatewayPort,
-    desired,
-  );
+  const existing = options.restart
+    ? null
+    : await resolveHealthyDiscoveredHelper(options.browserGatewayPort, desired);
   if (existing) {
     options.log(
       `[browser-gateway-helper] using existing helper at ${existing.url} (pid=${existing.pid}, lanAccess=${Boolean(existing.lanAccess)})`,
@@ -348,6 +373,7 @@ export async function bootstrapBrowserGatewayHelper(
   }
 
   let replacingIdleCompatibleHelper = false;
+  let restartTarget: BrowserGatewayHelperDiscoveryRecord | undefined;
   const discovered = await resolveCompatibleDiscoveredHelper(
     options.browserGatewayPort,
   );
@@ -366,7 +392,14 @@ export async function bootstrapBrowserGatewayHelper(
         discovered.helperVersion,
         options.helperVersion,
       ) === 1;
-    if (
+    if (options.restart && newerRunningHelper) {
+      throw new Error(
+        `helper_restart_would_downgrade:${discovered.helperVersion}:${options.helperVersion}`,
+      );
+    }
+    if (options.restart) {
+      restartTarget = discovered;
+    } else if (
       !profileCompatible &&
       (newerRunningHelper ||
         (active && options.replaceIncompatibleHelper !== true))
@@ -376,6 +409,7 @@ export async function bootstrapBrowserGatewayHelper(
       );
     }
     if (
+      !options.restart &&
       profileCompatible &&
       shouldAttachToCompatibleHelper({
         runningVersion: discovered.helperVersion,
@@ -389,23 +423,46 @@ export async function bootstrapBrowserGatewayHelper(
       );
       return { source: "existing", discovery: discovered };
     }
-    options.log(
-      `[browser-gateway-helper] replacing ${active ? "explicitly authorised active" : "idle"} compatible helper pid=${discovered.pid} runningVersion=${discovered.helperVersion} requestedVersion=${options.helperVersion} profileCompatible=${profileCompatible}`,
-    );
-    replacingIdleCompatibleHelper = true;
+    if (!options.restart) {
+      options.log(
+        `[browser-gateway-helper] replacing ${active ? "explicitly authorised active" : "idle"} compatible helper pid=${discovered.pid} runningVersion=${discovered.helperVersion} requestedVersion=${options.helperVersion} profileCompatible=${profileCompatible}`,
+      );
+      replacingIdleCompatibleHelper = true;
+    }
   }
 
-  const incompatibleDiscovery = await readBrowserGatewayHelperDiscovery();
-  if (
-    !replacingIdleCompatibleHelper &&
-    incompatibleDiscovery?.port === options.browserGatewayPort &&
-    isPidLikelyAlive(incompatibleDiscovery.pid) &&
-    (await fetchHelperHealth(incompatibleDiscovery)) &&
-    options.replaceIncompatibleHelper !== true
-  ) {
-    throw new Error(
-      `helper_incompatible:running=${incompatibleDiscovery.helperVersion}:requested=${options.helperVersion}`,
-    );
+  if (!restartTarget && !replacingIdleCompatibleHelper) {
+    const discovery = await readBrowserGatewayHelperDiscovery();
+    if (
+      discovery?.port === options.browserGatewayPort &&
+      isPidLikelyAlive(discovery.pid)
+    ) {
+      const health = await fetchHelperHealth(discovery);
+      if (health) {
+        if (
+          options.restart &&
+          compareHelperReleaseVersions(
+            health.helperVersion,
+            options.helperVersion,
+          ) === 1
+        ) {
+          throw new Error(
+            `helper_restart_would_downgrade:${health.helperVersion}:${options.helperVersion}`,
+          );
+        }
+        if (
+          options.restart &&
+          health.helperVersion === discovery.helperVersion &&
+          health.protocolVersion === discovery.protocolVersion
+        ) {
+          restartTarget = discovery;
+        } else if (options.replaceIncompatibleHelper !== true) {
+          throw new Error(
+            `helper_incompatible:running=${discovery.helperVersion}:requested=${options.helperVersion}`,
+          );
+        }
+      }
+    }
   }
 
   const helperPath = path.join(
@@ -417,12 +474,33 @@ export async function bootstrapBrowserGatewayHelper(
     throw new Error(`helper_bundle_missing:${helperPath}`);
   }
 
+  if (restartTarget) {
+    // Use the freshly discovered helper's secret, not an older window's cached
+    // PID. If the target changed or rejects shutdown, do not signal it anyway.
+    await new BrowserGatewayHelperAdminClient({
+      helperUrl: restartTarget.url,
+      clientSharedSecret: restartTarget.clientSharedSecret,
+      log: options.log,
+    }).shutdown();
+    const deadline = Date.now() + HELPER_TERMINATION_TIMEOUT_MS;
+    while (true) {
+      const current = await readBrowserGatewayHelperDiscovery();
+      if (
+        current?.pid !== restartTarget.pid ||
+        current?.helperGenerationId !== restartTarget.helperGenerationId ||
+        !isPidLikelyAlive(restartTarget.pid)
+      )
+        break;
+      if (Date.now() >= deadline) throw new Error("helper_shutdown_timeout");
+      await sleep(100);
+    }
+  }
+
   // A helper is present but mismatched (protocol, version freshness, lanAccess,
   // or mDNS config). Before spawning, terminate it so the port is free.
-  const newerHelper = await terminateStaleHelper(
-    options.log,
-    options.helperVersion,
-  );
+  const newerHelper = restartTarget
+    ? null
+    : await terminateStaleHelper(options.log, options.helperVersion);
   if (newerHelper) {
     return {
       source: "existing",

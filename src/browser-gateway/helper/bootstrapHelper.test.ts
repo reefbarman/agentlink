@@ -20,6 +20,8 @@ import {
 
 import { BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION } from "../protocol.js";
 import { PROMPT_PROFILE_POLICY_REVISION } from "@agentlink/protocol/prompt-profile";
+import { createDeferred } from "../testing/SseFaultPeer.js";
+import { withBrowserGatewayHelperLock } from "./browserGatewayHelperLock.js";
 
 afterEach(async () => {
   await clearBrowserGatewayHelperDiscovery();
@@ -32,6 +34,19 @@ describe("browser gateway helper bootstrap", () => {
     ["1.17.103", "1.17.103", 0],
     ["1.18.0-beta.2", "1.18.0-beta.10", -1],
     ["1.18.0", "1.18.0-beta.10", 1],
+    [
+      "1.18.0+dev.1795317007456.ffffffff",
+      "1.18.0+dev.1795317007457.00000000",
+      -1,
+    ],
+    [
+      "1.18.0+dev.1795317007456.ffffffff",
+      "1.18.0+dev.1795317007456.00000000",
+      0,
+    ],
+    ["1.18.0+dev.1795317007456.ffffffff", "1.18.0", 1],
+    ["1.18.0+dev.1795317007456.ffffffff", "1.18.1", -1],
+    ["1.18.0+build.1", "1.18.0+build.2", 0],
     ["development", "1.18.0", null],
   ])("orders helper release %s against %s", (left, right, expected) => {
     expect(compareHelperReleaseVersions(left, right)).toBe(expected);
@@ -43,6 +58,20 @@ describe("browser gateway helper bootstrap", () => {
     ["1.22.8", "1.22.9", 0, ["browser_stream"], true],
     ["1.22.8", "1.22.9", 0, [], false],
     ["1.22.9", "1.22.9", 0, [], true],
+    [
+      "1.22.9+dev.1795317007456.11111111",
+      "1.22.9+dev.1795317007457.22222222",
+      0,
+      [],
+      false,
+    ],
+    [
+      "1.22.9+dev.1795317007456.11111111",
+      "1.22.9+dev.1795317007457.22222222",
+      1,
+      [],
+      true,
+    ],
     ["1.23.0", "1.22.9", 0, [], true],
     ["development", "1.22.9", 0, [], true],
   ])(
@@ -373,6 +402,169 @@ describe("browser gateway helper bootstrap", () => {
       expect.stringContaining("attaching to compatible helper"),
     );
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("reclaims a pre-boot lock even when its owner PID has been reused", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-helper-lock-"),
+    );
+    const discoveryPath = path.join(root, "discovery.json");
+    const lockPath = `${discoveryPath}.startup.lock`;
+    try {
+      await fs.mkdir(lockPath);
+      await fs.writeFile(path.join(lockPath, `${process.pid}-dead`), "");
+      const beforeBoot = new Date(Date.now() - os.uptime() * 1000 - 120_000);
+      await fs.utimes(lockPath, beforeBoot, beforeBoot);
+      await expect(
+        withBrowserGatewayHelperLock(
+          discoveryPath,
+          vi.fn(),
+          async () => "acquired",
+        ),
+      ).resolves.toBe("acquired");
+      expect(await fs.readdir(root)).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("hands a manual restart to the new build before an older window can start or restart it", async () => {
+    const olderVersion = "1.17.104+dev.1795317007456.11111111";
+    const newerVersion = "1.17.104+dev.1795317007457.22222222";
+    const { promise: shutdownRequested, resolve: markShutdownRequested } =
+      createDeferred<void>();
+    const { promise: allowShutdown, resolve: finishShutdown } =
+      createDeferred<void>();
+    const shutdown = vi.fn();
+    const server = http.createServer((req, res) => {
+      if (req.url === "/internal/shutdown") {
+        shutdown();
+        void (async () => {
+          await clearBrowserGatewayHelperDiscovery();
+          markShutdownRequested();
+          await allowShutdown;
+          res.end(JSON.stringify({ ok: true }));
+          server.close();
+        })();
+        return;
+      }
+      res.end(
+        JSON.stringify({
+          protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+          helperVersion: olderVersion,
+          activeClientLeases: 1,
+          promptProfilePolicyRevisions: [PROMPT_PROFILE_POLICY_REVISION],
+        }),
+      );
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const port = (server.address() as { port: number }).port;
+    const url = `http://127.0.0.1:${port}`;
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-helper-restart-"),
+    );
+    const discoveryPath = getBrowserGatewayHelperDiscoveryPath();
+    const initialDiscovery = {
+      pid: process.pid,
+      port,
+      url,
+      protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+      helperVersion: olderVersion,
+      startedAt: new Date().toISOString(),
+      lastHeartbeatAt: new Date().toISOString(),
+      browserBootstrapToken: "token",
+      clientSharedSecret: "secret",
+    };
+    const options = {
+      extensionRootPath: tempRoot,
+      browserGatewayPort: port,
+      log: vi.fn(),
+    };
+    let replacement:
+      | Awaited<ReturnType<typeof bootstrapBrowserGatewayHelper>>
+      | undefined;
+    try {
+      await writeBrowserGatewayHelperDiscovery(initialDiscovery);
+      await fs.mkdir(path.join(tempRoot, "dist"));
+      await fs.writeFile(
+        path.join(tempRoot, "dist", "browser-gateway-helper.js"),
+        `
+        const fs = require("node:fs");
+        const http = require("node:http");
+        const discovery = ${JSON.stringify(initialDiscovery)};
+        discovery.pid = process.pid;
+        discovery.helperVersion = process.argv.find((arg) => arg.startsWith("--helperVersion=")).split("=")[1];
+        http.createServer((_req, res) => res.end(JSON.stringify({
+          protocolVersion: discovery.protocolVersion,
+          helperVersion: discovery.helperVersion,
+          promptProfilePolicyRevisions: [${JSON.stringify(PROMPT_PROFILE_POLICY_REVISION)}],
+        }))).listen(discovery.port, "127.0.0.1", () => {
+          fs.writeFileSync(${JSON.stringify(`${discoveryPath}.fixture`)}, JSON.stringify(discovery));
+          fs.renameSync(${JSON.stringify(`${discoveryPath}.fixture`)}, ${JSON.stringify(discoveryPath)});
+        });
+      `,
+      );
+      const restart = bootstrapBrowserGatewayHelper({
+        ...options,
+        helperVersion: newerVersion,
+        restart: true,
+      });
+      await Promise.race([shutdownRequested, restart]);
+      const startupWaiting = createDeferred<void>();
+      const restartWaiting = createDeferred<void>();
+      const olderStartup = bootstrapBrowserGatewayHelper({
+        ...options,
+        extensionRootPath: path.join(tempRoot, "old-window"),
+        helperVersion: olderVersion,
+        log(message) {
+          if (message.includes("waiting for another window"))
+            startupWaiting.resolve();
+        },
+      });
+      const olderRestart = expect(
+        bootstrapBrowserGatewayHelper({
+          ...options,
+          helperVersion: olderVersion,
+          restart: true,
+          log(message) {
+            if (message.includes("waiting for another window"))
+              restartWaiting.resolve();
+          },
+        }),
+      ).rejects.toThrow(
+        `helper_restart_would_downgrade:${newerVersion}:${olderVersion}`,
+      );
+      await Promise.race([
+        Promise.all([startupWaiting.promise, restartWaiting.promise]),
+        olderStartup,
+        olderRestart,
+        restart,
+      ]);
+      finishShutdown();
+      replacement = await restart;
+      expect(replacement.source).toBe("spawned");
+      expect(replacement.discovery.helperVersion).toBe(newerVersion);
+      await expect(olderStartup).resolves.toEqual({
+        source: "existing",
+        discovery: replacement.discovery,
+      });
+      await olderRestart;
+      expect(shutdown).toHaveBeenCalledTimes(1);
+    } finally {
+      finishShutdown();
+      server.closeAllConnections();
+      server.close();
+      if (replacement?.child && replacement.child.exitCode === null) {
+        const exited = new Promise<void>((resolve) =>
+          replacement?.child?.once("exit", () => resolve()),
+        );
+        replacement.child.kill();
+        await exited;
+      }
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("attaches without replacing a compatible helper when LAN preferences differ", async () => {

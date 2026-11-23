@@ -7,7 +7,7 @@ import { randomUUID } from "crypto";
 
 import { StatusBarManager } from "./util/StatusBarManager.js";
 import { canonicalizePath, isPathWithinRoot } from "./util/paths.js";
-import { sleep } from "./util/sleep.js";
+
 import {
   disposeTerminalManager,
   initializeTerminalManager,
@@ -177,7 +177,7 @@ import {
   compareHelperReleaseVersions,
   resolveHealthyDiscoveredHelper,
 } from "./browser-gateway/helper/bootstrapHelper.js";
-import { readBrowserGatewayHelperDiscovery } from "./browser-gateway/browserGatewayHelperDiscovery.js";
+
 import { BrowserGatewayHelperAdminClient } from "./browser-gateway/helper/BrowserGatewayHelperAdminClient.js";
 import { BrowserGatewayHelperLeaseClient } from "./browser-gateway/helper/BrowserGatewayHelperLeaseClient.js";
 import { BrowserGatewayHelperModelAuthLeaseClient } from "./browser-gateway/helper/BrowserGatewayHelperModelAuthLeaseClient.js";
@@ -2776,6 +2776,10 @@ export async function activate(
 
   const formatBrowserGatewayHelperError = (err: unknown): string => {
     const message = err instanceof Error ? err.message : String(err);
+    if (message.startsWith("helper_restart_would_downgrade:")) {
+      const [, runningVersion, windowVersion] = message.split(":");
+      return `Browser Gateway ${runningVersion} is newer than this window's AgentLink ${windowVersion}. Reload this window or restart the gateway from a newer window.`;
+    }
     if (message === "helper_start_timeout") {
       return "AgentLink browser gateway helper did not become ready in time.";
     }
@@ -2853,9 +2857,13 @@ export async function activate(
     return await browserGatewayBridgeStartPromise;
   };
 
-  const ensureBrowserGatewayHelperReady = async (): Promise<string> => {
+  const ensureBrowserGatewayHelperReady = async (
+    restart = false,
+  ): Promise<string> => {
     if (browserGatewayHelperBootstrapPromise) {
-      return await browserGatewayHelperBootstrapPromise;
+      if (!restart) return await browserGatewayHelperBootstrapPromise;
+      await browserGatewayHelperBootstrapPromise.catch(() => undefined);
+      return await ensureBrowserGatewayHelperReady(true);
     }
     if (browserGatewayActivationDisposed) {
       throw new Error("browser_gateway_activation_disposed");
@@ -2867,6 +2875,7 @@ export async function activate(
         extensionRootPath: context.extensionUri.fsPath,
         browserGatewayPort,
         helperVersion,
+        restart,
         lanAccess: desired.lanAccess,
         mdnsName: desired.mdnsName,
         secureLanAccess: desired.secureLanAccess,
@@ -3021,7 +3030,7 @@ export async function activate(
     })()
       .catch((err) => {
         if (!browserGatewayActivationDisposed) {
-          browserGatewayHelperDiscovery = null;
+          if (!restart) browserGatewayHelperDiscovery = null;
           log(`[browser-gateway-helper] bootstrap failed: ${err}`);
         }
         throw err;
@@ -3080,94 +3089,18 @@ export async function activate(
     return await browserGatewayRuntimeEnsurePromise;
   };
 
-  const waitForBrowserGatewayHelperShutdown = async (
-    helperUrl: string,
-    pid: number,
-  ): Promise<void> => {
-    const deadline = Date.now() + 5_000;
-    while (Date.now() < deadline) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 250);
-      try {
-        const response = await fetch(`${helperUrl}/health`, {
-          signal: controller.signal,
-        });
-        clearTimeout(timer);
-        if (!response.ok) return;
-      } catch {
-        clearTimeout(timer);
-        return;
-      }
-
-      try {
-        process.kill(pid, 0);
-      } catch {
-        return;
-      }
-
-      await sleep(100);
-    }
-
-    throw new Error("helper_shutdown_timeout");
-  };
-
   const forceRestartBrowserGateway = async (): Promise<void> => {
-    const previousDiscovery =
-      browserGatewayHelperDiscovery ??
-      (await readBrowserGatewayHelperDiscovery().catch(() => null));
-    log(
-      `[browser-gateway] force restart requested previousPid=${previousDiscovery?.pid ?? "none"} previousUrl=${previousDiscovery?.url ?? "none"}`,
-    );
-
+    if (browserGatewayRestartInProgress) {
+      throw new Error(
+        "Browser Gateway restart is already in progress in this window.",
+      );
+    }
     browserGatewayRestartInProgress = true;
     try {
-      await stopBrowserGatewayOwnerRuntime();
-      const previousLeaseClient = browserGatewayHelperLeaseClient;
-      browserGatewayHelperLeaseClient = null;
-      if (previousLeaseClient) {
-        await previousLeaseClient.stop();
-      }
-
-      if (previousDiscovery) {
-        const adminClient =
-          browserGatewayHelperAdminClient ??
-          new BrowserGatewayHelperAdminClient({
-            helperUrl: previousDiscovery.url,
-            clientSharedSecret: previousDiscovery.clientSharedSecret,
-            log,
-          });
-        try {
-          await adminClient.shutdown();
-          await waitForBrowserGatewayHelperShutdown(
-            previousDiscovery.url,
-            previousDiscovery.pid,
-          );
-        } catch (err) {
-          log(
-            `[browser-gateway] helper admin shutdown failed; falling back to SIGTERM: ${String(err)}`,
-          );
-          try {
-            process.kill(previousDiscovery.pid, "SIGTERM");
-          } catch (killErr) {
-            log(`[browser-gateway] helper SIGTERM failed: ${String(killErr)}`);
-          }
-          await waitForBrowserGatewayHelperShutdown(
-            previousDiscovery.url,
-            previousDiscovery.pid,
-          );
-        }
-      }
-
-      browserGatewayHelperDiscovery = null;
-
-      if (browserGatewayServer?.getUrl()) {
-        await browserGatewayServer.stop();
-      }
-
-      browserGatewayRuntimeEnsurePromise = null;
-      browserGatewayHelperBootstrapPromise = null;
-      browserGatewayBridgeStartPromise = null;
-
+      await browserGatewayRuntimeEnsurePromise?.catch(() => undefined);
+      await ensureBrowserGatewayBridgeReady();
+      log(`[browser-gateway] force restart requested version=${helperVersion}`);
+      await ensureBrowserGatewayHelperReady(true);
       await ensureBrowserGatewayRuntimeReady();
     } finally {
       browserGatewayRestartInProgress = false;

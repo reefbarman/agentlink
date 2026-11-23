@@ -80,10 +80,15 @@ export class BrowserGatewayHelperAdminClient {
     return await this.postJson<BrowserGatewayShutdownResponse>(
       "/internal/shutdown",
       "{}",
+      AbortSignal.timeout(5_000),
     );
   }
 
-  private async postJson<T>(pathname: string, body: string): Promise<T> {
+  private async postJson<T>(
+    pathname: string,
+    body: string,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const response = await fetch(`${this.options.helperUrl}${pathname}`, {
       method: "POST",
       headers: {
@@ -91,6 +96,7 @@ export class BrowserGatewayHelperAdminClient {
         Authorization: `Bearer ${this.options.clientSharedSecret}`,
       },
       body,
+      signal,
     });
     return await this.parseResponse<T>(response, pathname);
   }

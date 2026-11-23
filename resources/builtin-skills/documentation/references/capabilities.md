@@ -191,6 +191,8 @@ Read-only execution recognizes conservative local Git inspection commands includ
 
 ## Browser remote control
 
+VS Code windows share a browser gateway helper. A newer local `+dev` build can replace an idle helper from the same release version, but an active older helper is kept running to avoid interrupting browser work. **AgentLink: Restart Browser Gateway** from a window with the current build can replace it explicitly. An older window that has this safeguard refuses to restart a newer helper. Reload windows still running an extension built before this safeguard, then refresh the browser tab after restarting the helper.
+
 Browser Ask Agent treats the absence of an update service as an empty update status, without repeated console 404 errors. Ordinary authenticated product-update polling returns `204 No Content` while no owner is available; explicitly targeted owners/generations and manual checks still report missing targets as errors.
 
 Live browser updates recover automatically when a reconnect or tab switch outlasts the gateway's retained event history. The gateway requests a fresh session snapshot instead of repeatedly replaying an old snapshot with missing updates; transcript content, questions, and tab status resume on the existing subscription. If the browser receives an update it cannot apply, it discards its cached copy of that VS Code window and rebuilds from a fresh snapshot rather than staying behind VS Code; a repeat within 30 seconds, or no snapshot arriving within a few seconds, asks VS Code itself to rebuild one.
