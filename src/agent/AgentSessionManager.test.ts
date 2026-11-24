@@ -2873,6 +2873,32 @@ describe("AgentSessionManager host injection", () => {
     expect(store.save).not.toHaveBeenCalled();
   });
 
+  it("skips shutdown saves while persistence is suspended for a history migration", async () => {
+    const store = {
+      save: vi.fn(),
+      list: vi.fn(() => []),
+    };
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store as any,
+    );
+    const session = await mgr.createForegroundSession("code");
+    (session as unknown as { messageCount: number }).messageCount = 1;
+
+    mgr.setPersistenceSuspended(true);
+    mgr.saveAllSessions();
+    await flushPromises();
+    expect(store.save).not.toHaveBeenCalled();
+
+    mgr.setPersistenceSuspended(false);
+    mgr.saveAllSessions();
+    await flushPromises();
+    expect(store.save).toHaveBeenCalled();
+  });
+
   it("uses injected host dependencies when creating foreground sessions", async () => {
     const providers = new ProviderRegistry();
     const createSession = vi.fn(

@@ -892,6 +892,7 @@ export class AgentSessionManager {
   >();
   private devMode: boolean;
   private persistence?: SessionStore;
+  private persistenceSuspended = false;
   private readonly sessionHydrations = new Map<
     string,
     Promise<AgentSession | null>
@@ -6210,7 +6211,17 @@ export class AgentSessionManager {
     }
   }
 
+  /**
+   * Stops session saves while history on disk is rewritten underneath this
+   * manager (for example a folder-rename migration followed by a reload), so
+   * in-memory sessions cannot write stale project records back on shutdown.
+   */
+  setPersistenceSuspended(suspended: boolean): void {
+    this.persistenceSuspended = suspended;
+  }
+
   saveSession(id: string, opts?: { durability?: PersistDurability }): void {
+    if (this.persistenceSuspended) return;
     if (!this.persistence || !this.sessions.has(id)) return;
 
     if (typeof this.persistence.saveSession !== "function") {

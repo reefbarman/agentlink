@@ -275,6 +275,10 @@
         "title": "AgentLink: Show Workspace History"
       },
       {
+        "command": "agentlink.migrateSessionHistory",
+        "title": "AgentLink: Migrate Session History from a Previous Folder"
+      },
+      {
         "command": "agentlink.manageAgentPlugins",
         "title": "AgentLink: Manage Agent Plugins"
       },

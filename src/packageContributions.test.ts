@@ -161,6 +161,9 @@ describe("extension package contributions", () => {
     expect(commands.get("agentlink.showWorkspaceHistory")).toBe(
       "AgentLink: Show Workspace History",
     );
+    expect(commands.get("agentlink.migrateSessionHistory")).toBe(
+      "AgentLink: Migrate Session History from a Previous Folder",
+    );
   });
 
   it("defaults every built-in chat mode to flagship GPT-5.6 Sol", () => {

@@ -393,6 +393,17 @@ function resolveV2HistoryDirectory(
   );
 }
 
+/**
+ * Reads the active v2 lineage directory for a workspace identity anchored at
+ * `rootPath`, or undefined when no valid manifest/lineage exists there.
+ */
+export function readV2HistoryDirectory(
+  rootPath: string,
+  workspaceIdentity: string,
+): { directory: string; lineage: string } | undefined {
+  return defaultResolveV2HistoryDirectory(rootPath, workspaceIdentity);
+}
+
 function defaultResolveV2HistoryDirectory(
   rootPath: string,
   workspaceIdentity: string,

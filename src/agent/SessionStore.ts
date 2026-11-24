@@ -237,6 +237,8 @@ const AGENTLINK_GITIGNORE_ENTRIES = [
   "transcripts/",
   "debug/",
   "checkpoints/",
+  "backups/",
+  "location.json",
 ] as const;
 
 /**

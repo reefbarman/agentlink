@@ -202,6 +202,7 @@ import {
   type WorkspaceSessionLocation,
 } from "./agent/workspaceSessionIdentity.js";
 import { WorkspaceContinuityCatalog } from "./agent/workspaceContinuityCatalog.js";
+import { registerProjectHistoryRelocation } from "./agent/projectHistoryRelocationFlow.js";
 import {
   classifyWorkspaceHistoryTransition,
   hasPersistedWorkspaceHistory,
@@ -2425,6 +2426,16 @@ export async function activate(
       workspaceSessionLocation,
     );
   }
+  registerProjectHistoryRelocation({
+    context,
+    currentHistoryDirectory: workspaceSessionLocation.historyDirectory,
+    listProjects: () => projectCatalog.listProjects(),
+    flushForWorkspaceTransition: () =>
+      agentSessionManager.flushForWorkspaceTransition(),
+    setPersistenceSuspended: (suspended) =>
+      agentSessionManager.setPersistenceSuspended(suspended),
+    log,
+  });
 
   const syncForegroundChatTab = createForegroundChatTabSync({
     getForegroundSessionId: () =>

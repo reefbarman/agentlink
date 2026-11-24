@@ -50,6 +50,7 @@ This bundled reference is generated from the extension's `package.json` during b
 | `agentlink.manageAgentPlugins`             | AgentLink: Manage Agent Plugins                            |
 | `agentlink.manageIndexStorage`             | AgentLink: Manage Index Storage                            |
 | `agentlink.managePairedDevices`            | AgentLink: Manage Paired Browser Devices                   |
+| `agentlink.migrateSessionHistory`          | AgentLink: Migrate Session History from a Previous Folder  |
 | `agentlink.openBrowserGateway`             | AgentLink: Open Browser Gateway                            |
 | `agentlink.openTerminal`                   | AgentLink: Open Terminal                                   |
 | `agentlink.pairBrowserDevice`              | AgentLink: Pair Browser Device                             |

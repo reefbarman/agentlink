@@ -130,6 +130,16 @@ For other workspaces, run **AgentLink: Manage Index Storage** from the Command P
 - Close all other VS Code and AgentLink windows before either action, then confirm in the dialog. The current workspace and stores with live writer processes are blocked. This local maintenance command is not available through browser remote.
 - Normal indexing maintains existing search indexes rather than replacing every index after each change. Automatic pruning still retains recent versions for concurrent readers. Do not manually remove files inside a LanceDB table by age.
 
+## Chat history is missing or cannot be resumed after renaming or moving a project folder
+
+Saved sessions record their project by its exact folder path, so after a rename (for example `iPlayGFN` to `iPlayNow`) old sessions either disappear from the list or cannot be resumed in the new folder.
+
+- AgentLink records each folder's location in `.agentlink/location.json`. When you open a renamed or moved folder whose previous location no longer exists, it offers **Migrate history** once. Choose **Don't ask again** to stop the offer for that pair of folders.
+- Run **AgentLink: Migrate Session History from a Previous Folder** at any time. It lists previous locations found in the location file, in saved sessions, and in workspace history manifests, or you can enter the old path yourself.
+- Migration flushes active sessions, copies the history to `.agentlink/backups/history-migration-<time>/` first, updates each session's project record (and moves workspace-keyed history under `.agentlink/workspaces/` when needed), verifies the result, then reloads the window. If verification fails, the original history is restored from the backup.
+- Paths mentioned inside old transcripts are not rewritten; they remain a record of what happened.
+- Migration is refused when the folder already has its own separate history, or while sessions are still running.
+
 ## The extension host keeps crashing out of memory
 
 Image-heavy chats, including background agents, can retain large image histories even when their previews are collapsed. Collapsing a preview does not remove images from the model's context. AgentLink avoids duplicate full-history Codex translation, rejects oversized WebSocket continuation snapshots before serializing their image data, and measures tool-result characters without allocating a per-character array. These reduce memory spikes without deleting saved images or removing model-visible history, but do not impose a total image-history memory limit. If crashes persist, stop the image-heavy chats and start a fresh chat with only the images needed for the next task.
