@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.59.1 — 2026-11-24
+
+- Auto-approved edits to an already open, quiet document no longer wait for the diagnostic delay, and local tool telemetry now records per-step edit timings reported by telemetry:tools.
+
 ## 0.59.0 — 2026-11-23
 
 - Read-only sessions can now run tsc/tsgo --noEmit --incremental false type checks, background and read-only research agents get workspace session-history tools, and git rm --dry-run is treated as a Git metadata writer.

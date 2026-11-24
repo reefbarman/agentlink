@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "c13c329e94342dbd7d5febc9bb40fa90dc5a290f",
-  "createdAt": "2026-11-24T01:33:08.094Z",
+  "sourceSha": "a6b7def36630063d4c56288a062fb19c4f795066",
+  "createdAt": "2026-11-24T02:30:24.700Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,73 +10,73 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.104.0",
-      "baselineRef": "v1.104.0",
-      "reserved": "1.104.0",
-      "commits": ["c13c329e94342dbd7d5febc9bb40fa90dc5a290f"],
+      "published": "1.105.0",
+      "baselineRef": "v1.105.0",
+      "reserved": "1.105.0",
+      "commits": ["a6b7def36630063d4c56288a062fb19c4f795066"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.105.0",
-      "effectiveBump": "minor",
+      "version": "1.105.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.105.0",
+      "tag": "v1.105.1",
       "notes": [
         {
-          "sha": "c13c329e94342dbd7d5febc9bb40fa90dc5a290f",
-          "subject": "feat(history): migrate session history after a project folder is renamed or moved",
-          "summary": "The VS Code extension now offers to migrate session history after a project folder is renamed or moved, via a startup prompt or the new 'AgentLink: Migrate Session History from a Previous Folder' command, with backup and verification.\"}]}",
+          "sha": "a6b7def36630063d4c56288a062fb19c4f795066",
+          "subject": "perf(edits): skip settled diagnostics wait and record auto-approved edit step timings",
+          "summary": "Auto-approved edits to an already open, quiet document no longer wait for the diagnostic delay, and local tool telemetry now records per-step edit timings reported by telemetry:tools.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.104.0",
-      "baselineRef": "desktop-v0.104.0",
-      "reserved": "0.104.0",
-      "commits": ["c13c329e94342dbd7d5febc9bb40fa90dc5a290f"],
+      "published": "0.105.0",
+      "baselineRef": "desktop-v0.105.0",
+      "reserved": "0.105.0",
+      "commits": ["a6b7def36630063d4c56288a062fb19c4f795066"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.105.0",
-      "effectiveBump": "minor",
+      "version": "0.105.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.105.0",
+      "tag": "desktop-v0.105.1",
       "notes": [
         {
-          "sha": "c13c329e94342dbd7d5febc9bb40fa90dc5a290f",
-          "subject": "feat(history): migrate session history after a project folder is renamed or moved",
-          "summary": "The VS Code extension now offers to migrate session history after a project folder is renamed or moved, via a startup prompt or the new 'AgentLink: Migrate Session History from a Previous Folder' command, with backup and verification.\"}]}",
+          "sha": "a6b7def36630063d4c56288a062fb19c4f795066",
+          "subject": "perf(edits): skip settled diagnostics wait and record auto-approved edit step timings",
+          "summary": "Auto-approved edits to an already open, quiet document no longer wait for the diagnostic delay, and local tool telemetry now records per-step edit timings reported by telemetry:tools.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.73.0",
-      "baselineRef": "cli-v0.73.0",
-      "reserved": "0.73.0",
-      "commits": ["c13c329e94342dbd7d5febc9bb40fa90dc5a290f"],
+      "published": "0.74.0",
+      "baselineRef": "cli-v0.74.0",
+      "reserved": "0.74.0",
+      "commits": ["a6b7def36630063d4c56288a062fb19c4f795066"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.74.0",
-      "effectiveBump": "minor",
+      "version": "0.74.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.74.0",
+      "tag": "cli-v0.74.1",
       "notes": [
         {
-          "sha": "c13c329e94342dbd7d5febc9bb40fa90dc5a290f",
-          "subject": "feat(history): migrate session history after a project folder is renamed or moved",
-          "summary": "The VS Code extension now offers to migrate session history after a project folder is renamed or moved, via a startup prompt or the new 'AgentLink: Migrate Session History from a Previous Folder' command, with backup and verification.\"}]}",
+          "sha": "a6b7def36630063d4c56288a062fb19c4f795066",
+          "subject": "perf(edits): skip settled diagnostics wait and record auto-approved edit step timings",
+          "summary": "Auto-approved edits to an already open, quiet document no longer wait for the diagnostic delay, and local tool telemetry now records per-step edit timings reported by telemetry:tools.",
           "breaking": false
         }
       ]
@@ -85,34 +85,46 @@
       "published": "0.59.0",
       "baselineRef": "sdk-v0.59.0",
       "reserved": "0.59.0",
-      "commits": [],
+      "commits": ["a6b7def36630063d4c56288a062fb19c4f795066"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "assistant": {
-      "published": "0.74.0",
-      "baselineRef": "assistant-v0.74.0",
-      "reserved": "0.74.0",
-      "commits": ["c13c329e94342dbd7d5febc9bb40fa90dc5a290f"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.75.0",
-      "effectiveBump": "minor",
+      "version": "0.59.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.75.0",
+      "tag": "sdk-v0.59.1",
       "notes": [
         {
-          "sha": "c13c329e94342dbd7d5febc9bb40fa90dc5a290f",
-          "subject": "feat(history): migrate session history after a project folder is renamed or moved",
-          "summary": "The VS Code extension now offers to migrate session history after a project folder is renamed or moved, via a startup prompt or the new 'AgentLink: Migrate Session History from a Previous Folder' command, with backup and verification.\"}]}",
+          "sha": "a6b7def36630063d4c56288a062fb19c4f795066",
+          "subject": "perf(edits): skip settled diagnostics wait and record auto-approved edit step timings",
+          "summary": "Auto-approved edits to an already open, quiet document no longer wait for the diagnostic delay, and local tool telemetry now records per-step edit timings reported by telemetry:tools.",
+          "breaking": false
+        }
+      ]
+    },
+    "assistant": {
+      "published": "0.75.0",
+      "baselineRef": "assistant-v0.75.0",
+      "reserved": "0.75.0",
+      "commits": ["a6b7def36630063d4c56288a062fb19c4f795066"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "patch",
+      "status": "release",
+      "version": "0.75.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.75.1",
+      "notes": [
+        {
+          "sha": "a6b7def36630063d4c56288a062fb19c4f795066",
+          "subject": "perf(edits): skip settled diagnostics wait and record auto-approved edit step timings",
+          "summary": "Auto-approved edits to an already open, quiet document no longer wait for the diagnostic delay, and local tool telemetry now records per-step edit timings reported by telemetry:tools.",
           "breaking": false
         }
       ]
@@ -123,6 +135,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "The VS Code extension now offers to migrate session history after a project folder is renamed or moved, via a startup prompt or the new 'AgentLink: Migrate Session History from a Previous Folder' command, with backup and verification.\"}]}",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a6b7def36630063d4c56288a062fb19c4f795066": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Auto-approved edits to an already open, quiet document no longer wait for the diagnostic delay, and local tool telemetry now records per-step edit timings reported by telemetry:tools.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

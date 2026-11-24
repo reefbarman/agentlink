@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.105.1
+
 - Auto-approved `apply_diff` and `write_file` edits to a file that is already open and quiet no longer wait for VS Code's error list to settle before writing. That wait used to add between 0.3 and 1.5 seconds to every such edit. Back-to-back edits to the same file are also less likely to fail with "Edit document changed while preparing diagnostics".
 - `npm run telemetry:tools` now shows how long each step of an auto-approved edit takes (lock wait, prepare, pre-edit diagnostics, editor catch-up, save, post-edit diagnostics) and which step was slowest, so delay tuning can be based on measurements. Timings are recorded only in local telemetry and are never shown to the model.
 
