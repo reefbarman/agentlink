@@ -383,6 +383,47 @@ describe("createVscodeEditReviewProvider", () => {
     },
   );
 
+  it("continues when the buffer reloads to the disk baseline during diagnostic preparation", async () => {
+    const tempDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
+    );
+    const filePath = path.join(tempDir, "file.ts");
+    fs.writeFileSync(filePath, "old", "utf-8");
+    // VS Code's copy still lags a previous back-to-back write, then reloads.
+    let buffer = "previous";
+    const doc = {
+      version: 1,
+      getText: () => buffer,
+      positionAt: (offset: number) => ({ line: 0, character: offset }),
+      uri: { scheme: "file", fsPath: filePath },
+      isDirty: false,
+      save: vi.fn(async () => true),
+    };
+    openTextDocument.mockResolvedValue(doc);
+    settleBaseline.mockImplementationOnce(async () => {
+      buffer = "old";
+      doc.version++;
+    });
+    try {
+      const result = await createVscodeEditReviewProvider().reviewAndApply({
+        mode: "auto",
+        absolutePath: filePath,
+        relativePath: "file.ts",
+        content: "proposal",
+        outsideWorkspace: false,
+        diagnosticDelay: 0,
+        sessionId: "diagnostic-preparation-reload",
+      });
+      expect(result).not.toMatchObject({
+        error: "Edit document changed while preparing diagnostics",
+      });
+      expect(settleBaseline).toHaveBeenCalledOnce();
+      expect(applyEdit).toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns actionable recovery diagnostics when auto-save returns false", async () => {
     const tempDir = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),

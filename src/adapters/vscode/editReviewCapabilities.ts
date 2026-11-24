@@ -514,7 +514,17 @@ async function commitAutoApprovedEdit(args: {
       reuseSettledOpenDocument: true,
     }),
   );
-  if (documentChangedSince(doc, params.absolutePath, documentState)) {
+  // A clean buffer that now holds exactly the baseline the edit was composed
+  // against is a late reload of the previous write (for example VS Code
+  // catching up after a back-to-back edit), not a concurrent user change.
+  const settledOnBaseline =
+    documentMatchesTarget(doc, params.absolutePath) &&
+    !doc.isDirty &&
+    normalizeEditorText(doc.getText()) === normalizeEditorText(baselineContent);
+  if (
+    !settledOnBaseline &&
+    documentChangedSince(doc, params.absolutePath, documentState)
+  ) {
     return {
       kind: "aborted",
       result: {

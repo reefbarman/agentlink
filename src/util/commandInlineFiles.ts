@@ -72,8 +72,23 @@ function scanInlineFileTokens(command: string): InlineFileTokenOccurrence[] {
     command,
     INLINE_FILE_TOKEN_PREFIX,
   );
-  if (scan.occurrences.length > 0 && scan.unsupportedSyntax.length > 0) {
-    const kinds = [...new Set(scan.unsupportedSyntax.map(({ kind }) => kind))];
+  // A simple unbraced `$name` expansion (for example a loop counter) is a
+  // self-contained word fragment: it cannot contain an inline file token or
+  // change the quoting context around one, so it does not block inline files.
+  // Braced expansions and substitutions still do, because they can nest tokens.
+  const blockingSyntax = scan.unsupportedSyntax.filter(
+    (syntax) =>
+      !(
+        syntax.kind === "parameter-expansion" &&
+        !command.startsWith("${", syntax.start) &&
+        scan.occurrences.every(
+          (occurrence) =>
+            syntax.end <= occurrence.start || syntax.start >= occurrence.end,
+        )
+      ),
+  );
+  if (scan.occurrences.length > 0 && blockingSyntax.length > 0) {
+    const kinds = [...new Set(blockingSyntax.map(({ kind }) => kind))];
     throw new InlineCommandFileError(
       "unsupported_context",
       `Inline command files do not support ${kinds.join(", ")} in the same command. Use a simpler direct command.`,

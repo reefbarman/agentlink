@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- An auto-approved edit no longer fails with "Edit document changed while preparing diagnostics" when VS Code reloads the file to the exact content the edit was based on during that wait (for example right after a previous edit to the same file). Real unsaved or concurrent changes still stop the edit.
+- `execute_command` inline `files` now work alongside simple shell variables such as a loop counter (`$i`) or `$HOME`. Previously any `$name` anywhere in the command rejected the inline file. Braced expansions, substitutions, heredocs, and expansions touching the `$AL_FILE(name)` token are still rejected.
+
 ## 1.105.1
 
 - Auto-approved `apply_diff` and `write_file` edits to a file that is already open and quiet no longer wait for VS Code's error list to settle before writing. That wait used to add between 0.3 and 1.5 seconds to every such edit. Back-to-back edits to the same file are also less likely to fail with "Edit document changed while preparing diagnostics".

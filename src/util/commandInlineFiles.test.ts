@@ -194,7 +194,7 @@ describe("commandInlineFiles", () => {
     ["command substitution", "echo $(cat $AL_FILE(body))"],
     ["backtick substitution", "echo `cat $AL_FILE(body)`"],
     ["parameter expansion", "echo ${value:-$AL_FILE(body)}"],
-    ["plain parameter expansion", "echo $value $AL_FILE(body)"],
+    ["overlapping plain parameter expansion", "echo $$AL_FILE(body)"],
     ["arithmetic expansion", "echo $((1 + $AL_FILE(body)))"],
     ["legacy arithmetic expansion", "echo $[1 + 1] $AL_FILE(body)"],
     ["process substitution", "diff <(cat $AL_FILE(body)) expected"],
@@ -208,6 +208,19 @@ describe("commandInlineFiles", () => {
         validateInlineCommandFiles(command, [{ name: "body", content: "x" }]),
       "unsupported_context",
     );
+  });
+
+  it.each([
+    ["plain parameter expansion", "echo $value $AL_FILE(body)"],
+    [
+      "loop counter",
+      'for i in 1 2; do git commit -F $AL_FILE(body) && echo "try $i"; done',
+    ],
+    ["adjacent plain expansion", 'cat "$AL_FILE(body)" "$HOME/x" $?'],
+  ])("allows an unrelated %s alongside a token", (_label, command) => {
+    expect(() =>
+      validateInlineCommandFiles(command, [{ name: "body", content: "x" }]),
+    ).not.toThrow();
   });
 
   it("enforces the total byte cap", () => {
