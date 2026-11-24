@@ -126,6 +126,26 @@ export interface EditReviewParams {
   operation?: EditReviewResult["operation"];
 }
 
+/**
+ * Host-only wall-clock milliseconds spent in each step of an auto-approved
+ * edit. Used for local telemetry and never returned to the model.
+ */
+export interface EditCommitTiming {
+  /** Waiting for the per-file edit lock. */
+  lockWaitMs: number;
+  /** Reading the baseline and opening the document. */
+  prepareMs: number;
+  /** Waiting for the pre-edit diagnostics baseline to settle. */
+  baselineDiagnosticsMs: number;
+  /** Waiting for a clean editor copy to catch up with disk. */
+  editorSyncMs: number;
+  /** Applying and saving (or writing) the edit, including verification. */
+  commitMs: number;
+  /** Waiting for post-edit diagnostics to settle. */
+  newDiagnosticsMs: number;
+  totalMs: number;
+}
+
 export interface EditReviewResult {
   status?: "accepted" | "rejected" | "rejected_by_user" | "error";
   path?: string;
@@ -184,6 +204,8 @@ export interface EditReviewResult {
   /** Compare-and-swap evidence when a caller-supplied baseline hash is stale. */
   expected_content_hash?: string;
   current_content_hash?: string;
+  /** Host-only step timings; stripped from the public response. */
+  timing?: EditCommitTiming;
 }
 
 export interface EditReviewProvider {

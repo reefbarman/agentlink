@@ -1,4 +1,7 @@
-import type { EditReviewResult } from "../core/capabilities/editReview.js";
+import type {
+  EditCommitTiming,
+  EditReviewResult,
+} from "../core/capabilities/editReview.js";
 import type { EditDurabilityEvidence } from "../core/editDurability.js";
 import {
   errorResult,
@@ -105,7 +108,59 @@ export function publicEditReviewResponse(
     decision: _decision,
     writeApprovalResponse: _writeApprovalResponse,
     error: _error,
+    timing: _timing,
     ...response
   } = result;
   return response;
+}
+
+const EDIT_TIMING_STEPS = [
+  ["lockWaitMs", "editLockWaitMs", "lock_wait"],
+  ["prepareMs", "editPrepareMs", "prepare"],
+  [
+    "baselineDiagnosticsMs",
+    "editBaselineDiagnosticsMs",
+    "baseline_diagnostics",
+  ],
+  ["editorSyncMs", "editEditorSyncMs", "editor_sync"],
+  ["commitMs", "editCommitMs", "commit"],
+  ["newDiagnosticsMs", "editNewDiagnosticsMs", "new_diagnostics"],
+] as const satisfies readonly (readonly [
+  keyof EditCommitTiming,
+  string,
+  string,
+])[];
+
+/** Bounded telemetry metrics for an auto-approved edit's step timings. */
+export function editTimingMetrics(
+  timing: EditCommitTiming | undefined,
+): Record<string, number | string> | undefined {
+  if (!timing) return undefined;
+  const metrics: Record<string, number | string> = { editTimingSamples: 1 };
+  let slowest: string = "none";
+  let slowestMs = 0;
+  for (const [field, metric, step] of EDIT_TIMING_STEPS) {
+    const ms = Math.max(0, Math.round(timing[field]));
+    metrics[metric] = ms;
+    if (ms > slowestMs) {
+      slowestMs = ms;
+      slowest = step;
+    }
+  }
+  metrics.editTotalMs = Math.max(0, Math.round(timing.totalMs));
+  metrics.editSlowestStep = slowest;
+  return metrics;
+}
+
+/** Attach host-only edit timing telemetry without changing visible content. */
+export function withEditTimingTelemetry(
+  toolResult: ToolResult,
+  timing: EditCommitTiming | undefined,
+): ToolResult {
+  const metrics = editTimingMetrics(timing);
+  if (!metrics) return toolResult;
+  return {
+    ...toolResult,
+    telemetryMetrics: { ...toolResult.telemetryMetrics, ...metrics },
+  };
 }

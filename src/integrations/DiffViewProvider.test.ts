@@ -597,6 +597,63 @@ describe("snapshotDiagnostics", () => {
     };
   }
 
+  it("reuses a quiet, already open document's diagnostics without waiting", async () => {
+    vi.useFakeTimers();
+    const target = undiagnosedTarget();
+    target.cache([{ line: 1, message: "pre-existing error" }]);
+    let settled = false;
+    const settling = target.snapshot
+      .settleBaseline(500, { reuseSettledOpenDocument: true })
+      .then(() => {
+        settled = true;
+      });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
+    await settling;
+    target.snapshot.beginPostChangeObservation();
+    target.setText("after\nuntouched");
+    target.diagnose([
+      { line: 0, message: "genuine new error" },
+      { line: 1, message: "pre-existing error" },
+    ]);
+    const collecting = target.snapshot.collectNewErrors(500);
+    await vi.advanceTimersByTimeAsync(500);
+    const result = await collecting;
+    expect(result).toContain("genuine new error");
+    expect(result).not.toContain("pre-existing error");
+  });
+
+  it.each([
+    [
+      "a diagnostics event arrived",
+      (target: ReturnType<typeof undiagnosedTarget>) =>
+        target.diagnose([{ line: 0, message: "in flight" }]),
+    ],
+    [
+      "the document changed",
+      (target: ReturnType<typeof undiagnosedTarget>) => target.setVersion(2),
+    ],
+  ])(
+    "still waits for the baseline to settle when %s since the snapshot",
+    async (_label, disturb) => {
+      vi.useFakeTimers();
+      const target = undiagnosedTarget();
+      disturb(target);
+      let settled = false;
+      const settling = target.snapshot
+        .settleBaseline(500, { reuseSettledOpenDocument: true })
+        .then(() => {
+          settled = true;
+        });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(500);
+      await settling;
+      expect(settled).toBe(true);
+      target.snapshot.dispose();
+    },
+  );
+
   it("captures delayed pre-edit diagnostics before replacing a newly opened file", async () => {
     vi.useFakeTimers();
     const target = undiagnosedTarget();

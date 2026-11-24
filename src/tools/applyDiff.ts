@@ -26,7 +26,10 @@ import {
   type ApplyDiffBlockOption,
 } from "@agentlink/core/apply-diff";
 import { classifyEditDurability } from "../core/editDurability.js";
-import { finalizeEditReviewResult } from "./editReviewResult.js";
+import {
+  finalizeEditReviewResult,
+  withEditTimingTelemetry,
+} from "./editReviewResult.js";
 import { handlePendingEditLockError } from "./pendingEditLock.js";
 import { withFileLock } from "../util/fileLock.js";
 import type {
@@ -432,7 +435,9 @@ export async function handleApplyDiff(
       result,
       appliedAuthorization ? { authorization: appliedAuthorization } : {},
     );
-    if (!finalized.accepted) return finalized.result;
+    if (!finalized.accepted) {
+      return withEditTimingTelemetry(finalized.result, result.timing);
+    }
 
     const responseObj = finalized.response;
     const transformed = finalized.durability.outcome === "transformed";
@@ -478,7 +483,7 @@ export async function handleApplyDiff(
       );
     }
 
-    return successResult(responseObj);
+    return withEditTimingTelemetry(successResult(responseObj), result.timing);
   } catch (err) {
     return (
       handlePendingEditLockError(err, params.path) ??

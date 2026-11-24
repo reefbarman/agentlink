@@ -139,6 +139,58 @@ describe("handleWriteFile", () => {
     );
   });
 
+  it("keeps auto-approved step timings out of visible content and in host telemetry", async () => {
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "accepted" as const,
+        path: "src/timed.ts",
+        operation: "auto-approved" as const,
+        commit_path: "editor_save" as const,
+        ...durable("timed"),
+        timing: {
+          lockWaitMs: 1,
+          prepareMs: 2,
+          baselineDiagnosticsMs: 30,
+          editorSyncMs: 0,
+          commitMs: 400,
+          newDiagnosticsMs: 500.4,
+          totalMs: 934,
+        },
+      })),
+    };
+    const filePath = path.join(workspaceDir, "src", "timed.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+
+    const { handleWriteFile } = await import("./writeFile.js");
+    const result = await handleWriteFile(
+      { path: "src/timed.ts", content: "timed" },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(toolJson(result)).toMatchObject({ status: "accepted" });
+    expect(toolJson(result)).not.toHaveProperty("timing");
+    expect(JSON.stringify(result.content)).not.toContain("Ms");
+    expect(result.telemetryMetrics).toEqual({
+      editTimingSamples: 1,
+      editLockWaitMs: 1,
+      editPrepareMs: 2,
+      editBaselineDiagnosticsMs: 30,
+      editEditorSyncMs: 0,
+      editCommitMs: 400,
+      editNewDiagnosticsMs: 500,
+      editTotalMs: 934,
+      editSlowestStep: "new_diagnostics",
+    });
+  });
+
   it("keeps normal approval review for review-mode temporary writes", async () => {
     const editReviewProvider: EditReviewProvider = {
       reviewAndApply: vi.fn(async (params) => {

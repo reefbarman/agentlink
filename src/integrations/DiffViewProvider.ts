@@ -1097,8 +1097,21 @@ async function waitForVisibleFileEditor(
  *   // ... perform the write ...
  *   const diagnostics = await snap.collectNewErrors(delay);
  */
+export interface SettleDiagnosticBaselineOptions {
+  /**
+   * Skip the settle wait when the target document was already open and clean
+   * when the snapshot was taken, has not changed since, and no diagnostics
+   * event for it has arrived. Its current diagnostics are then already the
+   * settled state, so waiting only delays the edit.
+   */
+  reuseSettledOpenDocument?: boolean;
+}
+
 export function snapshotDiagnostics(filePath: string): {
-  settleBaseline(delayMs: number): Promise<void>;
+  settleBaseline(
+    delayMs: number,
+    options?: SettleDiagnosticBaselineOptions,
+  ): Promise<void>;
   beginPostChangeObservation(): void;
   recordPostChangeDocumentVersion(): void;
   collectNewErrors: (
@@ -1114,6 +1127,10 @@ export function snapshotDiagnostics(filePath: string): {
   let gotEvent = false;
   let observedDocument = findTargetDocument(filePath);
   let observedVersion = observedDocument?.version;
+  const openAtSnapshot =
+    observedDocument && !observedDocument.isDirty
+      ? { document: observedDocument, version: observedDocument.version }
+      : undefined;
   const disposable = vscode.languages.onDidChangeDiagnostics((e) => {
     if (e.uris.some((u) => isTargetUri(u, filePath))) {
       gotEvent = true;
@@ -1128,8 +1145,21 @@ export function snapshotDiagnostics(filePath: string): {
   };
 
   return {
-    async settleBaseline(delayMs: number): Promise<void> {
-      baseline = await settleDiagnosticBaseline(filePath, delayMs, gotEvent);
+    async settleBaseline(
+      delayMs: number,
+      options: SettleDiagnosticBaselineOptions = {},
+    ): Promise<void> {
+      const current = findTargetDocument(filePath);
+      const settled =
+        options.reuseSettledOpenDocument === true &&
+        !gotEvent &&
+        openAtSnapshot !== undefined &&
+        current === openAtSnapshot.document &&
+        current.version === openAtSnapshot.version &&
+        !current.isDirty;
+      baseline = settled
+        ? captureDiagnosticBaseline(filePath)
+        : await settleDiagnosticBaseline(filePath, delayMs, gotEvent);
       gotEvent = false;
       observedDocument = findTargetDocument(filePath);
       observedVersion = observedDocument?.version;

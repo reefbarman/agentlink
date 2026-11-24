@@ -436,7 +436,9 @@ describe("createVscodeEditReviewProvider", () => {
           expect.stringContaining("pre-edit disk baseline"),
         ],
       });
-      expect(settleBaseline).toHaveBeenCalledWith(0);
+      expect(settleBaseline).toHaveBeenCalledWith(0, {
+        reuseSettledOpenDocument: true,
+      });
       expect(settleBaseline.mock.invocationCallOrder[0]).toBeLessThan(
         applyEdit.mock.invocationCallOrder[0]!,
       );
@@ -616,6 +618,20 @@ describe("createVscodeEditReviewProvider", () => {
         finalContent: "proposed content",
         commit_path: "editor_save",
       });
+      const step = expect.any(Number);
+      expect(result.timing).toEqual({
+        lockWaitMs: step,
+        prepareMs: step,
+        baselineDiagnosticsMs: step,
+        editorSyncMs: step,
+        commitMs: step,
+        newDiagnosticsMs: step,
+        totalMs: step,
+      });
+      const { totalMs, ...steps } = result.timing!;
+      expect(
+        Object.values(steps).reduce((sum, ms) => sum + ms, 0),
+      ).toBeLessThanOrEqual(totalMs);
       expect(result).not.toHaveProperty("warnings");
       expect(applyEdit).toHaveBeenCalledOnce();
       expect(doc.save).toHaveBeenCalledOnce();

@@ -1306,9 +1306,53 @@ const EDIT_AUTO_RECOVERIES = new Set([
   "buffer_reverted_to_disk",
 ]);
 
+const EDIT_TIMING_NUMERIC_METRICS = new Set([
+  "editTimingSamples",
+  "editLockWaitMs",
+  "editPrepareMs",
+  "editBaselineDiagnosticsMs",
+  "editEditorSyncMs",
+  "editCommitMs",
+  "editNewDiagnosticsMs",
+  "editTotalMs",
+]);
+
+const EDIT_SLOWEST_STEPS = new Set([
+  "none",
+  "lock_wait",
+  "prepare",
+  "baseline_diagnostics",
+  "editor_sync",
+  "commit",
+  "new_diagnostics",
+]);
+
+/** Host-only step timings attached by the edit tools, bounded to known keys. */
+function getEditTimingMetrics(result: ToolResult): ToolUsageMetrics {
+  const metrics: ToolUsageMetrics = {};
+  for (const [key, value] of Object.entries(result.telemetryMetrics ?? {})) {
+    if (
+      EDIT_TIMING_NUMERIC_METRICS.has(key) &&
+      typeof value === "number" &&
+      Number.isFinite(value) &&
+      value >= 0
+    ) {
+      metrics[key] = value;
+    } else if (
+      key === "editSlowestStep" &&
+      typeof value === "string" &&
+      EDIT_SLOWEST_STEPS.has(value)
+    ) {
+      metrics[key] = value;
+    }
+  }
+  return metrics;
+}
+
 export function getWriteToolUsageMetrics(result: ToolResult): ToolUsageMetrics {
+  const timingMetrics = getEditTimingMetrics(result);
   const text = result.content.find((item) => item.type === "text")?.text;
-  if (!text) return {};
+  if (!text) return timingMetrics;
   try {
     const parsed = JSON.parse(text) as {
       reason?: unknown;
@@ -1320,7 +1364,7 @@ export function getWriteToolUsageMetrics(result: ToolResult): ToolUsageMetrics {
         policy?: unknown;
       };
     };
-    const metrics: ToolUsageMetrics = {};
+    const metrics: ToolUsageMetrics = { ...timingMetrics };
     if (
       parsed.durability?.status === "durable" ||
       parsed.durability?.status === "failed"
@@ -1362,7 +1406,7 @@ export function getWriteToolUsageMetrics(result: ToolResult): ToolUsageMetrics {
     }
     return metrics;
   } catch {
-    return {};
+    return timingMetrics;
   }
 }
 

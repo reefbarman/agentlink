@@ -696,3 +696,71 @@ test("reports the read_file view split and omits versions without the metric", (
   assert.match(result.stdout, /read_file views by extension version/);
   assert.match(result.stdout, /2\.0\.0\s+5\s+1 \(20%\)\s+3 \(60%\)/);
 });
+
+test("reports average auto-approved edit step timings and slowest-step shares", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "telemetry.jsonl");
+  const feedbackPath = path.join(directory, "feedback.jsonl");
+  const timedBucket = (overrides) =>
+    toolBucket({
+      calls: 4,
+      numericMetrics: {
+        editTimingSamples: 2,
+        editLockWaitMs: 0,
+        editPrepareMs: 20,
+        editBaselineDiagnosticsMs: 600,
+        editEditorSyncMs: 0,
+        editCommitMs: 1000,
+        editNewDiagnosticsMs: 2000,
+        editTotalMs: 3620,
+      },
+      categoricalMetrics: {
+        "editSlowestStep:new_diagnostics": 1,
+        "editSlowestStep:commit": 1,
+      },
+      ...overrides,
+    });
+  writeJsonLines(inputPath, [
+    flushRecord({
+      flushedAt: "2026-11-24T00:00:00Z",
+      extensionVersion: "2.0.0",
+      tools: {
+        apply_diff: timedBucket(),
+        write_file: toolBucket({ calls: 3 }),
+      },
+    }),
+    flushRecord({
+      flushedAt: "2026-11-24T01:00:00Z",
+      extensionVersion: "2.0.0",
+      tools: { apply_diff: timedBucket() },
+    }),
+  ]);
+  writeJsonLines(feedbackPath, []);
+
+  const report = readTelemetry(inputPath);
+  assert.deepEqual(Object.keys(report.editTiming), ["apply_diff@2.0.0"]);
+  const timing = report.editTiming["apply_diff@2.0.0"];
+  assert.equal(timing.samples, 4);
+  assert.equal(timing.avgTotalMs, 1810);
+  assert.equal(timing.avgStepMs.newDiagnostics, 1000);
+  assert.equal(timing.avgStepMs.commit, 500);
+  assert.equal(timing.slowest.newDiagnostics, 2);
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.resolve("scripts/report-tool-usage-telemetry.mjs"),
+      "--input",
+      inputPath,
+      "--feedback-input",
+      feedbackPath,
+    ],
+    { cwd: path.resolve("."), encoding: "utf-8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Auto-approved edit step timings/);
+  assert.match(
+    result.stdout,
+    /apply_diff\s+2\.0\.0\s+4\s+1810\s+0 \(0%\)\s+10 \(0%\)\s+300 \(0%\)\s+0 \(0%\)\s+500 \(50%\)\s+1000 \(50%\)/,
+  );
+});

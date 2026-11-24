@@ -7139,6 +7139,40 @@ describe("dispatchToolCall", () => {
       ).toEqual({});
     });
 
+    it("forwards only bounded host edit timing metrics", () => {
+      expect(
+        getWriteToolUsageMetrics({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ commit_path: "editor_save" }),
+            },
+          ],
+          telemetryMetrics: {
+            editTimingSamples: 1,
+            editCommitMs: 420,
+            editTotalMs: 900,
+            editSlowestStep: "commit",
+            editNewDiagnosticsMs: -5,
+            editLockWaitMs: Number.NaN,
+            unrelatedMetric: 7,
+          },
+        }),
+      ).toEqual({
+        editCommitPath: "editor_save",
+        editTimingSamples: 1,
+        editCommitMs: 420,
+        editTotalMs: 900,
+        editSlowestStep: "commit",
+      });
+      expect(
+        getWriteToolUsageMetrics({
+          content: [],
+          telemetryMetrics: { editSlowestStep: "/secret/path" },
+        }),
+      ).toEqual({});
+    });
+
     it("ignores invalid durability categories", () => {
       expect(
         getWriteToolUsageMetrics({

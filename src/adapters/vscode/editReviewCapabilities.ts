@@ -23,6 +23,7 @@ import { getEditDurabilityPolicy } from "../../core/editDurability.js";
 import {
   normalizeEditorText,
   type EditCommitPath,
+  type EditCommitTiming,
   type EditReviewDecision,
   EditReviewParams,
   EditReviewProvider,
@@ -456,6 +457,39 @@ const STALE_EDITOR_WRITE_WARNING =
  *
  * Callers must hold the file lock.
  */
+type EditTimingStep = Exclude<keyof EditCommitTiming, "totalMs">;
+
+/** Accumulates wall-clock time per auto-approved edit step for telemetry. */
+function createEditTimingRecorder(startedAt: number) {
+  const timing: EditCommitTiming = {
+    lockWaitMs: Date.now() - startedAt,
+    prepareMs: 0,
+    baselineDiagnosticsMs: 0,
+    editorSyncMs: 0,
+    commitMs: 0,
+    newDiagnosticsMs: 0,
+    totalMs: 0,
+  };
+  return {
+    record(step: EditTimingStep, ms: number): void {
+      timing[step] += Math.max(0, ms);
+    },
+    async measure<T>(step: EditTimingStep, run: () => Promise<T>): Promise<T> {
+      const stepStartedAt = Date.now();
+      try {
+        return await run();
+      } finally {
+        timing[step] += Date.now() - stepStartedAt;
+      }
+    },
+    finish(): EditCommitTiming {
+      return { ...timing, totalMs: Date.now() - startedAt };
+    },
+  };
+}
+
+type EditTimingRecorder = ReturnType<typeof createEditTimingRecorder>;
+
 async function commitAutoApprovedEdit(args: {
   doc: vscode.TextDocument;
   params: EditReviewParams;
@@ -463,10 +497,23 @@ async function commitAutoApprovedEdit(args: {
   baselineExists: boolean;
   baselineContent: string;
   content: string;
+  timing: EditTimingRecorder;
 }): Promise<AutoApprovedCommit> {
-  const { doc, params, snap, baselineExists, baselineContent, content } = args;
+  const {
+    doc,
+    params,
+    snap,
+    baselineExists,
+    baselineContent,
+    content,
+    timing,
+  } = args;
   const documentState = captureDocumentState(doc);
-  await snap.settleBaseline(params.diagnosticDelay);
+  await timing.measure("baselineDiagnosticsMs", () =>
+    snap.settleBaseline(params.diagnosticDelay, {
+      reuseSettledOpenDocument: true,
+    }),
+  );
   if (documentChangedSince(doc, params.absolutePath, documentState)) {
     return {
       kind: "aborted",
@@ -505,17 +552,17 @@ async function commitAutoApprovedEdit(args: {
   if (!doc.isDirty && canWriteDocumentDirectly(doc, baselineContent)) {
     const editorInSync =
       exact ||
-      (await waitForDocumentToMatchDisk(
-        doc,
-        params.absolutePath,
-        baselineContent,
+      (await timing.measure("editorSyncMs", () =>
+        waitForDocumentToMatchDisk(doc, params.absolutePath, baselineContent),
       ));
     if (exact || !editorInSync) {
       snap.beginPostChangeObservation();
-      const commit = await commitExactEditToDisk({
-        ...commitRequest,
-        editorKnownStale: !editorInSync,
-      });
+      const commit = await timing.measure("commitMs", () =>
+        commitExactEditToDisk({
+          ...commitRequest,
+          editorKnownStale: !editorInSync,
+        }),
+      );
       snap.recordPostChangeDocumentVersion();
       const commitPath: EditCommitPath = editorInSync
         ? "direct_write"
@@ -544,6 +591,7 @@ async function commitAutoApprovedEdit(args: {
     }
   }
 
+  const commitStartedAt = Date.now();
   if (doc.getText() !== content) {
     snap.beginPostChangeObservation();
     const edit = new vscode.WorkspaceEdit();
@@ -571,6 +619,7 @@ async function commitAutoApprovedEdit(args: {
   }
   snap.recordPostChangeDocumentVersion();
   const commit = await commitAndVerifyEdit(commitRequest);
+  timing.record("commitMs", Date.now() - commitStartedAt);
   if (commit.status !== "accepted" || commit.auto_recovery) {
     logEditCommit(
       `editor_save ${commit.status}: ${params.absolutePath}${
@@ -588,7 +637,10 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
   return {
     async reviewAndApply(params: EditReviewParams) {
       if (params.mode === "auto") {
+        const startedAt = Date.now();
         return await withFileLock(params.absolutePath, async () => {
+          const timing = createEditTimingRecorder(startedAt);
+          const lockAcquiredAt = Date.now();
           const snap = snapshotDiagnostics(params.absolutePath);
           try {
             await fs.mkdir(path.dirname(params.absolutePath), {
@@ -649,6 +701,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                 ],
               };
             }
+            timing.record("prepareMs", Date.now() - lockAcquiredAt);
             const committed = await commitAutoApprovedEdit({
               doc,
               params,
@@ -656,12 +709,14 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
               baselineExists,
               baselineContent,
               content,
+              timing,
             });
             if (committed.kind === "aborted") return committed.result;
             const commit = committed.commit;
-            const newDiagnostics = await snap.collectNewErrors(
-              params.diagnosticDelay,
-              baselineContent,
+            const newDiagnostics = await timing.measure(
+              "newDiagnosticsMs",
+              () =>
+                snap.collectNewErrors(params.diagnosticDelay, baselineContent),
             );
             return {
               ...commit,
@@ -670,6 +725,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                 ? { recovered_dirty_buffer: recoveredDirtyBuffer }
                 : {}),
               ...(newDiagnostics ? { new_diagnostics: newDiagnostics } : {}),
+              timing: timing.finish(),
             };
           } finally {
             snap.dispose();
@@ -758,6 +814,8 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
               });
             }
             if (authorization.consume(currentProposal)) {
+              // Guardian review time before this point is not an edit step.
+              const timing = createEditTimingRecorder(Date.now());
               const snap = snapshotDiagnostics(params.absolutePath);
               try {
                 await fs.mkdir(path.dirname(params.absolutePath), {
@@ -777,6 +835,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                   (await vscode.workspace.openTextDocument(
                     params.absolutePath,
                   ));
+                timing.record("prepareMs", timing.finish().totalMs);
                 const committed = await commitAutoApprovedEdit({
                   doc,
                   params,
@@ -784,17 +843,23 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                   baselineExists: baseline.exists,
                   baselineContent: baseline.content,
                   content,
+                  timing,
                 });
                 if (committed.kind === "aborted") return committed.result;
                 const commit = committed.commit;
-                const newDiagnostics = await snap.collectNewErrors(
-                  params.diagnosticDelay,
-                  baseline.content,
+                const newDiagnostics = await timing.measure(
+                  "newDiagnosticsMs",
+                  () =>
+                    snap.collectNewErrors(
+                      params.diagnosticDelay,
+                      baseline.content,
+                    ),
                 );
                 return {
                   ...commit,
                   operation: params.operation ?? "auto-approved",
                   authorization: authorization.authorization,
+                  timing: timing.finish(),
                   ...(recoveredDirtyBuffer
                     ? { recovered_dirty_buffer: recoveredDirtyBuffer }
                     : {}),

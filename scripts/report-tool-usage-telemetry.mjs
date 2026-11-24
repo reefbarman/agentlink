@@ -386,6 +386,14 @@ export function readTelemetry(
           bucket,
         );
       }
+      if (toolName === "apply_diff" || toolName === "write_file") {
+        updateEditTiming(
+          report,
+          toolName,
+          record.extensionVersion ?? "unknown",
+          bucket,
+        );
+      }
       const errors = asCount(bucket?.outcomes?.error);
       if (
         errors > 0 &&
@@ -529,6 +537,7 @@ function createEmptyReport() {
     unusedToolCount: 0,
     searchUsage: {},
     readViewUsage: {},
+    editTiming: {},
     compose: {
       instrumentedCalls: 0,
       legacyCallsExcluded: 0,
@@ -638,7 +647,68 @@ export function finalizeReport(report, knownParameters = new Map()) {
       .filter(([, usage]) => usage.calls > usage.unrecorded)
       .sort(([left], [right]) => compareVersions(left, right)),
   );
+  report.editTiming = finalizeEditTiming(report.editTiming);
   report.warnings = buildWarnings(report);
+}
+
+const EDIT_TIMING_STEPS = [
+  ["lockWait", "editLockWaitMs", "lock_wait"],
+  ["prepare", "editPrepareMs", "prepare"],
+  ["baselineDiagnostics", "editBaselineDiagnosticsMs", "baseline_diagnostics"],
+  ["editorSync", "editEditorSyncMs", "editor_sync"],
+  ["commit", "editCommitMs", "commit"],
+  ["newDiagnostics", "editNewDiagnosticsMs", "new_diagnostics"],
+];
+
+/**
+ * Per-step wall-clock totals for auto-approved edits, keyed by
+ * `tool@version`. Only instrumented samples are counted.
+ */
+function updateEditTiming(report, toolName, extensionVersion, bucket) {
+  const numeric = bucket?.numericMetrics ?? {};
+  const samples = asCount(numeric.editTimingSamples);
+  if (samples === 0) return;
+  const key = `${toolName}@${extensionVersion}`;
+  const timing = report.editTiming[key] ?? {
+    tool: toolName,
+    extensionVersion,
+    samples: 0,
+    totalMs: 0,
+    stepMs: Object.fromEntries(EDIT_TIMING_STEPS.map(([step]) => [step, 0])),
+    slowest: Object.fromEntries(EDIT_TIMING_STEPS.map(([step]) => [step, 0])),
+  };
+  report.editTiming[key] = timing;
+  timing.samples += samples;
+  timing.totalMs += asCount(numeric.editTotalMs);
+  const categories = bucket?.categoricalMetrics ?? {};
+  for (const [step, metric, category] of EDIT_TIMING_STEPS) {
+    timing.stepMs[step] += asCount(numeric[metric]);
+    timing.slowest[step] += asCount(categories[`editSlowestStep:${category}`]);
+  }
+}
+
+function finalizeEditTiming(editTiming) {
+  return Object.fromEntries(
+    Object.entries(editTiming)
+      .sort(
+        ([, left], [, right]) =>
+          left.tool.localeCompare(right.tool) ||
+          compareVersions(left.extensionVersion, right.extensionVersion),
+      )
+      .map(([key, timing]) => [
+        key,
+        {
+          ...timing,
+          avgTotalMs: timing.samples > 0 ? timing.totalMs / timing.samples : 0,
+          avgStepMs: Object.fromEntries(
+            Object.entries(timing.stepMs).map(([step, ms]) => [
+              step,
+              timing.samples > 0 ? ms / timing.samples : 0,
+            ]),
+          ),
+        },
+      ]),
+  );
 }
 
 function updateReadViewUsage(report, extensionVersion, bucket) {
@@ -1312,6 +1382,38 @@ function printSummary(report, inputPath, top) {
         usage.other,
         usage.unrecorded,
       ]),
+    );
+  }
+
+  const editTimingRows = Object.values(report.editTiming);
+  if (editTimingRows.length > 0) {
+    console.log("");
+    console.log(
+      "Auto-approved edit step timings (avg ms per edit; slowest-step share_%)",
+    );
+    printTable(
+      [
+        "tool",
+        "version",
+        "edits",
+        "avg_total",
+        ...EDIT_TIMING_STEPS.map(([, , category]) => category),
+      ],
+      editTimingRows.map((timing) => [
+        timing.tool,
+        timing.extensionVersion,
+        timing.samples,
+        formatNumber(timing.avgTotalMs),
+        ...EDIT_TIMING_STEPS.map(
+          ([step]) =>
+            `${formatNumber(timing.avgStepMs[step])} (${formatShare(
+              timing.samples > 0 ? timing.slowest[step] / timing.samples : null,
+            )})`,
+        ),
+      ]),
+    );
+    console.log(
+      "Covers committed auto-approved edits only; interactive reviews include human wait time and are excluded.",
     );
   }
 

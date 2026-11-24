@@ -22,7 +22,10 @@ import type {
   WriteApprovalPromptEvent,
   WriteApprovalPolicyProvider,
 } from "../core/capabilities/editReview.js";
-import { finalizeEditReviewResult } from "./editReviewResult.js";
+import {
+  finalizeEditReviewResult,
+  withEditTimingTelemetry,
+} from "./editReviewResult.js";
 import { handlePendingEditLockError } from "./pendingEditLock.js";
 import { findRedactionPlaceholderOverwrite } from "../shared/structuredSecretRedaction.js";
 import {
@@ -232,9 +235,10 @@ export async function handleWriteFile(
         ? { warnings: [...(result.warnings ?? []), ...warnings] }
         : {}),
     });
-    return finalized.accepted
-      ? successResult(finalized.response)
-      : finalized.result;
+    return withEditTimingTelemetry(
+      finalized.accepted ? successResult(finalized.response) : finalized.result,
+      result.timing,
+    );
   } catch (err) {
     return (
       handlePendingEditLockError(err, params.path) ??

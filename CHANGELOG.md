@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Auto-approved `apply_diff` and `write_file` edits to a file that is already open and quiet no longer wait for VS Code's error list to settle before writing. That wait used to add between 0.3 and 1.5 seconds to every such edit. Back-to-back edits to the same file are also less likely to fail with "Edit document changed while preparing diagnostics".
+- `npm run telemetry:tools` now shows how long each step of an auto-approved edit takes (lock wait, prepare, pre-edit diagnostics, editor catch-up, save, post-edit diagnostics) and which step was slowest, so delay tuning can be based on measurements. Timings are recorded only in local telemetry and are never shown to the model.
+
 ## 1.105.0
 
 - Renaming or moving a project folder no longer strands its chat history. AgentLink now records each folder's location in `.agentlink/location.json` (Git-ignored) and, when a folder opens at a new path, offers to migrate sessions saved under the old one. **AgentLink: Migrate Session History from a Previous Folder** does the same on demand: it backs up the history to `.agentlink/backups/`, updates each session's project record, moves workspace-keyed history when needed, verifies the result, and restores the backup if anything fails. Previously old sessions pointed at the old path and could not be resumed.

@@ -228,6 +228,11 @@ export interface ToolResult {
     message: string;
   };
   mcpMeta?: McpToolResultMeta;
+  /**
+   * Host-only bounded diagnostics for local tool-usage telemetry. Never part
+   * of the model-visible content.
+   */
+  telemetryMetrics?: Record<string, number | string | boolean>;
   uiMeta?: {
     mcpApprovalPromotion?: McpApprovalPromotionMeta;
     composeTrace?: ComposeTrace;

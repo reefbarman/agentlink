@@ -213,6 +213,59 @@ describe("ToolUsageTelemetry", () => {
     expect(JSON.stringify(record)).not.toContain("SECRET_CHILD_RESULT");
   });
 
+  it("sums auto-approved edit step timings and counts the slowest step", async () => {
+    const telemetryPath = path.join(tmpDir, "tool-usage.jsonl");
+    const telemetry = new ToolUsageTelemetry({
+      telemetryPath,
+      flushIntervalMs: 0,
+    });
+    for (const [commitMs, newDiagnosticsMs, slowest] of [
+      [400, 100, "commit"],
+      [200, 900, "new_diagnostics"],
+    ] as const) {
+      telemetry.record({
+        toolName: "apply_diff",
+        params: { path: "x", diff: "y" },
+        source: "agent",
+        outcome: "ok",
+        metrics: {
+          editTimingSamples: 1,
+          editLockWaitMs: 0,
+          editPrepareMs: 5,
+          editBaselineDiagnosticsMs: 10,
+          editEditorSyncMs: 0,
+          editCommitMs: commitMs,
+          editNewDiagnosticsMs: newDiagnosticsMs,
+          editTotalMs: commitMs + newDiagnosticsMs + 15,
+          editSlowestStep: slowest,
+        },
+      });
+    }
+    await telemetry.flush();
+
+    const [record] = (await readJsonLines(telemetryPath)) as Array<{
+      tools: Record<
+        string,
+        {
+          numericMetrics: Record<string, number>;
+          categoricalMetrics: Record<string, number>;
+        }
+      >;
+    }>;
+    expect(record.tools.apply_diff).toMatchObject({
+      numericMetrics: {
+        editTimingSamples: 2,
+        editCommitMs: 600,
+        editNewDiagnosticsMs: 1000,
+        editTotalMs: 1630,
+      },
+      categoricalMetrics: {
+        "editSlowestStep:commit": 1,
+        "editSlowestStep:new_diagnostics": 1,
+      },
+    });
+  });
+
   it("records bounded rejected compose children without leaking unknown names", async () => {
     const telemetryPath = path.join(tmpDir, "tool-usage.jsonl");
     const telemetry = new ToolUsageTelemetry({
