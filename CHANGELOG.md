@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.105.0
+
 - Renaming or moving a project folder no longer strands its chat history. AgentLink now records each folder's location in `.agentlink/location.json` (Git-ignored) and, when a folder opens at a new path, offers to migrate sessions saved under the old one. **AgentLink: Migrate Session History from a Previous Folder** does the same on demand: it backs up the history to `.agentlink/backups/`, updates each session's project record, moves workspace-keyed history when needed, verifies the result, and restores the backup if anything fails. Previously old sessions pointed at the old path and could not be resumed.
 
 ## 1.104.0
