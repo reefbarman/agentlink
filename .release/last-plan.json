@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "a6b7def36630063d4c56288a062fb19c4f795066",
-  "createdAt": "2026-11-24T02:30:24.700Z",
+  "sourceSha": "fbaacddb3035375dd6ebe33da5f41a4e4ffe196d",
+  "createdAt": "2026-11-25T00:12:17.839Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,139 +10,95 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.105.0",
-      "baselineRef": "v1.105.0",
-      "reserved": "1.105.0",
-      "commits": ["a6b7def36630063d4c56288a062fb19c4f795066"],
+      "published": "1.105.1",
+      "baselineRef": "v1.105.1",
+      "reserved": "1.105.1",
+      "commits": ["fbaacddb3035375dd6ebe33da5f41a4e4ffe196d"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.105.1",
+      "version": "1.105.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.105.1",
+      "tag": "v1.105.2",
       "notes": [
         {
-          "sha": "a6b7def36630063d4c56288a062fb19c4f795066",
-          "subject": "perf(edits): skip settled diagnostics wait and record auto-approved edit step timings",
-          "summary": "Auto-approved edits to an already open, quiet document no longer wait for the diagnostic delay, and local tool telemetry now records per-step edit timings reported by telemetry:tools.",
+          "sha": "fbaacddb3035375dd6ebe33da5f41a4e4ffe196d",
+          "subject": "fix: address triaged inline-file and edit-settle feedback",
+          "summary": "execute_command inline files now work alongside simple unbraced shell variables like loop counters, and auto-approved edits continue when the buffer reloads to the exact baseline during the pre-edit diagnostics wait.}]}</br>```</br>",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.105.0",
-      "baselineRef": "desktop-v0.105.0",
-      "reserved": "0.105.0",
-      "commits": ["a6b7def36630063d4c56288a062fb19c4f795066"],
+      "published": "0.105.1",
+      "baselineRef": "desktop-v0.105.1",
+      "reserved": "0.105.1",
+      "commits": ["fbaacddb3035375dd6ebe33da5f41a4e4ffe196d"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.105.1",
+      "version": "0.105.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.105.1",
+      "tag": "desktop-v0.105.2",
       "notes": [
         {
-          "sha": "a6b7def36630063d4c56288a062fb19c4f795066",
-          "subject": "perf(edits): skip settled diagnostics wait and record auto-approved edit step timings",
-          "summary": "Auto-approved edits to an already open, quiet document no longer wait for the diagnostic delay, and local tool telemetry now records per-step edit timings reported by telemetry:tools.",
+          "sha": "fbaacddb3035375dd6ebe33da5f41a4e4ffe196d",
+          "subject": "fix: address triaged inline-file and edit-settle feedback",
+          "summary": "execute_command inline files now work alongside simple unbraced shell variables like loop counters, and auto-approved edits continue when the buffer reloads to the exact baseline during the pre-edit diagnostics wait.}]}</br>```</br>",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.74.0",
-      "baselineRef": "cli-v0.74.0",
-      "reserved": "0.74.0",
-      "commits": ["a6b7def36630063d4c56288a062fb19c4f795066"],
+      "published": "0.74.1",
+      "baselineRef": "cli-v0.74.1",
+      "reserved": "0.74.1",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.74.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.74.1",
-      "notes": [
-        {
-          "sha": "a6b7def36630063d4c56288a062fb19c4f795066",
-          "subject": "perf(edits): skip settled diagnostics wait and record auto-approved edit step timings",
-          "summary": "Auto-approved edits to an already open, quiet document no longer wait for the diagnostic delay, and local tool telemetry now records per-step edit timings reported by telemetry:tools.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.59.0",
-      "baselineRef": "sdk-v0.59.0",
-      "reserved": "0.59.0",
-      "commits": ["a6b7def36630063d4c56288a062fb19c4f795066"],
+      "published": "0.59.1",
+      "baselineRef": "sdk-v0.59.1",
+      "reserved": "0.59.1",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.59.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.59.1",
-      "notes": [
-        {
-          "sha": "a6b7def36630063d4c56288a062fb19c4f795066",
-          "subject": "perf(edits): skip settled diagnostics wait and record auto-approved edit step timings",
-          "summary": "Auto-approved edits to an already open, quiet document no longer wait for the diagnostic delay, and local tool telemetry now records per-step edit timings reported by telemetry:tools.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.75.0",
-      "baselineRef": "assistant-v0.75.0",
-      "reserved": "0.75.0",
-      "commits": ["a6b7def36630063d4c56288a062fb19c4f795066"],
+      "published": "0.75.1",
+      "baselineRef": "assistant-v0.75.1",
+      "reserved": "0.75.1",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.75.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "assistant-v0.75.1",
-      "notes": [
-        {
-          "sha": "a6b7def36630063d4c56288a062fb19c4f795066",
-          "subject": "perf(edits): skip settled diagnostics wait and record auto-approved edit step timings",
-          "summary": "Auto-approved edits to an already open, quiet document no longer wait for the diagnostic delay, and local tool telemetry now records per-step edit timings reported by telemetry:tools.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     }
   },
   "decisions": {
-    "c13c329e94342dbd7d5febc9bb40fa90dc5a290f": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The VS Code extension now offers to migrate session history after a project folder is renamed or moved, via a startup prompt or the new 'AgentLink: Migrate Session History from a Previous Folder' command, with backup and verification.\"}]}",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "a6b7def36630063d4c56288a062fb19c4f795066": {
+    "fbaacddb3035375dd6ebe33da5f41a4e4ffe196d": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Auto-approved edits to an already open, quiet document no longer wait for the diagnostic delay, and local tool telemetry now records per-step edit timings reported by telemetry:tools.",
+      "summary": "execute_command inline files now work alongside simple unbraced shell variables like loop counters, and auto-approved edits continue when the buffer reloads to the exact baseline during the pre-edit diagnostics wait.}]}</br>```</br>",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
