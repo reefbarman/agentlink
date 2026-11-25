@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.60.0 — 2026-11-25
+
+- VS Code gains commands and sidebar controls to turn semantic search embeddings on or off, an Embeddings health section, lazy loading of large transcript images for remote views, and faster crashed-window credential queue recovery and indexer stability fixes.
+
 ## 0.59.1 — 2026-11-24
 
 - Auto-approved edits to an already open, quiet document no longer wait for the diagnostic delay, and local tool telemetry now records per-step edit timings reported by telemetry:tools.

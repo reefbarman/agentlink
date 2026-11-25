@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "fbaacddb3035375dd6ebe33da5f41a4e4ffe196d",
-  "createdAt": "2026-11-25T00:12:17.839Z",
+  "sourceSha": "6414c3ec1fcc746926237c3e4afd6a8edd81c776",
+  "createdAt": "2026-11-25T03:26:00.922Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.105.1",
-      "baselineRef": "v1.105.1",
-      "reserved": "1.105.1",
-      "commits": ["fbaacddb3035375dd6ebe33da5f41a4e4ffe196d"],
+      "published": "1.105.2",
+      "baselineRef": "v1.105.2",
+      "reserved": "1.105.2",
+      "commits": ["6414c3ec1fcc746926237c3e4afd6a8edd81c776"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.105.2",
-      "effectiveBump": "patch",
+      "version": "1.106.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.105.2",
+      "tag": "v1.106.0",
       "notes": [
         {
-          "sha": "fbaacddb3035375dd6ebe33da5f41a4e4ffe196d",
-          "subject": "fix: address triaged inline-file and edit-settle feedback",
-          "summary": "execute_command inline files now work alongside simple unbraced shell variables like loop counters, and auto-approved edits continue when the buffer reloads to the exact baseline during the pre-edit diagnostics wait.}]}</br>```</br>",
+          "sha": "6414c3ec1fcc746926237c3e4afd6a8edd81c776",
+          "subject": "feat: semantic embeddings toggle, embeddings health, and remote/indexer stability fixes",
+          "summary": "VS Code gains commands and sidebar controls to turn semantic search embeddings on or off, an Embeddings health section, lazy loading of large transcript images for remote views, and faster crashed-window credential queue recovery and indexer stability fixes.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.105.1",
-      "baselineRef": "desktop-v0.105.1",
-      "reserved": "0.105.1",
-      "commits": ["fbaacddb3035375dd6ebe33da5f41a4e4ffe196d"],
+      "published": "0.105.2",
+      "baselineRef": "desktop-v0.105.2",
+      "reserved": "0.105.2",
+      "commits": ["6414c3ec1fcc746926237c3e4afd6a8edd81c776"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.105.2",
-      "effectiveBump": "patch",
+      "version": "0.106.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.105.2",
+      "tag": "desktop-v0.106.0",
       "notes": [
         {
-          "sha": "fbaacddb3035375dd6ebe33da5f41a4e4ffe196d",
-          "subject": "fix: address triaged inline-file and edit-settle feedback",
-          "summary": "execute_command inline files now work alongside simple unbraced shell variables like loop counters, and auto-approved edits continue when the buffer reloads to the exact baseline during the pre-edit diagnostics wait.}]}</br>```</br>",
+          "sha": "6414c3ec1fcc746926237c3e4afd6a8edd81c776",
+          "subject": "feat: semantic embeddings toggle, embeddings health, and remote/indexer stability fixes",
+          "summary": "VS Code gains commands and sidebar controls to turn semantic search embeddings on or off, an Embeddings health section, lazy loading of large transcript images for remote views, and faster crashed-window credential queue recovery and indexer stability fixes.",
           "breaking": false
         }
       ]
@@ -61,44 +61,105 @@
       "published": "0.74.1",
       "baselineRef": "cli-v0.74.1",
       "reserved": "0.74.1",
-      "commits": [],
+      "commits": ["6414c3ec1fcc746926237c3e4afd6a8edd81c776"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.75.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.75.0",
+      "notes": [
+        {
+          "sha": "6414c3ec1fcc746926237c3e4afd6a8edd81c776",
+          "subject": "feat: semantic embeddings toggle, embeddings health, and remote/indexer stability fixes",
+          "summary": "VS Code gains commands and sidebar controls to turn semantic search embeddings on or off, an Embeddings health section, lazy loading of large transcript images for remote views, and faster crashed-window credential queue recovery and indexer stability fixes.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.59.1",
       "baselineRef": "sdk-v0.59.1",
       "reserved": "0.59.1",
-      "commits": [],
+      "commits": ["6414c3ec1fcc746926237c3e4afd6a8edd81c776"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.60.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.60.0",
+      "notes": [
+        {
+          "sha": "6414c3ec1fcc746926237c3e4afd6a8edd81c776",
+          "subject": "feat: semantic embeddings toggle, embeddings health, and remote/indexer stability fixes",
+          "summary": "VS Code gains commands and sidebar controls to turn semantic search embeddings on or off, an Embeddings health section, lazy loading of large transcript images for remote views, and faster crashed-window credential queue recovery and indexer stability fixes.",
+          "breaking": false
+        }
+      ]
     },
     "assistant": {
       "published": "0.75.1",
       "baselineRef": "assistant-v0.75.1",
       "reserved": "0.75.1",
-      "commits": [],
+      "commits": [
+        "06de8c9e921c0ef44973a6e62c17cabf1c7777eb",
+        "6414c3ec1fcc746926237c3e4afd6a8edd81c776"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.76.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.76.0",
+      "notes": [
+        {
+          "sha": "06de8c9e921c0ef44973a6e62c17cabf1c7777eb",
+          "subject": "ci(server): wait for the egress gateway and show container state on smoke-test failure",
+          "summary": "The container smoke-test script now waits for the egress gateway to start and prints container state on failure; this is CI-only and does not change the shipped assistant.",
+          "breaking": false
+        },
+        {
+          "sha": "6414c3ec1fcc746926237c3e4afd6a8edd81c776",
+          "subject": "feat: semantic embeddings toggle, embeddings health, and remote/indexer stability fixes",
+          "summary": "VS Code gains commands and sidebar controls to turn semantic search embeddings on or off, an Embeddings health section, lazy loading of large transcript images for remote views, and faster crashed-window credential queue recovery and indexer stability fixes.",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
+    "06de8c9e921c0ef44973a6e62c17cabf1c7777eb": {
+      "bump": "none",
+      "breakingUnits": [],
+      "summary": "The container smoke-test script now waits for the egress gateway to start and prints container state on failure; this is CI-only and does not change the shipped assistant.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
     "fbaacddb3035375dd6ebe33da5f41a4e4ffe196d": {
       "bump": "patch",
       "breakingUnits": [],
       "summary": "execute_command inline files now work alongside simple unbraced shell variables like loop counters, and auto-approved edits continue when the buffer reloads to the exact baseline during the pre-edit diagnostics wait.}]}</br>```</br>",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "6414c3ec1fcc746926237c3e4afd6a8edd81c776": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "VS Code gains commands and sidebar controls to turn semantic search embeddings on or off, an Embeddings health section, lazy loading of large transcript images for remote views, and faster crashed-window credential queue recovery and indexer stability fixes.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

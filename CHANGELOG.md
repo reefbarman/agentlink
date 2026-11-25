@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.106.0
+
 - Semantic search can now be turned on and off from the sidebar's **Codebase Index** section, with a review of what is sent to OpenAI, an approximate size, a choice of scope, API key setup and a rebuild. It stays off by default. **Learn More** opens a new bundled guide, and **Set Up Semantic Search** now includes the same step; before, it stored a key but never turned embeddings on.
 - Context health has a new **Embeddings** section showing whether semantic search is off, missing a key, partly embedded or ready. Vector retrieval no longer shows as ready when embeddings are off or nothing is embedded.
 - Fixed VS Code windows freezing or crashing with out-of-memory errors when an image-heavy chat was open while Desktop or a browser was connected. Remote views now load large images and attached result files on demand instead of receiving every image in every update, and status checks no longer re-read every attachment from disk.
