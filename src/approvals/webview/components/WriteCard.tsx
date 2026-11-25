@@ -2,18 +2,16 @@ import type {
   ApprovalRequest,
   DecisionMessage,
 } from "@agentlink/protocol/approval-transport";
-import { useCallback, useState } from "preact/hooks";
-
-import { ApprovalLayout } from "./ApprovalLayout.js";
 import {
   FilePermissionRuleEditor,
-  parentDirectoryPath,
-  type FilePermissionRuleMode,
-  type FilePermissionRuleScope,
+  ruleFolder,
+  useFilePermissionRule,
+  writeTrustFields,
 } from "./FilePermissionRuleEditor.js";
-import type { RefObject } from "preact";
 
-const TRUST_SCOPES = ["all-files", "this-file", "pattern"] as const;
+import { ApprovalLayout } from "./ApprovalLayout.js";
+import type { RefObject } from "preact";
+import { useCallback } from "preact/hooks";
 
 interface WriteCardProps {
   request: ApprovalRequest;
@@ -43,34 +41,16 @@ export function WriteCard({
       ? filePath
       : `${operation === "create" ? "Create" : "Modify"} ${outsideWorkspace ? "a file outside the workspace" : "a file"}`;
 
-  const [trustScope, setTrustScope] = useState<(typeof TRUST_SCOPES)[number]>(
-    outsideWorkspace ? "pattern" : "all-files",
-  );
-  // Outside the workspace, default to trusting the file's parent folder
-  // (prefix), matching the outside-path read card.
-  const dirPath = parentDirectoryPath(filePath);
-  const [pattern, setPattern] = useState(outsideWorkspace ? dirPath : filePath);
-  const [mode, setMode] = useState<FilePermissionRuleMode>(
-    outsideWorkspace ? "prefix" : "glob",
-  );
-  const [scope, setScope] = useState<FilePermissionRuleScope>("skip");
-
-  // Switching between Prefix and Exact swaps the untouched default pattern
-  // between the parent folder and the file itself; edited patterns are kept.
-  const handleModeChange = useCallback(
-    (next: FilePermissionRuleMode) => {
-      setMode(next);
-      if (!outsideWorkspace) return;
-      if (next === "exact" && pattern === dirPath) {
-        setPattern(filePath);
-      } else if (next === "prefix" && pattern === filePath) {
-        setPattern(dirPath);
-      }
-    },
-    [outsideWorkspace, pattern, dirPath, filePath],
-  );
-
-  const isSkipped = scope === "skip";
+  // Same editor and defaults as the outside-path read card (folder prefix).
+  // Blanket "All files" trust never covers outside-workspace targets, so it
+  // is only offered inside the workspace.
+  const folder = ruleFolder(filePath);
+  const rule = useFilePermissionRule({
+    filePath,
+    allowAllFiles: !outsideWorkspace,
+  });
+  const { isSkipped, scope } = rule;
+  const trust = writeTrustFields(rule);
 
   const handleAccept = useCallback(() => {
     submit({
@@ -90,27 +70,30 @@ export function WriteCard({
     submit({
       id: request.id,
       decision,
-      trustScope,
-      ...(trustScope === "pattern" && {
-        rulePattern: pattern,
-        ruleMode: mode,
-      }),
-      ...(trustScope === "this-file" && {
-        rulePattern: filePath,
-        ruleMode: "exact",
-      }),
+      ...trust,
       followUp: followUpRef.current?.trim() || undefined,
     });
   }, [
     request.id,
     scope,
-    trustScope,
-    pattern,
-    mode,
-    filePath,
+    trust.trustScope,
+    trust.rulePattern,
+    trust.ruleMode,
     submit,
     followUpRef,
   ]);
+
+  // One click for the common case: trust this file's folder for the session.
+  const handleAllowFolder = useCallback(() => {
+    submit({
+      id: request.id,
+      decision: "accept-session",
+      trustScope: "pattern",
+      rulePattern: folder,
+      ruleMode: "prefix",
+      followUp: followUpRef.current?.trim() || undefined,
+    });
+  }, [request.id, folder, submit, followUpRef]);
 
   const handleReject = useCallback(
     (reason?: string) => {
@@ -120,66 +103,11 @@ export function WriteCard({
   );
 
   const rulesJsx = (
-    <>
-      {!outsideWorkspace && (
-        <div class="field">
-          <label>Scope:</label>
-          <div class="radio-group">
-            {TRUST_SCOPES.map((ts) => (
-              <label key={ts} class="radio-label">
-                <input
-                  type="radio"
-                  name="trustScope"
-                  value={ts}
-                  checked={trustScope === ts}
-                  onChange={() => setTrustScope(ts)}
-                />
-                {ts === "all-files"
-                  ? "All files"
-                  : ts === "this-file"
-                    ? "This file only"
-                    : "Custom pattern"}
-              </label>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {trustScope === "pattern" && (
-        <FilePermissionRuleEditor
-          label={filePath}
-          pattern={pattern}
-          mode={mode}
-          scope={scope}
-          modeGroupName={`write-rule-mode-${request.id}`}
-          onPatternChange={setPattern}
-          onModeChange={handleModeChange}
-          onScopeChange={setScope}
-        />
-      )}
-
-      {trustScope !== "pattern" && (
-        <div class="rule-row-options">
-          <div class="rule-row-option-line">
-            <span class="rule-row-option-label">Scope:</span>
-            <div class="toggle-group">
-              {(["session", "project", "global", "skip"] as const).map(
-                (candidate) => (
-                  <button
-                    key={candidate}
-                    type="button"
-                    class={`mode-btn ${scope === candidate ? "active" : ""} ${candidate === "skip" ? "mode-btn-skip" : ""}`}
-                    onClick={() => setScope(candidate)}
-                  >
-                    {candidate.charAt(0).toUpperCase() + candidate.slice(1)}
-                  </button>
-                ),
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </>
+    <FilePermissionRuleEditor
+      label={filePath}
+      modeGroupName={`write-rule-mode-${request.id}`}
+      rule={rule}
+    />
   );
 
   return (
@@ -207,7 +135,13 @@ export function WriteCard({
                   followUp: followUpRef.current?.trim() || undefined,
                 }),
             }
-          : undefined
+          : explicitChoices.length === 0 && folder && isSkipped
+            ? {
+                label: "Allow Folder for Session",
+                title: `Accept now and auto-approve writes under ${folder} for this session`,
+                onClick: handleAllowFolder,
+              }
+            : undefined
       }
       onReject={handleReject}
       followUpRef={followUpRef}

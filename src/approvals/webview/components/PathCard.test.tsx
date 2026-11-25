@@ -43,4 +43,65 @@ describe("PathCard", () => {
       ),
     ).toEqual(["Session", "Project", "Global", "Skip"]);
   });
+
+  it("allows the file's folder for the session in one click", () => {
+    const submit = vi.fn<(data: Omit<DecisionMessage, "type">) => void>();
+    render(
+      <PathCard
+        request={{
+          kind: "path",
+          id: "outside-read-2",
+          filePath: "/outside/project/src/example.ts",
+        }}
+        submit={submit}
+        followUpRef={{ current: "" }}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Allow Folder for Session" }),
+    );
+    expect(submit).toHaveBeenCalledWith({
+      id: "outside-read-2",
+      decision: "allow-session",
+      rulePattern: "/outside/project/src/",
+      ruleMode: "prefix",
+      followUp: undefined,
+    });
+  });
+
+  it("enables the rule from a match mode and swaps the default pattern", () => {
+    const submit = vi.fn<(data: Omit<DecisionMessage, "type">) => void>();
+    render(
+      <PathCard
+        request={{
+          kind: "path",
+          id: "outside-read-3",
+          filePath: "/outside/project/src/example.ts",
+        }}
+        submit={submit}
+        followUpRef={{ current: "" }}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Auto Approval Rules" }),
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Glob" }));
+
+    expect(
+      document.querySelector<HTMLTextAreaElement>(".rule-pattern-input")!.value,
+    ).toBe("/outside/project/src/*");
+    // The one-click shortcut steps aside once a rule is being edited.
+    expect(
+      screen.queryByRole("button", { name: "Allow Folder for Session" }),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save Rule & Allow" }));
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: "allow-session",
+        rulePattern: "/outside/project/src/*",
+        ruleMode: "glob",
+      }),
+    );
+  });
 });

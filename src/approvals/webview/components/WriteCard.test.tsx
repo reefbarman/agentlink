@@ -73,6 +73,100 @@ describe("WriteCard", () => {
     ).toEqual(["Session", "Project", "Global", "Skip"]);
   });
 
+  it("allows an outside file's folder for the session in one click", () => {
+    const submit = vi.fn<(data: Omit<DecisionMessage, "type">) => void>();
+    render(
+      <WriteCard
+        request={{
+          kind: "write",
+          id: "outside-write-quick",
+          filePath: "/outside/project/src/example.ts",
+          writeOperation: "modify",
+          outsideWorkspace: true,
+        }}
+        submit={submit}
+        followUpRef={{ current: "" }}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Allow Folder for Session" }),
+    );
+    expect(submit).toHaveBeenCalledWith({
+      id: "outside-write-quick",
+      decision: "accept-session",
+      trustScope: "pattern",
+      rulePattern: "/outside/project/src/",
+      ruleMode: "prefix",
+      followUp: undefined,
+    });
+  });
+
+  it("uses the same editor inside the workspace, plus an All files option", () => {
+    const submit = vi.fn<(data: Omit<DecisionMessage, "type">) => void>();
+    render(
+      <WriteCard
+        request={{
+          kind: "write",
+          id: "inside-write-1",
+          filePath: "src/tools/example.ts",
+          writeOperation: "modify",
+        }}
+        submit={submit}
+        followUpRef={{ current: "" }}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Auto Approval Rules" }),
+    );
+    const input = () =>
+      document.querySelector<HTMLTextAreaElement>(".rule-pattern-input")!;
+
+    expect(
+      (screen.getByRole("radio", { name: "Prefix" }) as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+    expect(input().value).toBe("src/tools/");
+    fireEvent.click(screen.getByRole("radio", { name: "Glob" }));
+    expect(input().value).toBe("src/tools/*");
+
+    // Picking a match mode switched the rule on at Session scope.
+    fireEvent.click(screen.getByRole("radio", { name: "All files" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Rule & Accept" }));
+    expect(submit).toHaveBeenCalledWith({
+      id: "inside-write-1",
+      decision: "accept-session",
+      trustScope: "all-files",
+      followUp: undefined,
+    });
+  });
+
+  it("keeps a hand-edited pattern when the match mode changes", () => {
+    render(
+      <WriteCard
+        request={{
+          kind: "write",
+          id: "outside-write-edited",
+          filePath: "/outside/project/src/example.ts",
+          writeOperation: "modify",
+          outsideWorkspace: true,
+        }}
+        submit={vi.fn()}
+        followUpRef={{ current: "" }}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Auto Approval Rules" }),
+    );
+    expect(screen.queryByRole("radio", { name: "All files" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Session" }));
+    const input = () =>
+      document.querySelector<HTMLTextAreaElement>(".rule-pattern-input")!;
+    fireEvent.input(input(), { target: { value: "/outside/project/" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Exact" }));
+    expect(input().value).toBe("/outside/project/");
+  });
+
   it("defaults outside writes to a parent-folder prefix and swaps for Exact", () => {
     const submit = vi.fn<(data: Omit<DecisionMessage, "type">) => void>();
     const request: ApprovalRequest = {

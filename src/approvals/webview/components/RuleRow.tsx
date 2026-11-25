@@ -3,6 +3,7 @@ import type {
   SubCommandEntry,
 } from "@agentlink/protocol/approval-transport";
 
+import { RulePatternInput } from "./RulePatternInput.js";
 import { isBannedCommandRulePrefixSuggestion } from "../../commandRulePolicy.js";
 
 const MODES = ["prefix", "exact", "regex"] as const;
@@ -93,17 +94,12 @@ export function RuleRow({
       </div>
 
       <div class="rule-row-input-line">
-        <input
-          type="text"
-          class={`text-input rule-pattern-input ${isSkipped ? "skipped" : ""}`}
+        <RulePatternInput
           value={value.pattern}
-          onInput={(e) =>
-            onChange({
-              ...value,
-              pattern: (e.target as HTMLInputElement).value,
-            })
-          }
+          ariaLabel="Command pattern"
+          dimmed={isSkipped}
           disabled={isSkipped}
+          onChange={(pattern) => onChange({ ...value, pattern })}
         />
         <div class="radio-group">
           {MODES.map((mode) => (
@@ -112,8 +108,14 @@ export function RuleRow({
                 type="radio"
                 name={modeGroupName}
                 checked={value.mode === mode}
-                onChange={() => onChange({ ...value, mode })}
-                disabled={isSkipped}
+                // Picking a match mode also switches a skipped rule on.
+                onChange={() =>
+                  onChange({
+                    ...value,
+                    mode,
+                    scope: isSkipped ? "session" : value.scope,
+                  })
+                }
               />
               {mode.charAt(0).toUpperCase() + mode.slice(1)}
               {mode === "regex" && canSuggest && (

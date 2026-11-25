@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Approval rules now work the same way on every file card (outside-workspace reads, writes inside and outside the workspace, and renames): one editor with **Prefix**, **Exact** and **Glob**, defaulting to a prefix on the file's folder. Switching mode swaps an untouched pattern to the full path or a glob for that folder, picking a match mode switches the rule on at Session scope (command rules too), and the pattern field wraps so long paths stay readable in a narrow panel. **All files** is still offered for writes inside the workspace; **This file only** is now **Exact**.
+- Added **Allow Folder for Session** to file approval cards: one click accepts the request and trusts the file's folder for the session.
+- Fixed write approvals in the chat for files outside the workspace showing the in-workspace rule options (All files, This file only, Custom pattern) with a glob on the full path, instead of a prefix on the file's folder.
+
 ## 1.107.0
 
 - `/btw` is now a proper side discussion. You can ask follow-up questions in the panel and it remembers the earlier side exchanges. **Send to chat** replaces **Add to conversation**: it sends your message to the main agent along with the side thread, instead of only adding the exchange to the transcript, and queues it if the agent is busy. Each `/btw` question can now use up to 25 turns and 50 tool calls (was 5 and 10), with a ten-minute deadline (was two).

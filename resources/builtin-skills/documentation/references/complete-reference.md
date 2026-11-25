@@ -2120,11 +2120,16 @@ User edits made in the diff view before accepting are captured and returned to t
 
 #### File-Level Write Rules
 
-The approval panel's collapsible "Auto Approval Rules" section lets you scope the approval:
+The approval panel's collapsible "Auto Approval Rules" section lets you scope the approval. File write, outside-workspace read, and rename cards share one rule editor: a path pattern, a match mode, and a scope.
 
-- **All files** — blanket approval for all writes
-- **This file** — only auto-approve this specific file
-- **Custom pattern** — define a prefix, exact, or glob pattern
+- **Prefix** (the default) — the file's folder and everything beneath it
+- **Exact** — only this file
+- **Glob** — a glob pattern, starting as the files directly inside that folder
+- **All files** — blanket approval for all writes; offered only for writes inside the workspace, and the default for renames
+
+Switching match mode replaces an untouched pattern with that mode's default and keeps a pattern you have edited. The pattern field wraps so long paths stay visible in a narrow panel. Choosing a scope or a match mode switches the rule on; choosing a match mode on a skipped rule uses Session scope. Command rule rows behave the same way.
+
+**Allow Folder for Session** on the card accepts the request and saves a Session prefix rule for the file's folder in one click. It is hidden while you are editing a rule.
 
 Rules can be scoped to session, project, or global. Manage them from the sidebar.
 

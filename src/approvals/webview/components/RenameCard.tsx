@@ -2,20 +2,15 @@ import type {
   ApprovalRequest,
   DecisionMessage,
 } from "@agentlink/protocol/approval-transport";
-import { useCallback, useState } from "preact/hooks";
+import {
+  FilePermissionRuleEditor,
+  useFilePermissionRule,
+  writeTrustFields,
+} from "./FilePermissionRuleEditor.js";
 
 import { ApprovalLayout } from "./ApprovalLayout.js";
 import type { RefObject } from "preact";
-
-const MODES = ["glob", "prefix", "exact"] as const;
-const SCOPES = ["session", "project", "global", "skip"] as const;
-const SCOPE_LABELS: Record<string, string> = {
-  session: "Session",
-  project: "Project",
-  global: "Global",
-  skip: "Skip",
-};
-const TRUST_SCOPES = ["all-files", "this-file", "pattern"] as const;
+import { useCallback } from "preact/hooks";
 
 interface RenameCardProps {
   request: ApprovalRequest;
@@ -30,13 +25,16 @@ export function RenameCard({ request, submit, followUpRef }: RenameCardProps) {
   const totalChanges = request.totalChanges ?? 0;
   const fileCount = affectedFiles.length;
 
-  const [trustScope, setTrustScope] =
-    useState<(typeof TRUST_SCOPES)[number]>("all-files");
-  const [pattern, setPattern] = useState("");
-  const [mode, setMode] = useState<(typeof MODES)[number]>("glob");
-  const [scope, setScope] = useState<(typeof SCOPES)[number]>("skip");
-
-  const isSkipped = scope === "skip";
+  // A rename spans files, so the rule starts on "All files"; the path modes
+  // start from the first affected file.
+  const firstPath = affectedFiles[0]?.path ?? "";
+  const rule = useFilePermissionRule({
+    filePath: firstPath,
+    allowAllFiles: true,
+    defaultMatch: "all",
+  });
+  const { isSkipped, scope } = rule;
+  const trust = writeTrustFields(rule);
 
   const handleAccept = useCallback(() => {
     submit({
@@ -56,25 +54,15 @@ export function RenameCard({ request, submit, followUpRef }: RenameCardProps) {
     submit({
       id: request.id,
       decision,
-      trustScope,
-      ...(trustScope === "pattern" && {
-        rulePattern: pattern,
-        ruleMode: mode,
-      }),
-      ...(trustScope === "this-file" &&
-        affectedFiles.length > 0 && {
-          rulePattern: affectedFiles[0].path,
-          ruleMode: "exact",
-        }),
+      ...trust,
       followUp: followUpRef.current?.trim() || undefined,
     });
   }, [
     request.id,
     scope,
-    trustScope,
-    pattern,
-    mode,
-    affectedFiles,
+    trust.trustScope,
+    trust.rulePattern,
+    trust.ruleMode,
     submit,
     followUpRef,
   ]);
@@ -87,69 +75,11 @@ export function RenameCard({ request, submit, followUpRef }: RenameCardProps) {
   );
 
   const rulesJsx = (
-    <>
-      <div class="field">
-        <label>Scope:</label>
-        <div class="radio-group">
-          {TRUST_SCOPES.map((ts) => (
-            <label key={ts} class="radio-label">
-              <input
-                type="radio"
-                name="trustScope"
-                value={ts}
-                checked={trustScope === ts}
-                onChange={() => setTrustScope(ts)}
-              />
-              {ts === "all-files"
-                ? "All files"
-                : ts === "this-file"
-                  ? "This file only"
-                  : "Custom pattern"}
-            </label>
-          ))}
-        </div>
-      </div>
-
-      {trustScope === "pattern" && (
-        <div class="rule-row">
-          <input
-            type="text"
-            class="text-input rule-pattern-input"
-            value={pattern}
-            onInput={(e) => setPattern((e.target as HTMLInputElement).value)}
-          />
-          <div class="rule-row-toggles">
-            <div class="toggle-group">
-              {MODES.map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  class={`mode-btn ${mode === m ? "active" : ""}`}
-                  onClick={() => setMode(m)}
-                >
-                  {m.charAt(0).toUpperCase() + m.slice(1)}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div class="rule-row-toggles" style={{ marginTop: "8px" }}>
-        <div class="toggle-group">
-          {SCOPES.map((s) => (
-            <button
-              key={s}
-              type="button"
-              class={`mode-btn ${scope === s ? "active" : ""} ${s === "skip" ? "mode-btn-skip" : ""}`}
-              onClick={() => setScope(s)}
-            >
-              {SCOPE_LABELS[s]}
-            </button>
-          ))}
-        </div>
-      </div>
-    </>
+    <FilePermissionRuleEditor
+      label={firstPath}
+      modeGroupName={`rename-rule-mode-${request.id}`}
+      rule={rule}
+    />
   );
 
   return (

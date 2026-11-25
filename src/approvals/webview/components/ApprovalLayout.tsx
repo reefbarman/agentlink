@@ -25,7 +25,7 @@ export interface ApprovalLayoutProps {
   primaryWithRulesLabel: string;
   onAccept: () => void;
   onSaveAndAccept: () => void;
-  secondaryAction?: { label: string; onClick: () => void };
+  secondaryAction?: { label: string; title?: string; onClick: () => void };
   /** Exact host-provided choices for approvals that do not use tool grants. */
   actionsContent?: ComponentChildren;
   onReject: (reason?: string) => void;
@@ -194,6 +194,7 @@ export function ApprovalLayout({
               {secondaryAction && (
                 <button
                   class="btn btn-secondary"
+                  title={secondaryAction.title}
                   onClick={secondaryAction.onClick}
                 >
                   {secondaryAction.label}

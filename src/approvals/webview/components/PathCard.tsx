@@ -2,16 +2,15 @@ import type {
   ApprovalRequest,
   DecisionMessage,
 } from "@agentlink/protocol/approval-transport";
-import { useCallback, useState } from "preact/hooks";
-
-import { ApprovalLayout } from "./ApprovalLayout.js";
 import {
   FilePermissionRuleEditor,
-  parentDirectoryPath,
-  type FilePermissionRuleMode,
-  type FilePermissionRuleScope,
+  ruleFolder,
+  useFilePermissionRule,
 } from "./FilePermissionRuleEditor.js";
+
+import { ApprovalLayout } from "./ApprovalLayout.js";
 import type { RefObject } from "preact";
+import { useCallback } from "preact/hooks";
 
 interface PathCardProps {
   request: ApprovalRequest;
@@ -21,13 +20,9 @@ interface PathCardProps {
 
 export function PathCard({ request, submit, followUpRef }: PathCardProps) {
   const filePath = request.filePath ?? "";
-  const dirPath = parentDirectoryPath(filePath);
-
-  const [pattern, setPattern] = useState(dirPath);
-  const [mode, setMode] = useState<FilePermissionRuleMode>("prefix");
-  const [scope, setScope] = useState<FilePermissionRuleScope>("skip");
-
-  const isSkipped = scope === "skip";
+  const folder = ruleFolder(filePath);
+  const rule = useFilePermissionRule({ filePath });
+  const { isSkipped, scope, pattern, match } = rule;
 
   const handleAllowOnce = useCallback(() => {
     submit({
@@ -48,10 +43,21 @@ export function PathCard({ request, submit, followUpRef }: PathCardProps) {
       id: request.id,
       decision,
       rulePattern: pattern,
-      ruleMode: mode,
+      ruleMode: match,
       followUp: followUpRef.current?.trim() || undefined,
     });
-  }, [request.id, scope, pattern, mode, submit, followUpRef]);
+  }, [request.id, scope, pattern, match, submit, followUpRef]);
+
+  // One click for the common case: trust this file's folder for the session.
+  const handleAllowFolder = useCallback(() => {
+    submit({
+      id: request.id,
+      decision: "allow-session",
+      rulePattern: folder,
+      ruleMode: "prefix",
+      followUp: followUpRef.current?.trim() || undefined,
+    });
+  }, [request.id, folder, submit, followUpRef]);
 
   const handleReject = useCallback(
     (reason?: string) => {
@@ -63,13 +69,8 @@ export function PathCard({ request, submit, followUpRef }: PathCardProps) {
   const rulesJsx = (
     <FilePermissionRuleEditor
       label={filePath}
-      pattern={pattern}
-      mode={mode}
-      scope={scope}
       modeGroupName={`path-rule-mode-${request.id}`}
-      onPatternChange={setPattern}
-      onModeChange={setMode}
-      onScopeChange={setScope}
+      rule={rule}
     />
   );
 
@@ -87,6 +88,15 @@ export function PathCard({ request, submit, followUpRef }: PathCardProps) {
       primaryWithRulesLabel="Save Rule & Allow"
       onAccept={handleAllowOnce}
       onSaveAndAccept={handleSaveAndAllow}
+      secondaryAction={
+        folder && isSkipped
+          ? {
+              label: "Allow Folder for Session",
+              title: `Allow now and auto-approve access under ${folder} for this session`,
+              onClick: handleAllowFolder,
+            }
+          : undefined
+      }
       onReject={handleReject}
       followUpRef={followUpRef}
     >

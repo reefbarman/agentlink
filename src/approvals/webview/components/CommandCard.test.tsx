@@ -353,6 +353,22 @@ describe("CommandCard terminal presentation", () => {
     expect(screen.getByText(/without another approval card/)).toBeTruthy();
   });
 
+  it("switches a skipped rule on at Session scope when a match mode is picked", () => {
+    const approval = request("sandbox");
+    approval.subCommands = [{ command: "npm test" }];
+    renderCard(approval);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Auto Approval Rules/ }),
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Exact" }));
+
+    expect(screen.getByRole("button", { name: "Session" }).classList).toContain(
+      "active",
+    );
+    expect(screen.getByText("Save Rules & Run")).toBeTruthy();
+  });
+
   it("warns when a selected allow prefix is broad", () => {
     const approval = request("sandbox");
     approval.subCommands = [{ command: "git status" }];

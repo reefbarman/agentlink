@@ -981,13 +981,28 @@ body {
 }
 .rule-row-input-line {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
 }
 .rule-row-input-line .rule-pattern-input {
-  flex: 1;
+  flex: 1 1 240px;
+  min-width: 0;
   margin-bottom: 0;
+}
+.rule-row-input-line .radio-group {
+  margin-top: 0;
+}
+/* Wrap long paths and commands instead of scrolling them sideways. */
+textarea.rule-pattern-input {
+  display: block;
+  resize: none;
+  overflow: hidden;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  field-sizing: content;
 }
 .rule-pattern-input.skipped {
   opacity: 0.6;

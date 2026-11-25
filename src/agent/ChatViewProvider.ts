@@ -4118,6 +4118,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         isDanger?: boolean;
       }>;
       targetPath?: string;
+      fileWrite?: { operation: "create" | "modify"; outsideWorkspace: boolean };
       commandText?: string;
       commandReason?: string;
       humanOnlyReason?: string;
@@ -4186,6 +4187,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           ...projectContext,
           filePath,
           writeOperation: isCreate ? "create" : "modify",
+          // Without this the card falls back to the in-workspace rule layout.
+          outsideWorkspace: request.fileWrite?.outsideWorkspace,
           detail: request.detail,
           writeChoices: request.writeChoices,
         };

@@ -9383,10 +9383,26 @@ describe("ChatViewProvider session state sync", () => {
             title: string;
             choices: Array<{ label: string; value: string }>;
             writeChoices?: Array<{ label: string; value: string }>;
+            fileWrite?: {
+              operation: "create" | "modify";
+              outsideWorkspace: boolean;
+            };
           },
-        ) => { writeChoices?: Array<{ label: string; value: string }> };
+        ) => {
+          writeChoices?: Array<{ label: string; value: string }>;
+          outsideWorkspace?: boolean;
+        };
       }
     ).buildApprovalRequest.bind(provider);
+    // The write card picks its outside-workspace rule defaults from this flag.
+    expect(
+      buildApprovalRequest("outside-approval", {
+        kind: "write",
+        title: "Modify `/elsewhere/src/file.ts`?",
+        choices: [],
+        fileWrite: { operation: "modify", outsideWorkspace: true },
+      }).outsideWorkspace,
+    ).toBe(true);
     const choices = [
       { label: "Generate", value: "accept" },
       { label: "Generate for Session", value: "accept-session" },
