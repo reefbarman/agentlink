@@ -31,6 +31,8 @@ compose() {
 cleanup() {
   status=$?
   if [ "$status" -ne 0 ] && [ -f "$work/compose.yaml" ]; then
+    echo "--- compose ps" >&2
+    compose ps -a >&2 || true
     echo "--- compose logs" >&2
     compose logs --no-color >&2 || true
   fi
@@ -130,6 +132,11 @@ fi
 pass "no shell in the running assistant"
 
 echo "# command egress"
+for _ in $(seq 1 60); do
+  if compose logs egress-gateway 2>/dev/null | grep -q "listening on"; then break; fi
+  sleep 1
+done
+compose logs egress-gateway | grep -q "listening on" || fail "egress gateway did not start"
 # Ask the gateway for a tunnel from the worker, optionally with a
 # Proxy-Authorization header; prints "<status> <reason>".
 probe='
