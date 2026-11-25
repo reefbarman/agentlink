@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "6414c3ec1fcc746926237c3e4afd6a8edd81c776",
-  "createdAt": "2026-11-25T03:26:00.922Z",
+  "sourceSha": "01a855f6d21e8777358dd1534f5f7c27a8a15518",
+  "createdAt": "2026-11-25T22:36:32.442Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,156 +10,142 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.105.2",
-      "baselineRef": "v1.105.2",
-      "reserved": "1.105.2",
-      "commits": ["6414c3ec1fcc746926237c3e4afd6a8edd81c776"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "1.106.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "v1.106.0",
-      "notes": [
-        {
-          "sha": "6414c3ec1fcc746926237c3e4afd6a8edd81c776",
-          "subject": "feat: semantic embeddings toggle, embeddings health, and remote/indexer stability fixes",
-          "summary": "VS Code gains commands and sidebar controls to turn semantic search embeddings on or off, an Embeddings health section, lazy loading of large transcript images for remote views, and faster crashed-window credential queue recovery and indexer stability fixes.",
-          "breaking": false
-        }
-      ]
-    },
-    "desktop": {
-      "published": "0.105.2",
-      "baselineRef": "desktop-v0.105.2",
-      "reserved": "0.105.2",
-      "commits": ["6414c3ec1fcc746926237c3e4afd6a8edd81c776"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.106.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "desktop-v0.106.0",
-      "notes": [
-        {
-          "sha": "6414c3ec1fcc746926237c3e4afd6a8edd81c776",
-          "subject": "feat: semantic embeddings toggle, embeddings health, and remote/indexer stability fixes",
-          "summary": "VS Code gains commands and sidebar controls to turn semantic search embeddings on or off, an Embeddings health section, lazy loading of large transcript images for remote views, and faster crashed-window credential queue recovery and indexer stability fixes.",
-          "breaking": false
-        }
-      ]
-    },
-    "cli": {
-      "published": "0.74.1",
-      "baselineRef": "cli-v0.74.1",
-      "reserved": "0.74.1",
-      "commits": ["6414c3ec1fcc746926237c3e4afd6a8edd81c776"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.75.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.75.0",
-      "notes": [
-        {
-          "sha": "6414c3ec1fcc746926237c3e4afd6a8edd81c776",
-          "subject": "feat: semantic embeddings toggle, embeddings health, and remote/indexer stability fixes",
-          "summary": "VS Code gains commands and sidebar controls to turn semantic search embeddings on or off, an Embeddings health section, lazy loading of large transcript images for remote views, and faster crashed-window credential queue recovery and indexer stability fixes.",
-          "breaking": false
-        }
-      ]
-    },
-    "sdk": {
-      "published": "0.59.1",
-      "baselineRef": "sdk-v0.59.1",
-      "reserved": "0.59.1",
-      "commits": ["6414c3ec1fcc746926237c3e4afd6a8edd81c776"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.60.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.60.0",
-      "notes": [
-        {
-          "sha": "6414c3ec1fcc746926237c3e4afd6a8edd81c776",
-          "subject": "feat: semantic embeddings toggle, embeddings health, and remote/indexer stability fixes",
-          "summary": "VS Code gains commands and sidebar controls to turn semantic search embeddings on or off, an Embeddings health section, lazy loading of large transcript images for remote views, and faster crashed-window credential queue recovery and indexer stability fixes.",
-          "breaking": false
-        }
-      ]
-    },
-    "assistant": {
-      "published": "0.75.1",
-      "baselineRef": "assistant-v0.75.1",
-      "reserved": "0.75.1",
+      "published": "1.106.0",
+      "baselineRef": "v1.106.0",
+      "reserved": "1.106.0",
       "commits": [
-        "06de8c9e921c0ef44973a6e62c17cabf1c7777eb",
-        "6414c3ec1fcc746926237c3e4afd6a8edd81c776"
+        "47dea7cfcdeac25101b615a6671ea7c3f57d2b0a",
+        "01a855f6d21e8777358dd1534f5f7c27a8a15518"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.76.0",
+      "version": "1.107.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.76.0",
+      "tag": "v1.107.0",
       "notes": [
         {
-          "sha": "06de8c9e921c0ef44973a6e62c17cabf1c7777eb",
-          "subject": "ci(server): wait for the egress gateway and show container state on smoke-test failure",
-          "summary": "The container smoke-test script now waits for the egress gateway to start and prints container state on failure; this is CI-only and does not change the shipped assistant.",
+          "sha": "47dea7cfcdeac25101b615a6671ea7c3f57d2b0a",
+          "subject": "feat(btw): follow-up questions, send thread to main chat, higher limits",
+          "summary": "The /btw panel now supports follow-up questions in the side thread, replaces 'Add to conversation' with 'Send to chat' to send your message plus the side thread to the main agent, and raises per-question limits to 25 turns, 50 tool calls and 10 minutes.",
           "breaking": false
         },
         {
-          "sha": "6414c3ec1fcc746926237c3e4afd6a8edd81c776",
-          "subject": "feat: semantic embeddings toggle, embeddings health, and remote/indexer stability fixes",
-          "summary": "VS Code gains commands and sidebar controls to turn semantic search embeddings on or off, an Embeddings health section, lazy loading of large transcript images for remote views, and faster crashed-window credential queue recovery and indexer stability fixes.",
+          "sha": "01a855f6d21e8777358dd1534f5f7c27a8a15518",
+          "subject": "fix(agent): reject same-batch overlapping spawns and surface write-lease waits",
+          "summary": "Background agents spawned in one batch with overlapping owned paths are now rejected with workspace_conflict, writers waiting on workspace write access show as queued with the blocker, and read-only agents get clearer guidance about scripts.",
+          "breaking": false
+        }
+      ]
+    },
+    "desktop": {
+      "published": "0.106.0",
+      "baselineRef": "desktop-v0.106.0",
+      "reserved": "0.106.0",
+      "commits": [
+        "47dea7cfcdeac25101b615a6671ea7c3f57d2b0a",
+        "01a855f6d21e8777358dd1534f5f7c27a8a15518"
+      ],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.107.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "desktop-v0.107.0",
+      "notes": [
+        {
+          "sha": "47dea7cfcdeac25101b615a6671ea7c3f57d2b0a",
+          "subject": "feat(btw): follow-up questions, send thread to main chat, higher limits",
+          "summary": "The /btw panel now supports follow-up questions in the side thread, replaces 'Add to conversation' with 'Send to chat' to send your message plus the side thread to the main agent, and raises per-question limits to 25 turns, 50 tool calls and 10 minutes.",
+          "breaking": false
+        },
+        {
+          "sha": "01a855f6d21e8777358dd1534f5f7c27a8a15518",
+          "subject": "fix(agent): reject same-batch overlapping spawns and surface write-lease waits",
+          "summary": "Background agents spawned in one batch with overlapping owned paths are now rejected with workspace_conflict, writers waiting on workspace write access show as queued with the blocker, and read-only agents get clearer guidance about scripts.",
+          "breaking": false
+        }
+      ]
+    },
+    "cli": {
+      "published": "0.75.0",
+      "baselineRef": "cli-v0.75.0",
+      "reserved": "0.75.0",
+      "commits": [],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
+    },
+    "sdk": {
+      "published": "0.60.0",
+      "baselineRef": "sdk-v0.60.0",
+      "reserved": "0.60.0",
+      "commits": [],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
+    },
+    "assistant": {
+      "published": "0.76.0",
+      "baselineRef": "assistant-v0.76.0",
+      "reserved": "0.76.0",
+      "commits": [
+        "47dea7cfcdeac25101b615a6671ea7c3f57d2b0a",
+        "01a855f6d21e8777358dd1534f5f7c27a8a15518"
+      ],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.77.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.77.0",
+      "notes": [
+        {
+          "sha": "47dea7cfcdeac25101b615a6671ea7c3f57d2b0a",
+          "subject": "feat(btw): follow-up questions, send thread to main chat, higher limits",
+          "summary": "The /btw panel now supports follow-up questions in the side thread, replaces 'Add to conversation' with 'Send to chat' to send your message plus the side thread to the main agent, and raises per-question limits to 25 turns, 50 tool calls and 10 minutes.",
+          "breaking": false
+        },
+        {
+          "sha": "01a855f6d21e8777358dd1534f5f7c27a8a15518",
+          "subject": "fix(agent): reject same-batch overlapping spawns and surface write-lease waits",
+          "summary": "Background agents spawned in one batch with overlapping owned paths are now rejected with workspace_conflict, writers waiting on workspace write access show as queued with the blocker, and read-only agents get clearer guidance about scripts.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "06de8c9e921c0ef44973a6e62c17cabf1c7777eb": {
-      "bump": "none",
-      "breakingUnits": [],
-      "summary": "The container smoke-test script now waits for the egress gateway to start and prints container state on failure; this is CI-only and does not change the shipped assistant.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "fbaacddb3035375dd6ebe33da5f41a4e4ffe196d": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "execute_command inline files now work alongside simple unbraced shell variables like loop counters, and auto-approved edits continue when the buffer reloads to the exact baseline during the pre-edit diagnostics wait.}]}</br>```</br>",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "6414c3ec1fcc746926237c3e4afd6a8edd81c776": {
+    "47dea7cfcdeac25101b615a6671ea7c3f57d2b0a": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "VS Code gains commands and sidebar controls to turn semantic search embeddings on or off, an Embeddings health section, lazy loading of large transcript images for remote views, and faster crashed-window credential queue recovery and indexer stability fixes.",
+      "summary": "The /btw panel now supports follow-up questions in the side thread, replaces 'Add to conversation' with 'Send to chat' to send your message plus the side thread to the main agent, and raises per-question limits to 25 turns, 50 tool calls and 10 minutes.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "01a855f6d21e8777358dd1534f5f7c27a8a15518": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Background agents spawned in one batch with overlapping owned paths are now rejected with workspace_conflict, writers waiting on workspace write access show as queued with the blocker, and read-only agents get clearer guidance about scripts.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
