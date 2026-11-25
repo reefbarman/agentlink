@@ -4988,7 +4988,7 @@ function getReadOnlyCommandRejectionReason(
 }
 
 const READ_ONLY_REJECTION_RECOVERY =
-  "Use a dedicated read/search tool or a simpler classifier-recognized local read. Network reads and ambiguous commands require a writable foreground session with the normal approval flow.";
+  "Use a dedicated read/search tool or a simpler classifier-recognized local read. Network reads and ambiguous commands require a writable foreground session with the normal approval flow. Interpreters and scripts (python, node, repo scripts, builds, tests) never run in a read-only session and cannot be approved from it, even when the delegation said they were fine. If the task depends on one, tell the coordinator now which exact command you need (ask_user if available, otherwise a status message or a blocked set_task_status) so it can run the command itself or spawn a writable agent, instead of reproducing the result by hand.";
 
 /** True when any segment is a remote read (gh, curl, wget, or a networked git subcommand). */
 function isNetworkReadCommand(command: string): boolean {

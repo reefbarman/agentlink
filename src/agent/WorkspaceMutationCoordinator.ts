@@ -189,6 +189,26 @@ export class WorkspaceMutationCoordinator {
     });
   }
 
+  /**
+   * Sessions whose active or already-queued leases would make a new request
+   * for this domain wait. Empty means acquire() resolves immediately.
+   */
+  getBlockingSessionIds(domain: WorkspaceMutationDomain): string[] {
+    const blockers = new Set<string>();
+    for (const lease of this.activeLeases) {
+      if (domainsIntersect(lease.domain, domain)) blockers.add(lease.sessionId);
+    }
+    for (const request of this.pending) {
+      if (
+        !request.signal?.aborted &&
+        domainsIntersect(request.domain, domain)
+      ) {
+        blockers.add(request.sessionId);
+      }
+    }
+    return [...blockers];
+  }
+
   getSnapshot(
     root: string,
     ownerSessionId: string,

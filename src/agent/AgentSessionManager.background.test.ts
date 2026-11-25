@@ -1333,6 +1333,49 @@ describe("AgentSessionManager background agents", () => {
     });
   });
 
+  it("rejects overlapping ownership across spawns issued at the same time", async () => {
+    mocks.runBehavior.mockImplementation(() =>
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const results = await Promise.allSettled(
+      ["first", "second", "third"].map((task) =>
+        mgr.spawnBackground({
+          task,
+          message: "work",
+          ownedPaths: ["out/jobs"],
+        }),
+      ),
+    );
+
+    expect(results.map((result) => result.status)).toEqual([
+      "fulfilled",
+      "rejected",
+      "rejected",
+    ]);
+    for (const result of results.slice(1)) {
+      expect((result as PromiseRejectedResult).reason).toMatchObject({
+        result: expect.objectContaining({
+          code: "workspace_conflict",
+          message: expect.stringContaining("out/jobs"),
+        }),
+      });
+    }
+    expect((mgr as any).pendingOwnedPathReservations.size).toBe(0);
+    await expect(
+      mgr.spawnBackground({
+        task: "disjoint",
+        message: "work",
+        ownedPaths: ["out/other"],
+      }),
+    ).resolves.toMatchObject({ sessionId: expect.any(String) });
+  });
+
   it("starts the next queued agent when capacity becomes available", async () => {
     let releaseFirst: (() => void) | undefined;
     mocks.runBehavior
@@ -4439,6 +4482,60 @@ describe("AgentSessionManager background agents", () => {
     expect(domain.delegatedPaths[0]).toContain("feature.test.ts");
 
     (mgr as any).releaseWorkspaceMutationLease(leaseHolder);
+  });
+
+  it("reports a background writer waiting for workspace write access", async () => {
+    const coordinator = new WorkspaceMutationCoordinator();
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          config: configHost,
+          workspaceMutationCoordinator: coordinator,
+        },
+      },
+    );
+    const parent = await mgr.createSession("code");
+    mgr.setToolContext(toolCtx);
+    const blocker = await coordinator.acquire(
+      "blocker-session",
+      (mgr as any).createWorkspaceMutationDomain(parent, undefined, {
+        exclusive: true,
+      }),
+    );
+
+    const spawn = await mgr.spawnBackground(
+      {
+        task: "delegated writer child",
+        message: "write tests",
+        permissionProfile: "workspace-safe",
+        ownedPaths: ["src/agent/feature.test.ts"],
+      },
+      parent.id,
+    );
+    await waitFor(
+      () => mgr.getBackgroundStatus(spawn.sessionId).displayStatus,
+      (displayStatus) =>
+        displayStatus ===
+        "Waiting for workspace write access (held by agent blocker-)",
+    );
+    expect(mgr.getBackgroundStatus(spawn.sessionId).phase).toBe("queued");
+    expect(mocks.runArgs).not.toHaveBeenCalled();
+
+    blocker.release();
+    await waitFor(
+      () => mocks.runArgs.mock.calls.length,
+      (calls) => calls === 1,
+    );
+    expect(
+      mgr.getBackgroundStatus(spawn.sessionId).displayStatus,
+    ).not.toContain("Waiting for workspace write access");
   });
 
   it("runs an explicit review-only ACP spawn read-only without contending for the writer lease", async () => {

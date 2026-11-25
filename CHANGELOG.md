@@ -3,6 +3,9 @@
 ## Unreleased
 
 - `/btw` is now a proper side discussion. You can ask follow-up questions in the panel and it remembers the earlier side exchanges. **Send to chat** replaces **Add to conversation**: it sends your message to the main agent along with the side thread, instead of only adding the exchange to the transcript, and queues it if the agent is busy. Each `/btw` question can now use up to 25 turns and 50 tool calls (was 5 and 10), with a ten-minute deadline (was two).
+- Fixed background agents that were spawned together with overlapping `ownedPaths` all being accepted, after which all but one sat idle indefinitely. The later spawns are now rejected immediately with `workspace_conflict`, the same as when they are spawned one after another.
+- A background writer waiting for another agent to release workspace write access now reports `phase: "queued"` and `Waiting for workspace write access (held by agent …)` in its status, instead of looking like a stalled provider request.
+- When a read-only agent's command is refused, the result now says that interpreters, scripts, builds and tests never run in a read-only session, and tells the agent to ask its coordinator for the exact command instead of reproducing the result by hand.
 
 ## 1.106.0
 

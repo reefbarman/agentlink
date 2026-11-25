@@ -1133,6 +1133,9 @@ export class AgentSessionManager {
     }
   >();
 
+  /** ownedPaths claimed by spawns admitted but not yet registered. */
+  private pendingOwnedPathReservations = new Set<readonly string[]>();
+
   private bgLaunchQueue: Array<{
     sessionId: string;
     start: () => Promise<void>;
@@ -1756,6 +1759,25 @@ export class AgentSessionManager {
         ? session.abortSignal
         : undefined;
     this.setInteractiveExecutionPhase(session.id, "queued_for_workspace_write");
+    // A background writer blocked here has not contacted its provider yet.
+    // Say so, or its status reads as a hung "waiting_for_provider" request.
+    const blockingSessionIds = session.background
+      ? this.host.workspaceMutationCoordinator
+          .getBlockingSessionIds(domain)
+          .filter((blockerId) => blockerId !== session.id)
+      : [];
+    const waitingForWriteAccess = blockingSessionIds.length > 0;
+    if (waitingForWriteAccess) {
+      const [firstBlocker, ...otherBlockers] = blockingSessionIds;
+      this.noteBackgroundProgress(session.id, "queued");
+      this.bgStatusDetail.set(
+        session.id,
+        `Waiting for workspace write access (held by agent ${firstBlocker!.slice(0, 8)}${
+          otherBlockers.length > 0 ? ` +${otherBlockers.length}` : ""
+        })`,
+      );
+      this.notifySessionsChanged();
+    }
     leaseHolder.acquisition = this.host.workspaceMutationCoordinator.acquire(
       session.id,
       domain,
@@ -1763,6 +1785,9 @@ export class AgentSessionManager {
     );
     try {
       const lease = await leaseHolder.acquisition;
+      if (waitingForWriteAccess) {
+        this.noteBackgroundProgress(session.id, "waiting_for_provider");
+      }
       this.setInteractiveExecutionPhase(session.id, "running");
       leaseHolder.lease = lease;
       let holders = this.activeMutationLeaseHolders.get(session.id);
@@ -1774,6 +1799,10 @@ export class AgentSessionManager {
       return lease;
     } finally {
       leaseHolder.acquisition = undefined;
+      if (waitingForWriteAccess) {
+        this.bgStatusDetail.delete(session.id);
+        this.notifySessionsChanged();
+      }
     }
   }
 
@@ -11974,6 +12003,28 @@ export class AgentSessionManager {
     parentSessionId?: string,
     inheritedSkillAuthority?: Readonly<SkillAuthoritySnapshot>,
   ): Promise<SpawnBackgroundResult> {
+    // Admission awaits before the child is registered, so spawns issued in one
+    // tool batch would all pass the ownership check. The reservation keeps the
+    // claimed scope visible to them until this spawn registers or fails.
+    const scopeReservation: { release?: () => void } = {};
+    try {
+      return await this.spawnBackgroundWithScopeReservation(
+        request,
+        parentSessionId,
+        inheritedSkillAuthority,
+        scopeReservation,
+      );
+    } finally {
+      scopeReservation.release?.();
+    }
+  }
+
+  private async spawnBackgroundWithScopeReservation(
+    request: SpawnBackgroundRequest,
+    parentSessionId: string | undefined,
+    inheritedSkillAuthority: Readonly<SkillAuthoritySnapshot> | undefined,
+    scopeReservation: { release?: () => void },
+  ): Promise<SpawnBackgroundResult> {
     if (!this.toolCtx) {
       throw new Error("No tool context — cannot spawn background agent");
     }
@@ -12051,7 +12102,7 @@ export class AgentSessionManager {
     if (!admission.ok) {
       throw new FleetAdmissionError(admission);
     }
-    this.ensureSharedWorkspaceScopeAvailable(request);
+    scopeReservation.release = this.reserveSharedWorkspaceScope(request);
     const reviewTarget = request.reviewScope
       ? captureReviewScope(executionRoot, request.reviewScope, {
           workspaceRoots: this.getWorkspaceFolders().map(
@@ -15207,10 +15258,14 @@ ${instruction}`
     return assessment.warnings.length > 0 ? assessment.warnings : undefined;
   }
 
-  private ensureSharedWorkspaceScopeAvailable(
+  /**
+   * Reject a spawn whose ownedPaths overlap an active agent or another spawn
+   * still being admitted, then hold the scope until the returned release runs.
+   */
+  private reserveSharedWorkspaceScope(
     request: SpawnBackgroundRequest,
-  ): void {
-    if (!request.ownedPaths?.length) return;
+  ): (() => void) | undefined {
+    if (!request.ownedPaths?.length) return undefined;
     const normalize = (value: string) =>
       value.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
     const overlaps = (left: string, right: string) => {
@@ -15240,6 +15295,23 @@ ${instruction}`
         });
       }
     }
+    for (const reserved of this.pendingOwnedPathReservations) {
+      const conflicting = request.ownedPaths.find((requested) =>
+        reserved.some((owned) => overlaps(requested, owned)),
+      );
+      if (conflicting) {
+        throw new FleetAdmissionError({
+          ok: false,
+          code: "workspace_conflict",
+          message: `Background spawn rejected: ownership overlaps another agent being spawned at the same time at ${conflicting}. Choose a disjoint scope.`,
+        });
+      }
+    }
+    const reservation = [...request.ownedPaths];
+    this.pendingOwnedPathReservations.add(reservation);
+    return () => {
+      this.pendingOwnedPathReservations.delete(reservation);
+    };
   }
 
   private isFleetDescendant(sessionId: string, ancestorId: string): boolean {
