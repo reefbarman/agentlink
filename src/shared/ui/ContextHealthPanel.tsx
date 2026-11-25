@@ -88,6 +88,9 @@ export function ContextHealthPanel({ health }: ContextHealthPanelProps) {
           <StatusChip label="Memory" status={health.memory.status} />
           <StatusChip label="Retrieval" status={health.retrieval.status} />
           <StatusChip label="Index" status={health.index.status} />
+          {health.embeddings && (
+            <StatusChip label="Embeddings" status={health.embeddings.status} />
+          )}
         </span>
         <span class="context-health-chevron" aria-hidden="true" />
       </summary>
@@ -157,6 +160,24 @@ export function ContextHealthPanel({ health }: ContextHealthPanelProps) {
             <Metric label="Chunks" value={health.index.totalChunksInIndex} />
           )}
         </HealthSection>
+        {health.embeddings && (
+          <HealthSection
+            label="Embeddings"
+            status={health.embeddings.status}
+            reason={health.embeddings.reason}
+          >
+            <Metric
+              label="Semantic search"
+              value={health.embeddings.enabled ? "on" : "off"}
+            />
+            {health.embeddings.embeddedChunkCount !== undefined && (
+              <Metric
+                label="Embedded chunks"
+                value={`${health.embeddings.embeddedChunkCount}/${health.embeddings.chunkCount ?? "?"}`}
+              />
+            )}
+          </HealthSection>
+        )}
       </div>
     </details>
   );

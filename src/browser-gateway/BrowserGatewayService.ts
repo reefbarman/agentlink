@@ -24,6 +24,9 @@ import {
   agentMessagesToChatMessages,
   type AppState,
 } from "../shared/chatProjection.js";
+import type { BrowserGatewayOwnerCommandBody } from "@agentlink/protocol/browser-gateway-owner-command-body";
+import { encodeTranscriptMessageDetail } from "./dataPlane/transcriptBlockDetail.js";
+import { boundTranscriptMediaForWire } from "./wireTranscriptMedia.js";
 import type { BrowserGatewayDetachedSessionSelection } from "@agentlink/protocol/browser-gateway-detached-session-selection";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import type { BgSessionInfo } from "@agentlink/protocol/background-result";
@@ -380,6 +383,8 @@ export class BrowserGatewayService implements vscode.Disposable {
   getOwnerProjectionSources(): BrowserGatewayOwnerProjectionSources {
     return {
       capture: () => this.captureOwnerProjectionReadSet(),
+      findTranscriptMessage: (sessionId, messageId) =>
+        this.findTranscriptMessage(sessionId, messageId),
       onDidChange: (listener) =>
         this.onDidChangeOwnerProjectionEmitter.event(listener),
     };
@@ -612,18 +617,18 @@ export class BrowserGatewayService implements vscode.Disposable {
       };
     }
 
-    // Read-only browser snapshots intentionally prefer persisted messages so the
-    // gateway can mirror the durable session history format without depending on
-    // the chat webview reducer. This can lag an active streaming turn by roughly
-    // the persistence interval; richer browser transcript views may need an
-    // in-memory tail or a live event projection instead.
-    const persistedMessages =
-      this.sessionManager.getPersistedSessionMessages(foreground.id) ??
-      foreground.getAllMessages();
-
     const projected = this.getProjectedForegroundState();
     const projectedMatchesForeground =
       projected && projected.sessionId === foreground.id;
+    // Loading persisted messages synchronously reads every attachment back from
+    // disk (hundreds of megabytes in an image-heavy chat), and this runs on
+    // every snapshot and status poll. Only do so when nothing is in memory.
+    const liveMessages = foreground.getAllMessages();
+    const sourceMessages =
+      projectedMatchesForeground || liveMessages.length > 0
+        ? liveMessages
+        : (this.sessionManager.getPersistedSessionMessages(foreground.id) ??
+          liveMessages);
     const foregroundAutoContinue = this.getDetachedSessionOwnerState(
       foreground.id,
     ).autoContinue;
@@ -640,13 +645,9 @@ export class BrowserGatewayService implements vscode.Disposable {
     // Deterministic ids keep repeated snapshots of an unchanged transcript
     // stable; random ids made the browser treat every snapshot as a new user
     // turn and yank the transcript back to the bottom.
-    const persistedProjectedMessages = agentMessagesToChatMessages(
-      persistedMessages,
-      { baseIndex: 0 },
-    );
     const projectedMessages = projectedMatchesForeground
       ? projected.projectedMessages
-      : persistedProjectedMessages;
+      : agentMessagesToChatMessages(sourceMessages, { baseIndex: 0 });
     if (this.streamingMetrics.enabled) {
       this.streamingMetrics.record({
         type: "message_projection",
@@ -656,6 +657,8 @@ export class BrowserGatewayService implements vscode.Disposable {
       });
     }
 
+    const firstUserMessage = (messages: readonly ChatMessage[]) =>
+      messages.find((message) => message.role === "user")?.content;
     const foregroundProject = projectsById.get(
       foreground.projectScope.projectId,
     );
@@ -685,8 +688,12 @@ export class BrowserGatewayService implements vscode.Disposable {
         title: foreground.title,
         originalPrompt:
           (projectedMatchesForeground ? projected.originalPrompt : undefined) ??
-          persistedProjectedMessages.find((message) => message.role === "user")
-            ?.content,
+          firstUserMessage(projectedMessages) ??
+          (projectedMatchesForeground
+            ? firstUserMessage(
+                agentMessagesToChatMessages(sourceMessages, { baseIndex: 0 }),
+              )
+            : undefined),
         mode: projectedMatchesForeground ? projected.mode : foreground.mode,
         model: projectedMatchesForeground ? projected.model : foreground.model,
         status: foreground.status,
@@ -706,7 +713,7 @@ export class BrowserGatewayService implements vscode.Disposable {
               foreground.status !== "tool_executing" &&
               foreground.status !== "awaiting_approval",
             ),
-        messages: persistedMessages,
+        messages: sourceMessages,
         projectedMessages,
         statusOverride: projectedMatchesForeground
           ? projected.statusOverride
@@ -886,7 +893,7 @@ export class BrowserGatewayService implements vscode.Disposable {
               session.status !== "tool_executing" &&
               session.status !== "awaiting_approval",
             ),
-        projectedMessages,
+        projectedMessages: boundTranscriptMediaForWire(projectedMessages),
         statusOverride: projectedMatchesSession
           ? projected.statusOverride
           : null,
@@ -1110,6 +1117,55 @@ export class BrowserGatewayService implements vscode.Disposable {
     };
   }
 
+  private findTranscriptMessage(
+    sessionId: string,
+    messageId: string,
+  ): ChatMessage | undefined {
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session) return undefined;
+    const projected = this.getProjectedForegroundState();
+    const messages =
+      projected?.sessionId === session.id
+        ? projected.projectedMessages
+        : agentMessagesToChatMessages(session.getAllMessages(), {
+            baseIndex: 0,
+          });
+    return messages.find((message) => message.id === messageId);
+  }
+
+  /** Resolves media that wire snapshots reference instead of inlining. */
+  getTranscriptDetailContent(
+    request: Extract<
+      BrowserGatewayOwnerCommandBody,
+      { kind: "transcript.block-detail" }
+    >,
+  ): Uint8Array {
+    return encodeTranscriptMessageDetail(
+      request,
+      this.findTranscriptMessage(request.sessionId, request.messageId),
+    );
+  }
+
+  /** Snapshot for HTTP and SSE clients, with large media left out. */
+  getWireSnapshotState(): BrowserGatewaySnapshotState {
+    const snapshot = this.getSerializableSnapshotState();
+    const foreground = snapshot.session.foreground;
+    if (!foreground) return snapshot;
+    return {
+      ...snapshot,
+      session: {
+        ...snapshot.session,
+        foreground: {
+          ...foreground,
+          projectedMessages: boundTranscriptMediaForWire(
+            foreground.projectedMessages,
+          ),
+        },
+      },
+    };
+  }
+
+  /** Full in-process snapshot. Never serialize it; use the wire snapshot. */
   getSerializableSnapshotState(): BrowserGatewaySnapshotState {
     return {
       ui: this.getSerializableState(),
@@ -1718,7 +1774,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     const snapshotStartedAt = this.streamingMetrics.enabled
       ? performance.now()
       : 0;
-    const snapshot = this.getSerializableSnapshotState();
+    const snapshot = this.getWireSnapshotState();
     this.recordSnapshotBuild(snapshot, snapshotStartedAt);
     const serializationStartedAt = this.streamingMetrics.enabled
       ? performance.now()
@@ -1762,7 +1818,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     const snapshotStartedAt = this.streamingMetrics.enabled
       ? performance.now()
       : 0;
-    const snapshot = this.getSerializableSnapshotState();
+    const snapshot = this.getWireSnapshotState();
     this.recordSnapshotBuild(snapshot, snapshotStartedAt);
     const serializationStartedAt = this.streamingMetrics.enabled
       ? performance.now()

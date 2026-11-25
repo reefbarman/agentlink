@@ -3373,6 +3373,19 @@ function controlPayloadFields(
   }
 }
 
+export function parseBrowserGatewayBlockDetailRequest(
+  value: unknown,
+): Extract<
+  BrowserGatewayOwnerCommandBody,
+  { kind: "transcript.block-detail" }
+> {
+  const command = parseCommandBody(value, "$");
+  if (command.kind !== "transcript.block-detail") {
+    throw new Error("browser_gateway_block_detail_request_invalid");
+  }
+  return command;
+}
+
 function parseCommandBody(
   value: unknown,
   path: string,

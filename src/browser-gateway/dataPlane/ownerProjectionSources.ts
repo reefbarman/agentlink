@@ -204,6 +204,11 @@ export interface BrowserGatewayOwnerProjectionReadSet {
  */
 export interface BrowserGatewayOwnerProjectionSources {
   capture(): BrowserGatewayOwnerProjectionReadSet;
+  /** Finds a message in a session that is not the projected foreground one. */
+  findTranscriptMessage?(
+    sessionId: string,
+    messageId: string,
+  ): ChatMessage | undefined;
   onDidChange(
     listener: (source: BrowserGatewayOwnerProjectionSourceKind) => void,
   ): BrowserGatewayOwnerProjectionDisposable;

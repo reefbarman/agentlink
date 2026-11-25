@@ -63,6 +63,8 @@ export interface CredentialsHelperEntryOptions {
   /** Shown by macOS in Keychain prompts and Keychain Access. */
   label: string;
   timeoutMs?: number;
+  /** Called synchronously with the process id of each started helper. */
+  onSpawn?: (pid: number) => void;
   spawn?: typeof spawnProcess;
 }
 
@@ -126,6 +128,7 @@ function runHelper(
     const child = spawn(options.helperPath, [], {
       stdio: ["pipe", "pipe", "ignore"],
     });
+    if (child.pid !== undefined) options.onSpawn?.(child.pid);
     const chunks: Buffer[] = [];
     let size = 0;
     const timer = setTimeout(() => {

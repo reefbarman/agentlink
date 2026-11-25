@@ -60,6 +60,8 @@ import {
   type BrowserGatewayRouteErrorPolicy,
   type BrowserGatewayRouteMatch,
 } from "./browserGatewayHttpRouter.js";
+import { parseBrowserGatewayBlockDetailRequest } from "./dataPlane/protocol.js";
+import { stringContentExceeds } from "./wireTranscriptMedia.js";
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "./dataPlane/limits.js";
 import { readJsonBody } from "./nodeHttpPrimitives.js";
 import { decodeVoiceTranscribeBody } from "./voiceInputHttp.js";
@@ -196,7 +198,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
   getSnapshot(): BrowserGatewaySnapshot {
     const startedAt = this.streamingMetrics.enabled ? performance.now() : 0;
-    const snapshot = this.gatewayService.getSerializableSnapshotState();
+    const snapshot = this.gatewayService.getWireSnapshotState();
     if (this.streamingMetrics.enabled) {
       this.streamingMetrics.record({
         type: "snapshot_build",
@@ -677,6 +679,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
         rawExact("/api/markdown-image"),
         ({ req, res }) => this.handleMarkdownImageAction(req, res),
         json("markdown image action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/transcript-detail"),
+        ({ req, res }) => this.handleTranscriptDetailRequest(req, res),
+        json("transcript detail request failed"),
       ),
       route(
         "POST",
@@ -3539,6 +3547,17 @@ export class BrowserGatewayServer implements vscode.Disposable {
       this.writeJson(res, 404, { error: "stale_selection" });
       return;
     }
+    // Check before serializing: building an oversized payload only to reject it
+    // is what exhausts the heap.
+    if (
+      stringContentExceeds(
+        detail,
+        BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedSessionDetailResponseBytes,
+      )
+    ) {
+      this.writeJson(res, 413, { error: "session_detail_too_large" });
+      return;
+    }
     const serialized = JSON.stringify(detail);
     const byteLength = Buffer.byteLength(serialized, "utf8");
     if (
@@ -3553,6 +3572,30 @@ export class BrowserGatewayServer implements vscode.Disposable {
       "Content-Length": byteLength,
     });
     res.end(serialized);
+  }
+
+  private async handleTranscriptDetailRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const body: unknown = await readJsonBody(req);
+    let request: ReturnType<typeof parseBrowserGatewayBlockDetailRequest>;
+    try {
+      request = parseBrowserGatewayBlockDetailRequest(body);
+    } catch {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const content = this.gatewayService.getTranscriptDetailContent(request);
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Length": content.byteLength,
+    });
+    res.end(content);
   }
 
   private parseSessionDetailId(value: string | null): string | null {

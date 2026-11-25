@@ -8,14 +8,40 @@ import type {
   RemoteFinalResultDetail,
   RemoteWorkSummaryDetail,
 } from "@agentlink/protocol/chat-transcript";
-import type {
-  TranscriptBlockDetailRequest,
-  TranscriptBlockDetailResponse,
-  TranscriptDisplayBlock,
+import {
+  parseTranscriptBlockDetailResponse,
+  type TranscriptBlockDetailRequest,
+  type TranscriptBlockDetailResponse,
+  type TranscriptDisplayBlock,
 } from "../dataPlane/transcriptBlockDetail";
 
 import type { WorkSummary } from "@agentlink/protocol/final-status";
 import type { FleetResultEnvelope } from "@agentlink/protocol/fleet-result";
+
+/** Requests transcript detail straight from a VS Code window's HTTP bridge. */
+export async function requestDirectTranscriptDetail(options: {
+  authToken: string;
+  url: string;
+  request: TranscriptBlockDetailRequest;
+  fetch?: typeof globalThis.fetch;
+}): Promise<TranscriptBlockDetailResponse> {
+  const response = await (options.fetch ?? globalThis.fetch)(options.url, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      Authorization: `Bearer ${options.authToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(options.request),
+  });
+  if (!response.ok) {
+    throw new Error(`Details could not be loaded (HTTP ${response.status}).`);
+  }
+  return parseTranscriptBlockDetailResponse(
+    new Uint8Array(await response.arrayBuffer()),
+    options.request,
+  );
+}
 
 /** Fetches the complete structured final result over the existing read-only detail route. */
 export async function loadRemoteFinalResult(

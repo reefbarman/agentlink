@@ -2352,10 +2352,14 @@ body.chat-activity-shelf-resizing * {
   margin: 0;
 }
 
-/* Floats over the block's bottom-right corner; never reserves layout space. */
+/* Floats over the block's bottom-left corner; never reserves layout space.
+   Bottom keeps it reachable without scrolling back up a long block, and left
+   keeps it clear of the message-level copy button, which sits at the
+   bottom-right of the message and would otherwise stack on top of it when a
+   message ends with a code block. */
 .code-block-copy-button {
   position: absolute;
-  right: 6px;
+  left: 6px;
   bottom: 6px;
   display: flex;
   align-items: center;
@@ -2551,10 +2555,11 @@ body.chat-activity-shelf-resizing * {
   height: auto;
 }
 
+/* Left padding leaves room for the bottom-left code block copy button. */
 .special-block-actions {
   display: flex;
   gap: 6px;
-  padding: 0 8px 6px;
+  padding: 0 8px 6px 34px;
 }
 
 .special-block-toggle-code,

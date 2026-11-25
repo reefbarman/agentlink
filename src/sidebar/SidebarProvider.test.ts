@@ -561,6 +561,9 @@ describe("SidebarProvider retained activity behavior", () => {
     ["resumeIndex", ["agentlink.resumeIndex"]],
     ["maintainIndex", ["agentlink.maintainIndex"]],
     ["setOpenaiApiKey", ["agentlink.setOpenaiApiKey"]],
+    ["enableSemanticEmbeddings", ["agentlink.enableSemanticEmbeddings"]],
+    ["disableSemanticEmbeddings", ["agentlink.disableSemanticEmbeddings"]],
+    ["openSemanticEmbeddingsHelp", ["agentlink.openSemanticEmbeddingsHelp"]],
     [
       "setOpenaiModelsAndEmbeddingsApiKey",
       ["agentlink.codexSignIn", "apiKeyOnly"],

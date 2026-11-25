@@ -63,6 +63,8 @@ export interface IndexStatus {
     totalFilesInIndex: number;
     chunksCreated: number;
     totalChunksInIndex: number;
+    embeddedChunksInIndex?: number;
+    unmeasuredChunksInIndex?: number;
     durationMs: number;
     errorCount?: number;
     cancelled?: boolean;
@@ -325,6 +327,8 @@ export class IndexerManager implements vscode.Disposable {
           totalFilesInIndex: aggregateStats.totalFilesInIndex,
           chunksCreated: aggregateStats.chunksCreated,
           totalChunksInIndex: aggregateStats.totalChunksInIndex,
+          embeddedChunksInIndex: aggregateStats.embeddedChunksInIndex,
+          unmeasuredChunksInIndex: aggregateStats.unmeasuredChunksInIndex,
           durationMs: aggregateStats.durationMs,
           errorCount: aggregateStats.errors.length || undefined,
           cancelled: aggregateStats.cancelled || undefined,
@@ -856,6 +860,14 @@ export class IndexerManager implements vscode.Disposable {
     target.totalFilesInIndex += source.totalFilesInIndex;
     target.chunksCreated += source.chunksCreated;
     target.totalChunksInIndex += source.totalChunksInIndex;
+    if (source.embeddedChunksInIndex !== undefined) {
+      target.embeddedChunksInIndex =
+        (target.embeddedChunksInIndex ?? 0) + source.embeddedChunksInIndex;
+    }
+    if (source.unmeasuredChunksInIndex !== undefined) {
+      target.unmeasuredChunksInIndex =
+        (target.unmeasuredChunksInIndex ?? 0) + source.unmeasuredChunksInIndex;
+    }
     target.recordsUpserted += source.recordsUpserted;
     target.recordsDeleted += source.recordsDeleted;
     target.errors.push(...source.errors);
@@ -923,6 +935,8 @@ export class IndexerManager implements vscode.Disposable {
             totalFilesInIndex: msg.stats.totalFilesInIndex,
             chunksCreated: msg.stats.chunksCreated,
             totalChunksInIndex: msg.stats.totalChunksInIndex,
+            embeddedChunksInIndex: msg.stats.embeddedChunksInIndex,
+            unmeasuredChunksInIndex: msg.stats.unmeasuredChunksInIndex,
             durationMs: msg.stats.durationMs,
             errorCount: msg.stats.errors.length || undefined,
             cancelled: msg.stats.cancelled || undefined,
@@ -1202,6 +1216,8 @@ export class IndexerManager implements vscode.Disposable {
           totalFilesInIndex: aggregateStats.totalFilesInIndex,
           chunksCreated: aggregateStats.chunksCreated,
           totalChunksInIndex: aggregateStats.totalChunksInIndex,
+          embeddedChunksInIndex: aggregateStats.embeddedChunksInIndex,
+          unmeasuredChunksInIndex: aggregateStats.unmeasuredChunksInIndex,
           durationMs: aggregateStats.durationMs,
           errorCount: aggregateStats.errors.length || undefined,
           cancelled: aggregateStats.cancelled || undefined,

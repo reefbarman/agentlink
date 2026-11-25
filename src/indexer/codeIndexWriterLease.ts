@@ -3,6 +3,7 @@ import * as path from "node:path";
 
 import { randomUUID } from "node:crypto";
 import {
+  isRetrievalStoreLockHeldHere,
   withRetrievalStoreLock,
   type RetrievalStoreLockOptions,
 } from "../storage/retrieval/retrievalStoreLock.js";
@@ -92,16 +93,77 @@ export async function acquireCodeIndexWriterLease(args: {
 export async function renewCodeIndexWriterLease(
   lease: CodeIndexWriterLease,
   options?: CodeIndexWriterLeaseOptions,
+  lockOptions?: RetrievalStoreLockOptions,
 ): Promise<void> {
   const resolved = resolveOptions(options);
-  await withRetrievalStoreLock(lease.storeRoot, async () => {
-    const statePath = getCodeIndexWriterLeasePath(lease.storeRoot);
-    const current = requireCurrentLease(statePath, lease);
-    writeAtomicJsonFile(statePath, {
-      ...current,
-      heartbeatAt: resolved.now(),
-    });
-  });
+  await withRetrievalStoreLock(
+    lease.storeRoot,
+    async () => refreshHeldCodeIndexWriterLease(lease, resolved.now()),
+    lockOptions,
+  );
+}
+
+/**
+ * Renews the lease for a caller that already holds the store lock. Operations
+ * that hold it longer than the stale limit must do this before releasing it,
+ * or a waiting writer could take the lease from a live owner.
+ */
+export function refreshHeldCodeIndexWriterLease(
+  lease: CodeIndexWriterLease,
+  heartbeatAt = Date.now(),
+): void {
+  const statePath = getCodeIndexWriterLeasePath(lease.storeRoot);
+  const current = requireCurrentLease(statePath, lease);
+  writeAtomicJsonFile(statePath, { ...current, heartbeatAt });
+}
+
+export interface CodeIndexWriterHeartbeat {
+  /** Cancels a waiting renewal and resolves once none is running. */
+  stop(): Promise<void>;
+}
+
+/**
+ * Renews the lease on an interval, at most one renewal at a time. Renewals
+ * pause while this process holds the store lock: nobody can take the lease
+ * then, and the holder renews it before letting go.
+ */
+export function startCodeIndexWriterHeartbeat(
+  lease: CodeIndexWriterLease,
+  options: {
+    onError: (error: unknown) => void;
+    intervalMs?: number;
+    lockOptions?: RetrievalStoreLockOptions;
+  },
+): CodeIndexWriterHeartbeat {
+  const controller = new AbortController();
+  let renewal: Promise<void> | undefined;
+  const timer = setInterval(() => {
+    if (renewal || isRetrievalStoreLockHeldHere(lease.storeRoot)) return;
+    renewal = renewCodeIndexWriterLease(lease, undefined, {
+      ...options.lockOptions,
+      signal: controller.signal,
+    })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        // Our own job took the lock while this renewal was waiting for it.
+        const busyWithOwnWork =
+          error instanceof Error &&
+          error.message.startsWith("retrieval_store_lock_") &&
+          isRetrievalStoreLockHeldHere(lease.storeRoot);
+        if (!busyWithOwnWork) options.onError(error);
+      })
+      .finally(() => {
+        renewal = undefined;
+      });
+  }, options.intervalMs ?? 5_000);
+  timer.unref();
+  return {
+    async stop() {
+      clearInterval(timer);
+      controller.abort();
+      await renewal;
+    },
+  };
 }
 
 export async function releaseCodeIndexWriterLease(
@@ -134,16 +196,11 @@ export async function withCodeIndexWriterFence<T>(
   return withRetrievalStoreLock(
     lease.storeRoot,
     async () => {
-      const statePath = getCodeIndexWriterLeasePath(lease.storeRoot);
       assertCodeIndexWriterFenceCurrent(lease);
       try {
         return await operation();
       } finally {
-        const current = requireCurrentLease(statePath, lease);
-        writeAtomicJsonFile(statePath, {
-          ...current,
-          heartbeatAt: Date.now(),
-        });
+        refreshHeldCodeIndexWriterLease(lease);
       }
     },
     lockOptions,

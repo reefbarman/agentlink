@@ -11,6 +11,8 @@ interface OpenAiApiKeyStore {
 
 export interface ModelAuthCommandDependencies {
   openAiAuthManager: OpenAiApiKeyStore;
+  /** Refreshes state that depends on stored embedding credentials. */
+  onApiKeyStored?: () => void;
 }
 
 export function getSemanticSetupTitle(
@@ -53,6 +55,7 @@ export function getSemanticSetupDetail(
 
 export function registerModelAuthCommands({
   openAiAuthManager,
+  onApiKeyStored,
 }: ModelAuthCommandDependencies): vscode.Disposable[] {
   return [
     vscode.commands.registerCommand("agentlink.setOpenaiApiKey", async () => {
@@ -67,6 +70,7 @@ export function registerModelAuthCommands({
       });
       if (!key) return;
       await openAiAuthManager.storeApiKey(key.trim(), "embeddings-only");
+      onApiKeyStored?.();
       vscode.window.showInformationMessage(
         "OpenAI API key stored securely for embeddings (semantic search/indexing).",
       );
@@ -77,15 +81,21 @@ export function registerModelAuthCommands({
         const action = await vscode.window.showQuickPick(
           [
             {
+              label: "Turn on semantic search (embeddings)",
+              description:
+                "Review what is sent to OpenAI, then add vector and hybrid ranking",
+              value: "enableEmbeddings",
+            },
+            {
               label: "Set OpenAI API key for embeddings only",
               description:
-                "Optional: add vector and hybrid ranking when model chat already uses OAuth",
+                "Stores the key only; semantic search stays off until you turn it on",
               value: "embeddingsKey",
             },
             {
               label: "Set OpenAI API key for models + embeddings",
               description:
-                "Use one API key for model chat and optional vector/hybrid ranking",
+                "Use one API key for model chat and, once turned on, semantic search",
               value: "modelsAndEmbeddingsKey",
             },
             {
@@ -114,6 +124,13 @@ export function registerModelAuthCommands({
 
         if (!action) return;
 
+        if (action.value === "enableEmbeddings") {
+          await vscode.commands.executeCommand(
+            "agentlink.enableSemanticEmbeddings",
+          );
+          return;
+        }
+
         if (action.value === "embeddingsKey") {
           await vscode.commands.executeCommand("agentlink.setOpenaiApiKey");
           const start = await vscode.window.showInformationMessage(
@@ -138,6 +155,7 @@ export function registerModelAuthCommands({
           });
           if (!key) return;
           await openAiAuthManager.storeApiKey(key.trim(), "models+embeddings");
+          onApiKeyStored?.();
           vscode.window.showInformationMessage(
             "OpenAI API key stored securely for models and embeddings.",
           );

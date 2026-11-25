@@ -67,7 +67,7 @@ The prompt names the copy, so it says which surface is asking. The item it asks 
 - The helper only serves VS Code and AgentLink's own signed CLI and Desktop. It accepts no code and does nothing but get, store and delete AgentLink's items.
 - Builds without the helper (unsigned previews, Linux, Windows, source runs) use the Keychain directly, as before, and can still prompt after another surface writes.
 - If prompts continue from **AgentLink Credentials** after **Always Allow**, check whether the copy was rebuilt with a different signing certificate.
-- Helper requests from every window wait in one queue. If a host crashes while holding it, AgentLink takes the queue back once the host is gone and its prompt window (five minutes) has passed, or right away after a restart. Until then, credential reads wait and chat can show "Checking model setup".
+- Helper requests from every window wait in one queue. If a host crashes while holding it, AgentLink takes the queue back as soon as the host and the helper it started are both gone, or right away after a restart. If it cannot tell whether a helper is still prompting, it waits out the five-minute prompt window first. Until then, credential reads wait and chat can show "Checking model setup".
 
 ### Credentials on Linux
 
@@ -113,7 +113,7 @@ Open a folder or workspace in VS Code. Projectless chats intentionally have no w
 - Open a workspace folder.
 - Check that local codebase indexing is enabled and allowed to finish.
 - Local lexical and structural retrieval run on-device without credentials.
-- Vector and hybrid retrieval additionally require OpenAI embedding credentials and an explicit `agentlink.semanticEmbeddingsEnabled: true` opt-in.
+- Vector and hybrid retrieval additionally require OpenAI embedding credentials and an explicit `agentlink.semanticEmbeddingsEnabled: true` opt-in. Turn it on from the sidebar's **Codebase Index** section, then rebuild so existing files get embeddings. See [semantic search](semantic-search.md).
 - Check the query result's `ranking`, `ranking_reason`, and `guidance`. `embeddings_disabled` means intentional local lexical search. Embedding HTTP/network failures point to service availability or credentials; missing, unavailable, or unhealthy indexes point to local setup, repair, or rebuild. Keyword fallback remains usable while those problems are addressed.
 - Snapshot and fixture paths are downweighted, not hidden. Use query-mode `exclude_globs` when those files are out of scope, or narrow `path` to the relevant source directory.
 

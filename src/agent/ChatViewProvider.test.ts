@@ -9039,6 +9039,82 @@ describe("ChatViewProvider session state sync", () => {
     expect(sendInitialState).toHaveBeenCalled();
   });
 
+  it("reports embedding coverage and never shows empty vectors as ready", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    vi.spyOn(
+      provider as unknown as { sendInitialState(): void },
+      "sendInitialState",
+    ).mockImplementation(() => undefined);
+    provider.setContextHealthSources({
+      memory: {
+        health: vi.fn(async () => {
+          throw new Error("unused");
+        }),
+      },
+      retrieval: {
+        health: vi.fn(async () => ({
+          status: "ready" as const,
+          lexical: "ready" as const,
+          scalar: "ready" as const,
+          vector: "ready" as const,
+          structural: "ready" as const,
+          embeddingCredentials: "available" as const,
+          reasons: [],
+          fingerprintDisposition: "compatible" as const,
+          pendingPublications: 0,
+          sourceCount: 1,
+          chunkCount: 10,
+          relationCount: 0,
+          staleSourceCount: 0,
+        })),
+      },
+      semanticIndexEnabled: true,
+      embeddings: async () => ({ enabled: true, credentials: "available" }),
+    });
+    const listener = vi.fn();
+    provider.setContextHealthListener(listener);
+    const index = (embeddedChunksInIndex: number) =>
+      provider.updateContextIndexHealth(
+        {
+          state: "idle",
+          lastCompleted: {
+            totalFilesInIndex: 1,
+            totalChunksInIndex: 10,
+            embeddedChunksInIndex,
+            unmeasuredChunksInIndex: 0,
+          },
+        },
+        true,
+      );
+
+    index(0);
+    await provider.refreshContextHealth();
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        retrieval: expect.objectContaining({ vector: "unavailable" }),
+        embeddings: expect.objectContaining({ status: "unavailable" }),
+      }),
+    );
+
+    index(10);
+    await provider.refreshContextHealth();
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        retrieval: expect.objectContaining({ vector: "ready" }),
+        embeddings: {
+          status: "ready",
+          enabled: true,
+          embeddedChunkCount: 10,
+          chunkCount: 10,
+        },
+      }),
+    );
+  });
+
   it("keeps the latest index state and ignores stale health refreshes", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(

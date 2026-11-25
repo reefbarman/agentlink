@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -114,16 +115,21 @@ export async function createKeychainSecretStorage(
   const lockRoot =
     options.lockRoot ??
     path.join(os.homedir(), ".agentlink", "credential-locks");
+  // Set while this entry owns the helper queue, so the lock records which
+  // helper process may be prompting.
+  const helperSpawn: HelperSpawnListener = {};
   const helperEntry = helperPath
     ? serializeHelperAccess(
         createCredentialsHelperEntry({
           helperPath,
+          onSpawn: (pid) => helperSpawn.current?.(pid),
           service,
           account,
           label: options.label ?? describeSharedCredential(account),
         }),
         path.join(lockRoot, "credentials-helper.lock"),
         options,
+        helperSpawn,
       )
     : undefined;
   const entry: KeychainEntry = helperEntry
@@ -207,6 +213,10 @@ export async function createKeychainSecretStorage(
   return storage;
 }
 
+interface HelperSpawnListener {
+  current?: (pid: number) => void;
+}
+
 interface KeychainEntry {
   getPassword(): Promise<string | null | undefined>;
   setPassword(value: string): Promise<void>;
@@ -224,18 +234,32 @@ function serializeHelperAccess(
   helper: KeychainEntry,
   lockPath: string,
   options: KeychainSecretStorageOptions,
+  helperSpawn: HelperSpawnListener,
 ): KeychainEntry {
   const run = <T>(operation: () => Promise<T>): Promise<T> =>
-    withFileLock(lockPath, operation, {
-      ...options,
-      // A prompt can legitimately wait for the user. Other consumers should
-      // keep waiting rather than time out and start independent requests.
-      lockTimeoutMs: Math.max(options.lockTimeoutMs ?? 0, 5 * 60_000),
-      // A crashed owner never releases the queue, which left every consumer
-      // (and so the model catalog) waiting forever. Its helper can outlive
-      // it with a prompt open, so wait out the helper's own timeout first.
-      reclaimDeadOwnerAfterMs: CREDENTIALS_HELPER_TIMEOUT_MS,
-    });
+    withFileLock(
+      lockPath,
+      async (recordHelperPid) => {
+        // The lock serializes operations, so only one can own this listener.
+        helperSpawn.current = recordHelperPid;
+        try {
+          return await operation();
+        } finally {
+          helperSpawn.current = undefined;
+        }
+      },
+      {
+        ...options,
+        // A prompt can legitimately wait for the user. Other consumers should
+        // keep waiting rather than time out and start independent requests.
+        lockTimeoutMs: Math.max(options.lockTimeoutMs ?? 0, 5 * 60_000),
+        // A crashed owner never releases the queue, which left every consumer
+        // (and so the model catalog) waiting forever. Its helper can outlive
+        // it with a prompt open, so wait for the recorded helper to exit, or
+        // wait out the helper's own timeout when none was recorded.
+        reclaimDeadOwnerAfterMs: CREDENTIALS_HELPER_TIMEOUT_MS,
+      },
+    );
   return {
     getPassword: () => run(() => helper.getPassword()),
     setPassword: (value) => run(() => helper.setPassword(value)),
@@ -380,9 +404,12 @@ function safeLockSegment(value: string): string {
 /** Atomically publish the helper queue as one owner-bearing file. */
 async function withFileLock<T>(
   lockPath: string,
-  operation: () => Promise<T>,
+  operation: (recordHelperPid: (pid: number) => void) => Promise<T>,
   options: KeychainSecretStorageOptions & {
-    /** Reclaim a lock whose owner process is gone once it is this old. */
+    /**
+     * Reclaim a lock whose owner process is gone once it is this old, or at
+     * once when the helper process it recorded is gone too.
+     */
     reclaimDeadOwnerAfterMs?: number;
   },
 ): Promise<T> {
@@ -422,18 +449,31 @@ async function withFileLock<T>(
     }
   }
   try {
-    return await operation();
+    return await operation((pid) => {
+      // Synchronous, so a crash straight after the spawn still leaves the
+      // helper on record. Best effort: without it, reclaiming just waits.
+      try {
+        writeSync(handle.fd, `:${pid}`);
+      } catch {
+        // Keep the owner-only record.
+      }
+    });
   } finally {
     await handle.close();
     const currentOwner = await fs.readFile(lockPath, "utf-8").catch(() => null);
-    if (currentOwner === ownerToken) await fs.rm(lockPath, { force: true });
+    if (
+      currentOwner === ownerToken ||
+      currentOwner?.startsWith(`${ownerToken}:`)
+    )
+      await fs.rm(lockPath, { force: true });
   }
 }
 
 /**
  * Remove a file lock whose owner can no longer hold it: one written before
- * this boot, or one whose owner process (from its `<pid>:<token>` record) is
- * gone and that has outlived `deadOwnerAfterMs`. An unreadable record (a crash
+ * this boot, or one whose owner process (from its `<pid>:<token>` record, with
+ * `:<helper pid>` appended once a helper starts) is gone and that has either
+ * outlived `deadOwnerAfterMs` or recorded only helpers that are gone too. An unreadable record (a crash
  * between create and write) counts as a dead owner. Returns true when the
  * lock was removed, so the caller can retry at once.
  */
@@ -456,11 +496,14 @@ async function reclaimDeadOwnerFileLock(
   const bootedAt = Date.now() - os.uptime() * 1000;
   const writtenBeforeBoot = modifiedAt < bootedAt;
   if (!writtenBeforeBoot) {
-    if (Date.now() - modifiedAt < deadOwnerAfterMs) return false;
-    const pid = Number(owner.split(":", 1)[0]);
-    if (Number.isSafeInteger(pid) && pid > 0 && isProcessAlive(pid)) {
+    const [ownerPid, , ...helperPids] = owner.split(":");
+    const helpersExited =
+      helperPids.length > 0 &&
+      helperPids.every((pid) => isLockPid(pid) && !isProcessAlive(Number(pid)));
+    if (!helpersExited && Date.now() - modifiedAt < deadOwnerAfterMs) {
       return false;
     }
+    if (isLockPid(ownerPid) && isProcessAlive(Number(ownerPid))) return false;
   }
 
   // Move the lock aside before deleting it, so a live owner that replaced
@@ -480,6 +523,11 @@ async function reclaimDeadOwnerFileLock(
   }
   await fs.rm(stalePath, { force: true });
   return true;
+}
+
+function isLockPid(value: string | undefined): boolean {
+  const pid = Number(value);
+  return Number.isSafeInteger(pid) && pid > 0;
 }
 
 function isProcessAlive(pid: number): boolean {

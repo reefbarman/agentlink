@@ -54,6 +54,7 @@ import type {
 
 import {
   encodeTranscriptBlockDetail,
+  encodeTranscriptMessageDetail,
   transcriptBlockDetailSummary,
   displayMediaContentRevision,
   encodeDisplayImageDetail,
@@ -311,6 +312,14 @@ export class BrowserGatewayOwnerProjectionAdapter {
         ? (foreground.messages.find((item) => item.id === request.messageId) ??
           this.historyMessages.get(request.messageId))
         : undefined;
+    if (!message) {
+      // Session detail for an unfocused tab carries lazy media references too.
+      const detached = this.sources.findTranscriptMessage?.(
+        request.sessionId,
+        request.messageId,
+      );
+      if (detached) return encodeTranscriptMessageDetail(request, detached);
+    }
     if (request.resource?.kind === "display-image") {
       return encodeDisplayImageDetail(
         request,

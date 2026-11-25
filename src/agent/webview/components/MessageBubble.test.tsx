@@ -105,7 +105,9 @@ describe("user-selected MCP prompt cards", () => {
         <MessageBubble message={message!} streaming={false} />,
       );
       await act(async () => {
-        fireEvent.click(view.getByRole("button", { name: "Copy as Markdown" }));
+        fireEvent.click(
+          view.getByRole("button", { name: "Copy message as Markdown" }),
+        );
       });
       expect(writeText).toHaveBeenCalledWith(
         "Readable template.\n\nMy follow-up.",

@@ -1314,6 +1314,49 @@ describe("BrowserGatewayServer", () => {
       error: "session_detail_too_large",
     });
 
+    // Oversized payloads are rejected without being serialized.
+    const neverSerialized = vi.fn(() => ({}));
+    getSerializableSessionDetail.mockReturnValueOnce({
+      toJSON: neverSerialized,
+      content: "x".repeat(
+        BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedSessionDetailResponseBytes +
+          1,
+      ),
+    } as never);
+    const unserializedSessionDetail = await fetch(
+      `${baseUrl}/api/session-detail?${sessionDetailQuery}`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(unserializedSessionDetail.status).toBe(413);
+    expect(neverSerialized).not.toHaveBeenCalled();
+
+    const detailRequest = {
+      kind: "transcript.block-detail",
+      sessionId: "session-1",
+      messageId: "t3",
+      blockId: "display-media",
+      contentRevision: 7,
+      resource: { kind: "display-image", index: 0 },
+    };
+    const getTranscriptDetailContent = vi
+      .spyOn(service, "getTranscriptDetailContent")
+      .mockReturnValue(new TextEncoder().encode('{"state":"not_found"}'));
+    const postTranscriptDetail = (body: unknown, token = "test-token") =>
+      fetch(`${baseUrl}/api/transcript-detail`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+    const transcriptDetail = await postTranscriptDetail(detailRequest);
+    expect(transcriptDetail.status).toBe(200);
+    expect(getTranscriptDetailContent).toHaveBeenCalledWith(detailRequest);
+    expect((await postTranscriptDetail(detailRequest, "wrong")).status).toBe(
+      401,
+    );
+    expect((await postTranscriptDetail({ kind: "session.stop" })).status).toBe(
+      400,
+    );
+
     const staleSessionDetail = await fetch(
       `${baseUrl}/api/session-detail?${new URLSearchParams({
         controllerEpoch: "stale-controller",

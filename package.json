@@ -263,6 +263,18 @@
         "title": "AgentLink: Set Up Semantic Search"
       },
       {
+        "command": "agentlink.enableSemanticEmbeddings",
+        "title": "AgentLink: Turn On Semantic Search Embeddings"
+      },
+      {
+        "command": "agentlink.disableSemanticEmbeddings",
+        "title": "AgentLink: Turn Off Semantic Search Embeddings"
+      },
+      {
+        "command": "agentlink.openSemanticEmbeddingsHelp",
+        "title": "AgentLink: Learn About Semantic Search"
+      },
+      {
         "command": "agentlink.popChatTab",
         "title": "AgentLink: Pop Out Chat Tab"
       },

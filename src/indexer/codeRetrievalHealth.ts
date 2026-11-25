@@ -9,6 +9,7 @@ import type {
   RetrievalHealthSnapshot,
 } from "@agentlink/protocol/retrieval-health";
 
+import type { ContextEmbeddingConfiguration } from "@agentlink/protocol/context-health";
 import type { RetrievalFingerprintDisposition } from "@agentlink/protocol/retrieval-fingerprint";
 import { getCodeRetrievalStoreRoot } from "./codeRetrievalIdentity.js";
 
@@ -16,6 +17,10 @@ export interface CodeRetrievalHealthProviderOptions {
   globalStoragePath: string;
   enabled: boolean;
   getWorkspaceRoots: () => string[];
+  /** Without it, embeddings count as configured whenever the index has a model. */
+  getEmbeddingConfiguration?: (
+    workspaceRoot: string,
+  ) => Promise<ContextEmbeddingConfiguration>;
 }
 
 export function createCodeRetrievalHealthProvider(
@@ -36,8 +41,16 @@ export function createCodeRetrievalHealthProvider(
           if (!fs.existsSync(`${storeRoot}/${RETRIEVAL_STORE_MARKER}`))
             return unavailableHealth("missing_index");
 
+          const embeddings =
+            await options.getEmbeddingConfiguration?.(workspaceRoot);
           const repository = new LanceDbRetrievalRepository({
             root: storeRoot,
+            ...(embeddings
+              ? {
+                  embeddingConfigured: embeddings.enabled,
+                  embeddingAvailable: embeddings.credentials !== "missing",
+                }
+              : {}),
           });
           try {
             return await repository.health();

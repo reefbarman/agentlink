@@ -441,6 +441,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case "setOpenaiApiKey":
           vscode.commands.executeCommand("agentlink.setOpenaiApiKey");
           break;
+        case "enableSemanticEmbeddings":
+          vscode.commands.executeCommand("agentlink.enableSemanticEmbeddings");
+          break;
+        case "disableSemanticEmbeddings":
+          vscode.commands.executeCommand("agentlink.disableSemanticEmbeddings");
+          break;
+        case "openSemanticEmbeddingsHelp":
+          vscode.commands.executeCommand(
+            "agentlink.openSemanticEmbeddingsHelp",
+          );
+          break;
         case "setOpenaiModelsAndEmbeddingsApiKey":
           vscode.commands.executeCommand("agentlink.codexSignIn", "apiKeyOnly");
           break;

@@ -36,6 +36,7 @@ const REQUIRED_PATHS = [
   "resources/builtin-skills/documentation/references/standalone-cli.md",
   "resources/builtin-skills/documentation/references/embedding-agentlink.md",
   "resources/builtin-skills/documentation/references/agent-activity-ux.md",
+  "resources/builtin-skills/documentation/references/semantic-search.md",
   "resources/builtin-skills/documentation/references/tools.md",
   "resources/builtin-skills/documentation/references/troubleshooting.md",
   "resources/builtin-skills/documentation/references/complete-reference.md",

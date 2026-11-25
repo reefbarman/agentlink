@@ -32,6 +32,8 @@ export interface IndexStatusInfo {
     totalFilesInIndex: number;
     chunksCreated: number;
     totalChunksInIndex: number;
+    embeddedChunksInIndex?: number;
+    unmeasuredChunksInIndex?: number;
     durationMs: number;
     errorCount?: number;
     cancelled?: boolean;
@@ -151,6 +153,9 @@ type SimpleWebviewCommand =
   | "resumeIndex"
   | "maintainIndex"
   | "setOpenaiApiKey"
+  | "enableSemanticEmbeddings"
+  | "disableSemanticEmbeddings"
+  | "openSemanticEmbeddingsHelp"
   | "setOpenaiModelsAndEmbeddingsApiKey";
 
 type SessionRuleEditCommand = "editSessionRule";

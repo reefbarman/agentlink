@@ -35,6 +35,9 @@ export async function requestDirectSessionDetail(
     },
   );
   if (response.status === 404) return null;
+  if (response.status === 413) {
+    throw new Error("direct_session_detail_too_large");
+  }
   if (!response.ok) {
     throw new Error(`direct_session_detail_failed_${response.status}`);
   }

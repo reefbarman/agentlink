@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import {
@@ -7,7 +7,10 @@ import {
 } from "./interactionPayload.js";
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "./limits.js";
 import { BrowserGatewayProtocolError } from "./protocol.js";
-import { parseTranscriptBlockDetailResponse } from "./transcriptBlockDetail.js";
+import {
+  displayMediaContentRevision,
+  parseTranscriptBlockDetailResponse,
+} from "./transcriptBlockDetail.js";
 import {
   BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID,
   BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID,
@@ -925,6 +928,49 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
         missing,
       ).state,
     ).toBe("not_found");
+  });
+
+  it("resolves details for messages outside the foreground session", () => {
+    const sources = new ProjectionSources(readSet());
+    const findTranscriptMessage = vi.fn(() => ({
+      id: "t3",
+      role: "user" as const,
+      content: "",
+      timestamp: 0,
+      blocks: [],
+      displayMedia,
+    }));
+    const displayMedia = {
+      images: [
+        {
+          name: "a.png",
+          mimeType: "image/png",
+          src: "data:image/png;base64,QUJD",
+        },
+      ],
+      documents: [],
+    };
+    const adapter = makeAdapter(
+      Object.assign(sources, { findTranscriptMessage }),
+    );
+    const request = {
+      kind: "transcript.block-detail" as const,
+      sessionId: "detached-session",
+      messageId: "t3",
+      blockId: BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID,
+      contentRevision: displayMediaContentRevision(displayMedia),
+      resource: { kind: "display-image" as const, index: 0 },
+    };
+    expect(
+      parseTranscriptBlockDetailResponse(
+        adapter.getBlockDetailContent(request),
+        request,
+      ),
+    ).toMatchObject({ state: "media", data: "QUJD" });
+    expect(findTranscriptMessage).toHaveBeenCalledWith(
+      "detached-session",
+      "t3",
+    );
   });
 
   it("capability-gates typed background result fields", () => {

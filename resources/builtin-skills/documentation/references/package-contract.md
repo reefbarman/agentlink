@@ -40,7 +40,9 @@ This bundled reference is generated from the extension's `package.json` during b
 | `agentlink.completeToolCall`               | AgentLink: Complete Tool Call                              |
 | `agentlink.configureOpenAiCompatibleModel` | AgentLink: Configure OpenAI-compatible Model               |
 | `agentlink.continueToolCallInBackground`   | AgentLink: Continue Tool Call in Background                |
+| `agentlink.disableSemanticEmbeddings`      | AgentLink: Turn Off Semantic Search Embeddings             |
 | `agentlink.dockChatTab`                    | AgentLink: Dock Chat Tab                                   |
+| `agentlink.enableSemanticEmbeddings`       | AgentLink: Turn On Semantic Search Embeddings              |
 | `agentlink.explainWithAgent`               | Explain with AgentLink                                     |
 | `agentlink.fixWithAgent`                   | Fix with AgentLink                                         |
 | `agentlink.installAgentPluginFromSource`   | AgentLink: Install Agent Plugin From Source                |
@@ -52,6 +54,7 @@ This bundled reference is generated from the extension's `package.json` during b
 | `agentlink.managePairedDevices`            | AgentLink: Manage Paired Browser Devices                   |
 | `agentlink.migrateSessionHistory`          | AgentLink: Migrate Session History from a Previous Folder  |
 | `agentlink.openBrowserGateway`             | AgentLink: Open Browser Gateway                            |
+| `agentlink.openSemanticEmbeddingsHelp`     | AgentLink: Learn About Semantic Search                     |
 | `agentlink.openTerminal`                   | AgentLink: Open Terminal                                   |
 | `agentlink.pairBrowserDevice`              | AgentLink: Pair Browser Device                             |
 | `agentlink.popChatTab`                     | AgentLink: Pop Out Chat Tab                                |

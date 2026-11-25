@@ -758,6 +758,12 @@ h3 {
   background: var(--vscode-charts-yellow, #cca700);
   animation: pulse 1.2s ease-in-out infinite;
 }
+.dot.warning {
+  background: var(--vscode-editorWarning-foreground, #cca700);
+}
+.dot.off {
+  background: var(--vscode-descriptionForeground);
+}
 .dot.error {
   background: var(--vscode-errorForeground, #f44747);
 }
@@ -813,6 +819,11 @@ h3 {
 .index-source-toggle input[type="radio"] {
   margin-right: 4px;
   accent-color: var(--vscode-focusBorder, #007acc);
+}
+.embedding-status {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
 }
 .index-remediation {
   margin-top: 8px;

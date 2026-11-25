@@ -603,7 +603,7 @@ If indexing is already running, use **AgentLink: Cancel Indexing**. Once the ind
 
 ### 3. Optionally enable vector and hybrid ranking
 
-To add vector embeddings, configure embedding credentials with **AgentLink: Set OpenAI API Key for Embeddings** or provide `OPENAI_API_KEY` in the extension host environment, then explicitly enable the capability:
+The sidebar's **Codebase Index** section can turn this on with a review step; see [semantic search](semantic-search.md). To add vector embeddings by hand, configure embedding credentials with **AgentLink: Set OpenAI API Key for Embeddings** or provide `OPENAI_API_KEY` in the extension host environment, then explicitly enable the capability:
 
 ```jsonc
 {
@@ -611,7 +611,7 @@ To add vector embeddings, configure embedding credentials with **AgentLink: Set 
 }
 ```
 
-You can use an OpenAI API key for both model chat and embeddings, but credentials alone do not enable embeddings or authorize codebase data egress. When `agentlink.semanticEmbeddingsEnabled` is true, indexed source chunks and search queries are sent to OpenAI. The retrieval store and generated index remain local.
+You can use an OpenAI API key for both model chat and embeddings, but credentials alone do not enable embeddings or authorize codebase data egress. When `agentlink.semanticEmbeddingsEnabled` is true, indexed source chunks and search queries are sent to OpenAI. The retrieval store and generated index remain local. Rebuild the index afterwards: unchanged files keep their existing entries and get no embeddings otherwise.
 
 ### 4. Query the index
 
@@ -636,7 +636,7 @@ Each provider request gets an immutable model-aware context ledger. It records t
 
 The `read_file` context view complements that request ledger with content-addressed working-set tracking. Unchanged content omission is opt-in through `dedupe_unchanged_content`, applies only to the exact range already returned in the current session, and can be bypassed with `refresh`; overlapping ranges and separate full-file reads are tracked independently.
 
-Context Health separately projects autonomous memory, lexical/vector/structural retrieval, and index state. In VS Code it appears in the sidebar Activity section between Tool Calls and Codebase Index; the Browser Gateway keeps it in the Chat Activity Shelf. This operational health display is not part of `/context-doctor`: the doctor reports measured prompt sections, tool schemas, the latest completed request ledger, retained/repeated tool results, and condensation evidence, and labels diagnostics it does not yet instrument rather than guessing.
+Context Health separately projects autonomous memory, lexical/vector/structural retrieval, index state, and (in VS Code) embedding coverage. In VS Code it appears in the sidebar Activity section between Tool Calls and Codebase Index; the Browser Gateway keeps it in the Chat Activity Shelf. This operational health display is not part of `/context-doctor`: the doctor reports measured prompt sections, tool schemas, the latest completed request ledger, retained/repeated tool results, and condensation evidence, and labels diagnostics it does not yet instrument rather than guessing.
 
 ## Upgrading from the retired external-agent integration
 

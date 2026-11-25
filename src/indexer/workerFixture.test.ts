@@ -737,6 +737,23 @@ describe("indexer worker fixture", () => {
       expect(stats.errors).toEqual([
         expect.stringContaining("fixture partial embedding failure"),
       ]);
+      // Coverage is reported for this run and survives the cache round trip.
+      const coverage = {
+        totalChunksInIndex: stats.totalChunksInIndex,
+        embeddedChunksInIndex: stats.embeddedChunksInIndex,
+        unmeasuredChunksInIndex: 0,
+      };
+      expect(stats.embeddedChunksInIndex).toBeLessThan(
+        stats.totalChunksInIndex,
+      );
+      const unchanged = await fixture.complete(
+        startMessage(workspace, {
+          files: [source],
+          bearerToken: null,
+          force: false,
+        }),
+      );
+      expect(unchanged).toMatchObject({ filesIndexed: 0, ...coverage });
       await withRepository(workspace.retrievalStoreRoot, async (repository) => {
         const result = await repository.query({
           text: "FAIL_PARTIAL_EMBEDDING",

@@ -116,6 +116,10 @@ export interface IndexStats {
   chunksCreated: number;
   /** Total retrieval chunks across all cached files */
   totalChunksInIndex: number;
+  /** Chunks known to have a vector. */
+  embeddedChunksInIndex?: number;
+  /** Chunks indexed before vector counts were recorded. */
+  unmeasuredChunksInIndex?: number;
   recordsUpserted: number;
   recordsDeleted: number;
   durationMs: number;
@@ -174,6 +178,8 @@ export interface CachedFileEntry {
   size?: number;
   /** Durable replacement generation for protocol-created entries. */
   generation?: string;
+  /** Records with a vector. Missing when written before this was recorded. */
+  embeddedRecords?: number;
   /** New records remain hidden until journal cleanup and publication complete. */
   visibility?: "pending" | "current";
 }

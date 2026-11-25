@@ -75,7 +75,10 @@ import {
   retrievalSourceSchema,
 } from "./lanceDbSchemas.js";
 import type { CodeIndexWriterLease } from "../../indexer/codeIndexWriterLease.js";
-import { assertCodeIndexWriterFenceCurrent } from "../../indexer/codeIndexWriterLease.js";
+import {
+  assertCodeIndexWriterFenceCurrent,
+  refreshHeldCodeIndexWriterLease,
+} from "../../indexer/codeIndexWriterLease.js";
 import {
   RETRIEVAL_STORE_MAINTENANCE_TIMEOUT_MS,
   withRetrievalStoreLock,
@@ -101,6 +104,14 @@ const DELETE_SCOPE_ID_BATCH_SIZE = 200;
 // count that hydration can block the host process for minutes (chunk payloads
 // embed full source content), so the query degrades instead.
 const MAXIMUM_UNINDEXED_QUERY_CHUNKS = 2_048;
+/**
+ * Rows left out of the native indexes between maintenance runs. Lance scans
+ * unindexed rows for every query, so results stay complete, while folding even
+ * one row in rewrites the whole text index and often the main data file. On a
+ * 142,698-row store that took about 16s and 840 MB, against about 9ms per text
+ * query with 1,171 rows unindexed. Store optimization always indexes them.
+ */
+export const MAX_UNINDEXED_ROWS = 1_000;
 const RETRIEVAL_VERSION_RETENTION_MS = 60 * 60 * 1_000;
 const REQUIRED_RETRIEVAL_TABLES = [
   RETRIEVAL_TABLES.sources,
@@ -1635,6 +1646,9 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
           return await operation(await this.ensureTables(dimensions));
         } finally {
           this.closeNativeHandles();
+          if (this.options.codeIndexWriterLease) {
+            refreshHeldCodeIndexWriterLease(this.options.codeIndexWriterLease);
+          }
         }
       },
       lockOptions,
@@ -2314,6 +2328,8 @@ const defaultIndexOperations: LanceDbRetrievalIndexOperations = {
   async createLexical(table) {
     const indexes = await table.listIndices();
     if (indexes.some((index) => index.name === LEXICAL_INDEX_NAME)) {
+      const stats = await table.indexStats(LEXICAL_INDEX_NAME);
+      if (stats && stats.numUnindexedRows <= MAX_UNINDEXED_ROWS) return;
       await table.optimize({
         cleanupOlderThan: new Date(Date.now() - RETRIEVAL_VERSION_RETENTION_MS),
         deleteUnverified: false,
@@ -2336,7 +2352,8 @@ const defaultIndexOperations: LanceDbRetrievalIndexOperations = {
     ]) {
       if (indexes.some((index) => index.name === name)) {
         const stats = await table.indexStats(name);
-        maintenanceRequired ||= (stats?.numUnindexedRows ?? 0) > 0;
+        maintenanceRequired ||=
+          (stats?.numUnindexedRows ?? 0) > MAX_UNINDEXED_ROWS;
         continue;
       }
       await table.createIndex(column, {

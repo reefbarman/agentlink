@@ -649,6 +649,66 @@ describe("BrowserGatewayService", () => {
     hub.dispose();
   });
 
+  it("keeps large images out of wire snapshots and never reloads attachments for them", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const data = "A".repeat(500_000);
+    const message = {
+      id: "t0",
+      role: "user" as const,
+      content: "look",
+      timestamp: 0,
+      blocks: [],
+      displayMedia: {
+        images: [
+          {
+            name: "a.png",
+            mimeType: "image/png",
+            src: `data:image/png;base64,${data}`,
+          },
+        ],
+        documents: [],
+      },
+    };
+    sessionManager.getSession.mockReturnValue(
+      sessionManager.getForegroundSession(),
+    );
+    const service = new BrowserGatewayService(
+      hub,
+      sessionManager as never,
+      () => themeSnapshotStub,
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => projectedForeground({ projectedMessages: [message] }) as never,
+      () => [],
+    );
+
+    const publication = service.createSnapshotPublication();
+    expect(publication.serialized.length).toBeLessThan(100_000);
+    service.getInstanceStatusSummary();
+    expect(sessionManager.getPersistedSessionMessages).not.toHaveBeenCalled();
+
+    const reference =
+      publication.snapshot.session.foreground!.projectedMessages[0]!
+        .displayMedia!.images[0]!.remoteDetail!;
+    const content = service.getTranscriptDetailContent({
+      kind: "transcript.block-detail",
+      sessionId: "session-1",
+      messageId: reference.messageId,
+      blockId: "display-media",
+      contentRevision: reference.contentRevision,
+      resource: { kind: "display-image", index: reference.index },
+    });
+    expect(JSON.parse(new TextDecoder().decode(content))).toMatchObject({
+      state: "media",
+      data,
+    });
+
+    service.dispose();
+    hub.dispose();
+  });
+
   it("reads detached tab detail without switching, hydrating, or leaking interactions", () => {
     const hub = new InMemoryAgentUiEventHub();
     const sessionManager = makeSessionManagerStub();

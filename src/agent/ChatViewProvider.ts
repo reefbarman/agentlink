@@ -317,9 +317,11 @@ import { buildContextDoctorReport } from "./contextDoctor.js";
 import { memoryMutationError } from "../shared/memoryMutationError.js";
 import {
   INITIAL_CONTEXT_HEALTH,
+  projectEmbeddingHealth,
   projectIndexHealth,
   projectMemoryHealth,
   projectRetrievalHealth,
+  type ContextEmbeddingConfiguration,
   type ContextHealthSnapshot,
   type ContextIndexHealthInput,
 } from "@agentlink/protocol/context-health";
@@ -1450,6 +1452,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     index: { ...INITIAL_CONTEXT_HEALTH.index },
   };
   private contextHealthGeneration = 0;
+  private embeddingConfigurationProvider:
+    | (() => Promise<ContextEmbeddingConfiguration>)
+    | undefined;
+  private embeddingConfiguration: ContextEmbeddingConfiguration | undefined;
+  private contextIndexStatus: ContextIndexHealthInput | null = null;
   private contextHealthListener:
     | ((health: ContextHealthSnapshot) => void)
     | undefined;
@@ -2276,7 +2283,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     retrieval: { health(): Promise<RetrievalHealthSnapshot> };
     semanticIndexEnabled: boolean;
     indexStatus?: ContextIndexHealthInput | null;
+    embeddings?: () => Promise<ContextEmbeddingConfiguration>;
   }): void {
+    this.embeddingConfigurationProvider = sources.embeddings;
+    this.contextIndexStatus = sources.indexStatus ?? null;
     this.memoryHealthProvider = sources.memory;
     this.memoryInspectionProvider = sources.memoryInspection;
     this.retrievalHealthProvider = sources.retrieval;
@@ -2295,11 +2305,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     status: ContextIndexHealthInput | null,
     enabled: boolean,
   ): void {
+    this.contextIndexStatus = status;
     this.contextHealth = {
       ...this.contextHealth,
       index: projectIndexHealth(status, enabled),
+      ...this.projectEmbeddings(),
     };
     this.publishContextHealth();
+  }
+
+  private projectEmbeddings(): Pick<ContextHealthSnapshot, "embeddings"> {
+    return this.embeddingConfiguration
+      ? {
+          embeddings: projectEmbeddingHealth(
+            this.embeddingConfiguration,
+            this.contextIndexStatus,
+          ),
+        }
+      : {};
   }
 
   private publishContextHealth(): void {
@@ -2465,7 +2488,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!memory || !retrieval) return;
 
     const generation = ++this.contextHealthGeneration;
-    const [memoryHealth, retrievalHealth] = await Promise.all([
+    const [memoryHealth, retrievalHealth, embeddings] = await Promise.all([
       memory.health().then(projectMemoryHealth, () => ({
         status: "unavailable" as const,
         retrieval: "unavailable" as const,
@@ -2478,13 +2501,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         structural: "unavailable" as const,
         reason: "The retrieval store is unavailable.",
       })),
+      this.embeddingConfigurationProvider?.().catch(
+        () => this.embeddingConfiguration,
+      ),
     ]);
     if (generation !== this.contextHealthGeneration) return;
 
+    this.embeddingConfiguration = embeddings;
+    const embeddingHealth = this.projectEmbeddings();
     this.contextHealth = {
       memory: memoryHealth,
-      retrieval: retrievalHealth,
+      // A usable vector column is not vector search when nothing is in it.
+      retrieval:
+        embeddingHealth.embeddings?.status === "unavailable" &&
+        retrievalHealth.vector === "ready"
+          ? { ...retrievalHealth, vector: "unavailable" }
+          : retrievalHealth,
       index: this.contextHealth.index,
+      ...embeddingHealth,
     };
     this.publishContextHealth();
   }

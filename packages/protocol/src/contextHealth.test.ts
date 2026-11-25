@@ -6,6 +6,7 @@ import type {
 } from "./retrievalHealth.js";
 import {
   INITIAL_CONTEXT_HEALTH,
+  projectEmbeddingHealth,
   projectIndexHealth,
   projectMemoryHealth,
   projectRetrievalHealth,
@@ -37,6 +38,56 @@ describe("context health protocol", () => {
       memory: { status: "not_measured" },
       retrieval: { status: "not_measured" },
       index: { status: "not_measured" },
+    });
+  });
+
+  it.each([
+    [{ enabled: false, credentials: "unknown" }, undefined, "disabled"],
+    [{ enabled: true, credentials: "missing" }, [10, 10, 0], "unavailable"],
+    [{ enabled: true, credentials: "unknown" }, [10, 10, 0], "not_measured"],
+    [{ enabled: true, credentials: "available" }, undefined, "not_measured"],
+    [{ enabled: true, credentials: "available" }, [10, 0, 0], "unavailable"],
+    [{ enabled: true, credentials: "available" }, [10, 4, 0], "degraded"],
+    [{ enabled: true, credentials: "available" }, [10, 4, 6], "not_measured"],
+    [{ enabled: true, credentials: "available" }, [10, 10, 0], "ready"],
+  ] as const)(
+    "projects embedding health %o %o as %s",
+    (config, counts, status) => {
+      const health = projectEmbeddingHealth(config, {
+        state: "idle",
+        ...(counts
+          ? {
+              lastCompleted: {
+                totalFilesInIndex: 1,
+                totalChunksInIndex: counts[0],
+                embeddedChunksInIndex: counts[1],
+                unmeasuredChunksInIndex: counts[2],
+              },
+            }
+          : {}),
+      });
+      expect(health).toMatchObject({ status, enabled: config.enabled });
+      expect(Boolean(health.reason)).toBe(status !== "ready");
+    },
+  );
+
+  it("does not show the previous run's embedding counts while indexing", () => {
+    expect(
+      projectEmbeddingHealth(
+        { enabled: true, credentials: "available" },
+        {
+          state: "indexing",
+          lastCompleted: {
+            totalFilesInIndex: 1,
+            totalChunksInIndex: 10,
+            embeddedChunksInIndex: 0,
+          },
+        },
+      ),
+    ).toEqual({
+      status: "working",
+      enabled: true,
+      reason: "Coverage updates when indexing finishes.",
     });
   });
 

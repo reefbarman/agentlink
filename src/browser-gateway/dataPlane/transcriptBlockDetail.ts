@@ -56,8 +56,48 @@ export function transcriptBlockContentRevision(
   return transcriptBlockDetailSummary(block).contentRevision;
 }
 
+const MAX_HASHED_MEDIA_CHARS = 64 * 1024;
+const MEDIA_SAMPLE_CHARS = 1024;
+
+/**
+ * Stand-in for large base64 media in revision hashes. Hashing every byte means
+ * copying the whole image history for each snapshot, so sample it instead.
+ */
+function mediaFingerprint(data: string): string {
+  if (data.length <= MAX_HASHED_MEDIA_CHARS) return data;
+  const middle = Math.floor(data.length / 2);
+  return [
+    data.length,
+    data.slice(0, MEDIA_SAMPLE_CHARS),
+    data.slice(middle, middle + MEDIA_SAMPLE_CHARS),
+    data.slice(-MEDIA_SAMPLE_CHARS),
+  ].join(":");
+}
+
 function hashBlock(block: TranscriptDisplayBlock): number {
-  return hashString(JSON.stringify(block));
+  const fingerprinted =
+    block.type === "tool_call"
+      ? {
+          ...block,
+          ...(block.resultImages
+            ? {
+                resultImages: block.resultImages.map((image) => ({
+                  ...image,
+                  data: mediaFingerprint(image.data),
+                })),
+              }
+            : {}),
+          ...(block.resultDocuments
+            ? {
+                resultDocuments: block.resultDocuments.map((document) => ({
+                  ...document,
+                  data: mediaFingerprint(document.data),
+                })),
+              }
+            : {}),
+        }
+      : block;
+  return hashString(JSON.stringify(fingerprinted));
 }
 
 function hashString(serialized: string): number {
@@ -147,7 +187,10 @@ export function displayMediaContentRevision(
         ({ name, mimeType, src, attribution }) => ({
           name,
           mimeType,
-          src,
+          // Reading a large data URL built by concatenation would flatten a
+          // copy of the image, so identify it by length instead.
+          src:
+            src.length <= MAX_HASHED_MEDIA_CHARS ? src : `length:${src.length}`,
           // Metadata-only changes must invalidate cached descriptors.
           ...(attribution ? { attribution } : {}),
         }),
@@ -357,6 +400,30 @@ export function encodeTranscriptBlockDetail(
     };
   }
   return encodeDetailResponse(request, response);
+}
+
+/** Encodes any detail request against its already resolved message. */
+export function encodeTranscriptMessageDetail(
+  request: TranscriptBlockDetailRequest,
+  message: ChatMessage | undefined,
+): Uint8Array {
+  switch (request.resource?.kind) {
+    case "display-image":
+      return encodeDisplayImageDetail(request, message);
+    case "final-result":
+      return encodeFinalResultDetail(request, message);
+    case "work-summary":
+      return encodeWorkSummaryDetail(request, message);
+    default:
+      return encodeTranscriptBlockDetail(
+        request,
+        message?.blocks.find(
+          (block): block is TranscriptDisplayBlock =>
+            (block.type === "tool_call" || block.type === "skill_load") &&
+            block.id === request.blockId,
+        ),
+      );
+  }
 }
 
 export function parseTranscriptBlockDetailResponse(

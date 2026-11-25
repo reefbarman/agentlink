@@ -117,6 +117,91 @@ describe("LanceDbRetrievalRepository persistence", () => {
     });
   });
 
+  it("renews its writer lease before releasing the store lock", async () => {
+    await withStore(async (root) => {
+      const lease = await acquireCodeIndexWriterLease({
+        storeRoot: root,
+        workspaceScopeId: "workspace:test",
+        ownerId: "worker:first",
+        protocolVersion: "v4",
+        // Long past the stale limit, as after a slow maintenance run.
+        options: { now: () => 1_000 },
+      });
+      const repository = new LanceDbRetrievalRepository({
+        root,
+        embeddingDimensions: 3,
+        deferNativeIndexRefresh: true,
+        codeIndexWriterLease: lease,
+      });
+      try {
+        await repository.migrate(fingerprint);
+        await repository.optimize();
+        await expect(
+          acquireCodeIndexWriterLease({
+            storeRoot: root,
+            workspaceScopeId: "workspace:test",
+            ownerId: "worker:second",
+            protocolVersion: "v4",
+          }),
+        ).rejects.toThrow("code_index_writer_busy");
+      } finally {
+        await repository.close();
+      }
+    });
+  });
+
+  it("finds new rows without rewriting native indexes for a small change", async () => {
+    await withStore(async (root) => {
+      const repository = new LanceDbRetrievalRepository({
+        root,
+        embeddingDimensions: 3,
+        deferNativeIndexRefresh: true,
+      });
+      const unindexedRows = async () => {
+        const connection = await connect(root);
+        const table = await connection.openTable("retrieval_chunks");
+        try {
+          const stats = await table.indexStats("retrieval_search_text_fts");
+          return stats?.numUnindexedRows;
+        } finally {
+          table.close();
+          connection.close();
+        }
+      };
+      const publish = async (name: string) => {
+        const request = publication(name, `revision-${name}`);
+        await repository.preparePublication(request);
+        await repository.commitPublication(request.publicationId);
+        await repository.refreshNativeIndexes();
+      };
+      const search = async () =>
+        await repository.query({
+          mode: "lexical",
+          text: publication("second", "revision-second").chunks[0]!.content,
+          limit: 10,
+        } as Parameters<typeof repository.query>[0]);
+      try {
+        await repository.migrate(fingerprint);
+        await publish("first");
+        await repository.optimize();
+        expect(await unindexedRows()).toBe(0);
+
+        await publish("second");
+        expect(await unindexedRows()).toBeGreaterThan(0);
+        expect(await repository.lexicalReadiness()).toEqual({
+          status: "ready",
+        });
+        expect(JSON.stringify(await search())).toContain("second");
+
+        await repository.optimize();
+        expect(await unindexedRows()).toBe(0);
+        expect(JSON.stringify(await search())).toContain("second");
+      } finally {
+        await repository.close();
+      }
+    });
+  });
+
   it("reports a never-migrated store as missing", async () => {
     await withStore(async (root) => {
       const repository = new LanceDbRetrievalRepository({
@@ -547,7 +632,10 @@ describe("LanceDbRetrievalRepository persistence", () => {
         await repository.commitPublication(second.publicationId);
         await repository.refreshNativeIndexes();
         const maintained = await fs.readdir(indexRoot);
-        expect(maintained.some((id) => initial.has(id))).toBe(true);
+        // A small change leaves the existing index files alone; store
+        // maintenance folds it in.
+        expect(new Set(maintained)).toEqual(initial);
+        await repository.optimize();
 
         connection = await connect(root, { readConsistencyInterval: 0 });
         const table = await connection.openTable("retrieval_chunks");
@@ -567,6 +655,7 @@ describe("LanceDbRetrievalRepository persistence", () => {
         await repository.preparePublication(third);
         await repository.commitPublication(third.publicationId);
         await repository.refreshNativeIndexes();
+        await repository.optimize();
         const maintainedTable = await connection.openTable("retrieval_chunks");
         try {
           for (const index of await maintainedTable.listIndices()) {

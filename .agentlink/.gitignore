@@ -4,3 +4,5 @@ debug/
 checkpoints/
 tool-usage-report/
 workspaces/
+backups/
+location.json

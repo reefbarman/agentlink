@@ -104,7 +104,7 @@ import { LanceDbCodeIndexActivator } from "../storage/retrieval/LanceDbCodeIndex
 import {
   acquireCodeIndexWriterLease,
   releaseCodeIndexWriterLease,
-  renewCodeIndexWriterLease,
+  startCodeIndexWriterHeartbeat,
   type CodeIndexWriterLease,
   withCodeIndexWriterFence,
 } from "./codeIndexWriterLease.js";
@@ -264,7 +264,7 @@ async function acquireWorkerWriterLease(args: {
 }): Promise<{
   lease: CodeIndexWriterLease;
   port: StagedRepositoryPublicationPort;
-  stopHeartbeat(): void;
+  stopHeartbeat(): Promise<void>;
 }> {
   const lease = await acquireCodeIndexWriterLease({
     storeRoot: args.storeRoot,
@@ -283,16 +283,14 @@ async function acquireWorkerWriterLease(args: {
     await releaseCodeIndexWriterLease(lease);
     throw error;
   }
-  const heartbeat = setInterval(() => {
-    void renewCodeIndexWriterLease(lease).catch((error) => {
-      console.error(`Code index writer lease renewal failed: ${error}`);
-    });
-  }, 5_000);
-  heartbeat.unref();
+  const heartbeat = startCodeIndexWriterHeartbeat(lease, {
+    onError: (error) =>
+      console.error(`Code index writer lease renewal failed: ${error}`),
+  });
   return {
     lease,
     port: createStagedPublicationPort(lease),
-    stopHeartbeat: () => clearInterval(heartbeat),
+    stopHeartbeat: () => heartbeat.stop(),
   };
 }
 
@@ -300,7 +298,7 @@ async function releaseWorkerWriterLease(
   writer: Awaited<ReturnType<typeof acquireWorkerWriterLease>> | undefined,
 ): Promise<void> {
   if (!writer) return;
-  writer.stopHeartbeat();
+  await writer.stopHeartbeat();
   try {
     await releaseCodeIndexWriterLease(writer.lease);
   } catch (error) {
@@ -583,13 +581,25 @@ async function requestEmbeddingAuthRefresh(
   });
 }
 
-/** Count total chunks (points) across all cached files */
-function countCachedChunks(cache: IndexCache): number {
-  let total = 0;
+/** Chunk totals across all cached files, with how many have a vector. */
+function cachedChunkStats(
+  cache: IndexCache,
+): Pick<
+  IndexStats,
+  "totalChunksInIndex" | "embeddedChunksInIndex" | "unmeasuredChunksInIndex"
+> {
+  let totalChunksInIndex = 0;
+  let embeddedChunksInIndex = 0;
+  let unmeasuredChunksInIndex = 0;
   for (const entry of Object.values(cache.files)) {
-    total += entry.recordIds.length;
+    totalChunksInIndex += entry.recordIds.length;
+    if (entry.embeddedRecords === undefined) {
+      unmeasuredChunksInIndex += entry.recordIds.length;
+    } else {
+      embeddedChunksInIndex += entry.embeddedRecords;
+    }
   }
-  return total;
+  return { totalChunksInIndex, embeddedChunksInIndex, unmeasuredChunksInIndex };
 }
 
 function loadWorkerOwnership(
@@ -1311,7 +1321,11 @@ async function processFileBatch(
           config.workspaceRoot,
           errors,
           (done, total) =>
-            config.onActivity?.(`embedded ${done}/${total} chunks`),
+            config.onActivity?.(
+              config.embeddingBearerToken
+                ? `embedded ${done}/${total} chunks`
+                : `prepared ${done}/${total} chunks`,
+            ),
         )
       : [];
 
@@ -1375,6 +1389,8 @@ async function processFileBatch(
         cacheEntry: {
           hash: file.hash,
           recordIds: publication.expectedChunkIds,
+          embeddedRecords: chunks.filter(({ embedding }) => embedding !== null)
+            .length,
           indexedAt: publication.source.revision.observedAt,
           mtimeMs: file.mtimeMs,
           size: file.size,
@@ -1660,7 +1676,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
           filesIndexed,
           totalFilesInIndex: Object.keys(cache.files).length,
           chunksCreated,
-          totalChunksInIndex: countCachedChunks(cache),
+          ...cachedChunkStats(cache),
           recordsUpserted,
           recordsDeleted,
           durationMs: Date.now() - startTime,
@@ -1705,7 +1721,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
           filesIndexed,
           totalFilesInIndex: Object.keys(cache.files).length,
           chunksCreated,
-          totalChunksInIndex: countCachedChunks(cache),
+          ...cachedChunkStats(cache),
           recordsUpserted,
           recordsDeleted,
           durationMs: Date.now() - startTime,
@@ -1767,7 +1783,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
           filesIndexed,
           totalFilesInIndex: Object.keys(cache.files).length,
           chunksCreated,
-          totalChunksInIndex: countCachedChunks(cache),
+          ...cachedChunkStats(cache),
           recordsUpserted,
           recordsDeleted,
           durationMs: Date.now() - startTime,
@@ -1807,7 +1823,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
             filesIndexed,
             totalFilesInIndex: Object.keys(cache.files).length,
             chunksCreated,
-            totalChunksInIndex: countCachedChunks(cache),
+            ...cachedChunkStats(cache),
             recordsUpserted,
             recordsDeleted,
             durationMs: Date.now() - startTime,
@@ -1861,7 +1877,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
           filesIndexed: 0,
           totalFilesInIndex: Object.keys(cache.files).length,
           chunksCreated: 0,
-          totalChunksInIndex: countCachedChunks(cache),
+          ...cachedChunkStats(cache),
           recordsUpserted,
           recordsDeleted,
           durationMs: Date.now() - startTime,
@@ -1947,7 +1963,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         filesIndexed,
         totalFilesInIndex: Object.keys(cache.files).length,
         chunksCreated,
-        totalChunksInIndex: countCachedChunks(cache),
+        ...cachedChunkStats(cache),
         recordsUpserted,
         recordsDeleted,
         durationMs: Date.now() - startTime,
@@ -2090,7 +2106,7 @@ async function handleIncrementalUpdate(
           filesIndexed,
           totalFilesInIndex: Object.keys(cache.files).length,
           chunksCreated,
-          totalChunksInIndex: countCachedChunks(cache),
+          ...cachedChunkStats(cache),
           recordsUpserted,
           recordsDeleted,
           durationMs: Date.now() - startTime,
@@ -2124,7 +2140,7 @@ async function handleIncrementalUpdate(
           filesIndexed,
           totalFilesInIndex: Object.keys(cache.files).length,
           chunksCreated,
-          totalChunksInIndex: countCachedChunks(cache),
+          ...cachedChunkStats(cache),
           recordsUpserted,
           recordsDeleted,
           durationMs: Date.now() - startTime,
@@ -2167,7 +2183,7 @@ async function handleIncrementalUpdate(
           filesIndexed,
           totalFilesInIndex: Object.keys(cache.files).length,
           chunksCreated,
-          totalChunksInIndex: countCachedChunks(cache),
+          ...cachedChunkStats(cache),
           recordsUpserted,
           recordsDeleted,
           durationMs: Date.now() - startTime,
@@ -2254,7 +2270,7 @@ async function handleIncrementalUpdate(
         filesIndexed,
         totalFilesInIndex: Object.keys(cache.files).length,
         chunksCreated,
-        totalChunksInIndex: countCachedChunks(cache),
+        ...cachedChunkStats(cache),
         recordsUpserted,
         recordsDeleted,
         durationMs: Date.now() - startTime,

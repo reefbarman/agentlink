@@ -67,6 +67,27 @@ describe("ContextHealthPanel", () => {
     expect(screen.getByText("48")).toBeTruthy();
   });
 
+  it("shows embedding coverage when the host provides it", () => {
+    render(
+      <ContextHealthPanel
+        health={health({
+          embeddings: {
+            status: "degraded",
+            enabled: true,
+            embeddedChunkCount: 4,
+            chunkCount: 10,
+            reason: "Some indexed code has no embedding.",
+          },
+        })}
+      />,
+    );
+    expect(screen.getByLabelText("Embeddings: Degraded")).toBeTruthy();
+    expect(screen.getByText("4/10")).toBeTruthy();
+    expect(
+      screen.getByText("Some indexed code has no embedding."),
+    ).toBeTruthy();
+  });
+
   it.each([
     ["ready", "Ready"],
     ["working", "Working"],

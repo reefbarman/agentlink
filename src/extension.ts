@@ -124,6 +124,7 @@ import type { AgentConfig } from "./agent/types.js";
 import { normalizePromptProfileOverrides } from "@agentlink/protocol/prompt-profile";
 import { resolvePromptProfile } from "./core/promptProfilePolicy.js";
 import { registerEditorContextCommands } from "./agent/editorContextCommands.js";
+import { registerSemanticEmbeddingCommands } from "./indexer/semanticEmbeddingCommands.js";
 import { registerModelAuthCommands } from "./agent/modelAuthCommands.js";
 
 import { OpenAiCompatibleProviderManager } from "./agent/providers/openaiCompatible/index.js";
@@ -3785,6 +3786,23 @@ export async function activate(
     ...registerTypeSafeGuardianCommands({ secrets: context.secrets }),
     ...registerModelAuthCommands({
       openAiAuthManager: openAiCodexAuthManager,
+      onApiKeyStored: () => void chatViewProvider.refreshContextHealth(),
+    }),
+    ...registerSemanticEmbeddingCommands({
+      hasApiKey: async () =>
+        Boolean(await openAiCodexAuthManager.resolveEmbeddingAuth()),
+      getChunkCount: () =>
+        indexerManager?.getStatus().lastCompleted?.totalChunksInIndex,
+      helpUri: vscode.Uri.joinPath(
+        context.extensionUri,
+        "resources/builtin-skills/documentation/references/semantic-search.md",
+      ),
+      onChanged: () => void chatViewProvider.refreshContextHealth(),
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("agentlink.semanticEmbeddingsEnabled")) {
+        void chatViewProvider.refreshContextHealth();
+      }
     }),
     ...registerCodexAuthCommands({
       authManager: openAiCodexAuthManager,
@@ -3801,6 +3819,20 @@ export async function activate(
   const semanticEnabled = vscode.workspace
     .getConfiguration("agentlink")
     .get<boolean>("semanticSearchEnabled", true);
+  const getEmbeddingConfiguration = async (workspaceRoot: string) => {
+    const enabled = vscode.workspace
+      .getConfiguration("agentlink", vscode.Uri.file(workspaceRoot))
+      .get<boolean>("semanticEmbeddingsEnabled", false);
+    // Read stored credentials only after the user opted in.
+    if (!enabled) return { enabled, credentials: "unknown" as const };
+    const credentials = await openAiCodexAuthManager
+      .resolveEmbeddingAuth()
+      .then(
+        (auth) => (auth ? ("available" as const) : ("missing" as const)),
+        () => "unknown" as const,
+      );
+    return { enabled, credentials };
+  };
   chatViewProvider.setContextHealthListener((health) =>
     sidebarProvider.updateContextHealth(health),
   );
@@ -3814,8 +3846,26 @@ export async function activate(
         (vscode.workspace.workspaceFolders ?? []).map(
           (folder) => folder.uri.fsPath,
         ),
+      getEmbeddingConfiguration,
     }),
     semanticIndexEnabled: semanticEnabled,
+    ...(semanticEnabled
+      ? {
+          embeddings: async () => {
+            const configurations = await Promise.all(
+              (vscode.workspace.workspaceFolders ?? []).map((folder) =>
+                getEmbeddingConfiguration(folder.uri.fsPath),
+              ),
+            );
+            return (
+              configurations.find(({ enabled }) => enabled) ?? {
+                enabled: false,
+                credentials: "unknown" as const,
+              }
+            );
+          },
+        }
+      : {}),
   });
 
   context.subscriptions.push(

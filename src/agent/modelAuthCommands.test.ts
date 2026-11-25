@@ -99,6 +99,22 @@ describe("registerModelAuthCommands", () => {
     expect(disposables).toHaveLength(2);
   });
 
+  it("offers the semantic search opt-in and refreshes after storing a key", async () => {
+    const onApiKeyStored = vi.fn();
+    registerModelAuthCommands({ ...createDependencies(), onApiKeyStored });
+    vi.mocked(vscode.window.showQuickPick).mockResolvedValue(
+      quickPickValue("enableEmbeddings") as never,
+    );
+    await invoke("agentlink.setupSemanticSearch");
+    expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
+      "agentlink.enableSemanticEmbeddings",
+    );
+
+    vi.mocked(vscode.window.showInputBox).mockResolvedValue("sk-test");
+    await invoke("agentlink.setOpenaiApiKey");
+    expect(onApiKeyStored).toHaveBeenCalledOnce();
+  });
+
   it("stores a trimmed embeddings-only OpenAI key", async () => {
     const dependencies = createDependencies();
     registerModelAuthCommands(dependencies);

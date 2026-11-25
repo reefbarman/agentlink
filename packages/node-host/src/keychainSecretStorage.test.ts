@@ -315,6 +315,11 @@ process.stdout.write(JSON.stringify(reply));
           () => `${exitedPid()}:crashed`,
           () => minutesAgo(10),
         ],
+        [
+          "a just-crashed owner whose recorded helper has exited",
+          () => `${exitedPid()}:crashed:${exitedPid()}`,
+          () => minutesAgoThisBoot(0),
+        ],
         ["an unreadable owner record", () => "", () => minutesAgo(10)],
         [
           "an owner from before this boot whose pid was reused",
@@ -339,6 +344,32 @@ process.stdout.write(JSON.stringify(reply));
         );
       });
 
+      it("records the running helper on the lock and still releases it", async () => {
+        const helper = await fakeHelper("ok");
+        const lockRoot = await fs.mkdtemp(
+          path.join(os.tmpdir(), "agentlink-keychain-helper-queue-"),
+        );
+        temporaryRoots.push(lockRoot);
+        const lockPath = path.join(lockRoot, "credentials-helper.lock");
+        const storage = await helper.storage(
+          "codex-oauth-credentials",
+          lockRoot,
+        );
+
+        const read = storage.get();
+        await vi.waitFor(
+          async () =>
+            expect(await fs.readFile(lockPath, "utf-8")).toMatch(
+              new RegExp(`^${process.pid}:[0-9a-f-]+:\\d+$`),
+            ),
+          { interval: 1 },
+        );
+        await read;
+        await expect(fs.stat(lockPath)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      });
+
       it.each([
         [
           "a live owner",
@@ -348,6 +379,11 @@ process.stdout.write(JSON.stringify(reply));
         [
           "a crashed owner whose helper may still be prompting",
           () => `${exitedPid()}:crashed`,
+          () => minutesAgoThisBoot(1),
+        ],
+        [
+          "a crashed owner whose recorded helper is still running",
+          () => `${exitedPid()}:crashed:${process.pid}`,
           () => minutesAgoThisBoot(1),
         ],
       ])("keeps waiting for %s", async (_name, owner, modifiedAt) => {

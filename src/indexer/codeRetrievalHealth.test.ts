@@ -9,13 +9,17 @@ import type { RetrievalHealthSnapshot } from "@agentlink/protocol/retrieval-heal
 import { createCodeRetrievalHealthProvider } from "./codeRetrievalHealth.js";
 import { getCodeRetrievalStoreRoot } from "./codeRetrievalIdentity.js";
 
-const { repositoryClose, repositoryHealth, repositoryRoots } = vi.hoisted(
-  () => ({
-    repositoryClose: vi.fn(),
-    repositoryHealth: new Map<string, RetrievalHealthSnapshot | Error>(),
-    repositoryRoots: [] as string[],
-  }),
-);
+const {
+  repositoryClose,
+  repositoryHealth,
+  repositoryOptions,
+  repositoryRoots,
+} = vi.hoisted(() => ({
+  repositoryOptions: [] as object[],
+  repositoryClose: vi.fn(),
+  repositoryHealth: new Map<string, RetrievalHealthSnapshot | Error>(),
+  repositoryRoots: [] as string[],
+}));
 
 vi.mock("../storage/retrieval/LanceDbRetrievalRepository.js", () => ({
   RETRIEVAL_STORE_MARKER: ".agentlink-retrieval-store",
@@ -24,6 +28,7 @@ vi.mock("../storage/retrieval/LanceDbRetrievalRepository.js", () => ({
 
     constructor(options: { root: string }) {
       this.root = options.root;
+      repositoryOptions.push(options);
       repositoryRoots.push(options.root);
     }
 
@@ -50,6 +55,7 @@ describe("createCodeRetrievalHealthProvider", () => {
     repositoryClose.mockReset();
     repositoryHealth.clear();
     repositoryRoots.length = 0;
+    repositoryOptions.length = 0;
   });
 
   afterEach(() => {
@@ -144,6 +150,30 @@ describe("createCodeRetrievalHealthProvider", () => {
     expect(repositoryRoots).toEqual([indexedStore]);
     expect(repositoryClose).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    [{ enabled: false, credentials: "unknown" as const }, false, true],
+    [{ enabled: true, credentials: "missing" as const }, true, false],
+    [{ enabled: true, credentials: "available" as const }, true, true],
+  ])(
+    "passes the embedding opt-in %o to the store's health",
+    async (configuration, embeddingConfigured, embeddingAvailable) => {
+      const root = path.join(tempRoot, "api");
+      fs.mkdirSync(root);
+      const store = getCodeRetrievalStoreRoot(globalStoragePath, root);
+      initializeStore(store);
+      repositoryHealth.set(store, health());
+      await createCodeRetrievalHealthProvider({
+        globalStoragePath,
+        enabled: true,
+        getWorkspaceRoots: () => [root],
+        getEmbeddingConfiguration: async () => configuration,
+      }).health();
+      expect(repositoryOptions).toEqual([
+        { root: store, embeddingConfigured, embeddingAvailable },
+      ]);
+    },
+  );
 
   it("reports unavailable when every project store is missing", async () => {
     const firstRoot = path.join(tempRoot, "first");

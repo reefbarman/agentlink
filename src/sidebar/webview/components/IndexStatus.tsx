@@ -150,8 +150,95 @@ export function IndexStatus({ state, postCommand }: Props) {
             )}
           </div>
         )}
+        <EmbeddingStatus state={state} postCommand={postCommand} />
       </div>
     </CollapsibleSection>
+  );
+}
+
+const EMBEDDING_DOT_CLASSES = {
+  ready: "running",
+  working: "indexing",
+  degraded: "warning",
+  unavailable: "error",
+  disabled: "off",
+  not_measured: "off",
+} as const;
+
+/** Semantic search opt-in: off by default because it sends code to OpenAI. */
+function EmbeddingStatus({ state, postCommand }: Props) {
+  const embeddings = state.contextHealth?.embeddings;
+  if (!embeddings) return null;
+  const isIndexing =
+    state.indexStatus?.state === "indexing" ||
+    state.indexStatus?.state === "discovering";
+  const needsKey =
+    embeddings.status === "unavailable" &&
+    embeddings.embeddedChunkCount === undefined;
+  const needsRebuild = embeddings.enabled && !needsKey && embeddings.reason;
+  return (
+    <div class="embedding-status">
+      <div class="status-header">
+        <span class={`dot ${EMBEDDING_DOT_CLASSES[embeddings.status]}`} />
+        <span class="status-text">
+          Semantic search: {embeddings.enabled ? "on" : "off"}
+          {embeddings.status === "working" && " \u2014 indexing"}
+          {embeddings.embeddedChunkCount !== undefined &&
+            ` \u2014 ${formatCount(embeddings.embeddedChunkCount)} of ${formatCount(embeddings.chunkCount ?? 0)} chunks embedded`}
+        </span>
+      </div>
+      <p class="help-text">
+        {embeddings.enabled
+          ? (embeddings.reason ??
+            "Indexed code and search queries are sent to OpenAI to create embeddings.")
+          : "Find code by meaning, not just matching words. Turning this on sends your indexed code and search queries to OpenAI and uses your OpenAI API key."}
+      </p>
+      <div class="button-group">
+        {!embeddings.enabled && (
+          <button
+            class="btn btn-secondary"
+            title="Review what is sent to OpenAI, then turn on semantic search"
+            onClick={() => postCommand("enableSemanticEmbeddings")}
+          >
+            {"Turn On\u2026"}
+          </button>
+        )}
+        {needsKey && (
+          <button
+            class="btn btn-primary"
+            title="Save an API key used to create semantic-search embeddings"
+            onClick={() => postCommand("setOpenaiApiKey")}
+          >
+            Set API Key
+          </button>
+        )}
+        {needsRebuild && !isIndexing && (
+          <button
+            class="btn btn-secondary"
+            title="Rebuild the index and create embeddings for all indexed code"
+            onClick={() => postCommand("rebuildIndex")}
+          >
+            Rebuild to Embed
+          </button>
+        )}
+        {embeddings.enabled && (
+          <button
+            class="btn btn-secondary"
+            title="Stop sending code and search queries to OpenAI"
+            onClick={() => postCommand("disableSemanticEmbeddings")}
+          >
+            Turn Off
+          </button>
+        )}
+        <button
+          class="btn btn-secondary"
+          title="How semantic search works, what it sends and how to set it up"
+          onClick={() => postCommand("openSemanticEmbeddingsHelp")}
+        >
+          Learn More
+        </button>
+      </div>
+    </div>
   );
 }
 

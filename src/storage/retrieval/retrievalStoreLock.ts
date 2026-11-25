@@ -27,6 +27,23 @@ export interface RetrievalStoreLockOptions {
   maxWaitMs?: number;
   operationTimeoutMs?: number;
   staleMs?: number;
+  /** Stops waiting for the lock. Has no effect once the operation started. */
+  signal?: AbortSignal;
+}
+
+/** Locks held by this process, counted because roots can be shared by name. */
+const heldLocks = new Map<string, number>();
+
+/** Whether an operation in this process currently holds the store lock. */
+export function isRetrievalStoreLockHeldHere(root: string): boolean {
+  return (heldLocks.get(path.resolve(root)) ?? 0) > 0;
+}
+
+function noteLockHeld(root: string, change: 1 | -1): void {
+  const key = path.resolve(root);
+  const count = (heldLocks.get(key) ?? 0) + change;
+  if (count > 0) heldLocks.set(key, count);
+  else heldLocks.delete(key);
 }
 
 export async function withRetrievalStoreLock<T>(
@@ -60,6 +77,7 @@ export async function withRetrievalStoreLock<T>(
 
   await fs.mkdir(path.dirname(root), { recursive: true });
   while (true) {
+    options.signal?.throwIfAborted();
     try {
       await fs.mkdir(lockDirectory);
       await fs.writeFile(
@@ -109,6 +127,7 @@ export async function withRetrievalStoreLock<T>(
     }
   }
 
+  noteLockHeld(root, 1);
   const heartbeat = setInterval(
     () => {
       const now = new Date();
@@ -122,6 +141,7 @@ export async function withRetrievalStoreLock<T>(
   const cleanup = async (): Promise<void> => {
     if (cleanedUp) return;
     cleanedUp = true;
+    noteLockHeld(root, -1);
     clearInterval(heartbeat);
     try {
       await fs.stat(ownerPath);

@@ -193,6 +193,8 @@ function validateIndexCache(value: unknown): IndexCache {
       typeof entry.indexedAt !== "string" ||
       (entry.mtimeMs !== undefined && typeof entry.mtimeMs !== "number") ||
       (entry.size !== undefined && typeof entry.size !== "number") ||
+      (entry.embeddedRecords !== undefined &&
+        !Number.isSafeInteger(entry.embeddedRecords)) ||
       (entry.generation !== undefined &&
         typeof entry.generation !== "string") ||
       (entry.visibility !== undefined &&
@@ -213,6 +215,9 @@ function validateIndexCache(value: unknown): IndexCache {
       indexedAt: entry.indexedAt,
       ...(entry.mtimeMs !== undefined ? { mtimeMs: entry.mtimeMs } : {}),
       ...(entry.size !== undefined ? { size: entry.size } : {}),
+      ...(entry.embeddedRecords !== undefined
+        ? { embeddedRecords: entry.embeddedRecords as number }
+        : {}),
       ...(entry.generation !== undefined
         ? { generation: entry.generation }
         : {}),

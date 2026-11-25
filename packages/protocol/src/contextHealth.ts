@@ -27,6 +27,8 @@ export interface ContextIndexHealthInput {
   lastCompleted?: {
     totalFilesInIndex: number;
     totalChunksInIndex: number;
+    embeddedChunksInIndex?: number;
+    unmeasuredChunksInIndex?: number;
     errorCount?: number;
   };
   readinessReason?: ContextRetrievalHealthReason;
@@ -66,6 +68,20 @@ export interface ContextHealthSnapshot {
     totalChunksInIndex?: number;
     reason?: string;
   };
+  /** Vector coverage for semantic search. VS Code sidebar only. */
+  embeddings?: {
+    status: ContextHealthStatus;
+    enabled: boolean;
+    embeddedChunkCount?: number;
+    chunkCount?: number;
+    reason?: string;
+  };
+}
+
+export interface ContextEmbeddingConfiguration {
+  /** The user opted in to sending code to the embedding provider. */
+  enabled: boolean;
+  credentials: "available" | "missing" | "unknown";
 }
 
 export const INITIAL_CONTEXT_HEALTH: ContextHealthSnapshot = {
@@ -200,6 +216,69 @@ export function projectIndexHealth(
       ? { reason: "The last indexing run completed with errors." }
       : {}),
   };
+}
+
+export function projectEmbeddingHealth(
+  configuration: ContextEmbeddingConfiguration,
+  index: ContextIndexHealthInput | null,
+): NonNullable<ContextHealthSnapshot["embeddings"]> {
+  if (!configuration.enabled) {
+    return {
+      status: "disabled",
+      enabled: false,
+      reason: "Off. Code search matches text only.",
+    };
+  }
+  const base = { enabled: true };
+  if (configuration.credentials === "missing") {
+    return {
+      ...base,
+      status: "unavailable",
+      reason: "Add an OpenAI API key to create embeddings.",
+    };
+  }
+  if (index?.state === "indexing" || index?.state === "discovering") {
+    // Counts describe the last finished run, so they would be stale here.
+    return {
+      ...base,
+      status: "working",
+      reason: "Coverage updates when indexing finishes.",
+    };
+  }
+  const last = index?.lastCompleted;
+  const chunkCount = safeOptionalCount(last?.totalChunksInIndex);
+  const embeddedChunkCount = safeOptionalCount(last?.embeddedChunksInIndex);
+  if (
+    configuration.credentials === "unknown" ||
+    chunkCount === undefined ||
+    embeddedChunkCount === undefined
+  ) {
+    return {
+      ...base,
+      status: "not_measured",
+      reason: "Coverage has not been measured yet.",
+    };
+  }
+  const counts = { ...base, embeddedChunkCount, chunkCount };
+  const unmeasured = safeCount(last?.unmeasuredChunksInIndex ?? 0);
+  const missing = chunkCount - embeddedChunkCount - unmeasured;
+  if (missing > 0) {
+    return {
+      ...counts,
+      status: embeddedChunkCount > 0 ? "degraded" : "unavailable",
+      reason:
+        "Some indexed code has no embedding. Rebuild the index to embed it.",
+    };
+  }
+  if (unmeasured > 0) {
+    return {
+      ...counts,
+      status: "not_measured",
+      reason:
+        "Some files were indexed by an older version. Rebuild the index to embed and measure them.",
+    };
+  }
+  return { ...counts, status: "ready" };
 }
 
 function memoryReason(

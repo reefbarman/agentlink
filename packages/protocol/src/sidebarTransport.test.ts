@@ -75,6 +75,9 @@ it("pins webview-to-extension command discriminants", () => {
     | "resumeIndex"
     | "maintainIndex"
     | "setOpenaiApiKey"
+    | "enableSemanticEmbeddings"
+    | "disableSemanticEmbeddings"
+    | "openSemanticEmbeddingsHelp"
     | "setOpenaiModelsAndEmbeddingsApiKey"
     | "setWriteApproval"
     | RuleEditCommand

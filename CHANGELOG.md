@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Semantic search can now be turned on and off from the sidebar's **Codebase Index** section, with a review of what is sent to OpenAI, an approximate size, a choice of scope, API key setup and a rebuild. It stays off by default. **Learn More** opens a new bundled guide, and **Set Up Semantic Search** now includes the same step; before, it stored a key but never turned embeddings on.
+- Context health has a new **Embeddings** section showing whether semantic search is off, missing a key, partly embedded or ready. Vector retrieval no longer shows as ready when embeddings are off or nothing is embedded.
+- Fixed VS Code windows freezing or crashing with out-of-memory errors when an image-heavy chat was open while Desktop or a browser was connected. Remote views now load large images and attached result files on demand instead of receiving every image in every update, and status checks no longer re-read every attachment from disk.
+- Fixed model setup staying on "Checking model setup" for up to five minutes in every window after one window crashed while reading credentials. The shared credentials queue now recovers as soon as the crashed window's helper has exited.
+- Codebase index updates after small edits are much faster and write far less to disk. New text is searchable immediately, and is folded into the search index once enough has changed or during regular maintenance instead of rewriting that index after every edit.
+- Fixed misleading `retrieval_store_lock_busy` and `code_index_writer_fenced` indexer messages during normal long-running work, and closed a gap where a second window on the same project could take over indexing from a window that was still working.
+
 ## 1.105.2
 
 - An auto-approved edit no longer fails with "Edit document changed while preparing diagnostics" when VS Code reloads the file to the exact content the edit was based on during that wait (for example right after a previous edit to the same file). Real unsaved or concurrent changes still stop the edit.

@@ -10,9 +10,11 @@ import {
   getCodeIndexWriterLeasePath,
   releaseCodeIndexWriterLease,
   renewCodeIndexWriterLease,
+  startCodeIndexWriterHeartbeat,
   withCodeIndexWriterFence,
 } from "./codeIndexWriterLease.js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { withRetrievalStoreLock } from "../storage/retrieval/retrievalStoreLock.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 describe("codeIndexWriterLease", () => {
   let directory: string;
@@ -62,6 +64,85 @@ describe("codeIndexWriterLease", () => {
 
     finishOperation();
     await operation;
+  });
+
+  describe("heartbeat", () => {
+    const holdLock = async () => {
+      let release!: () => void;
+      let started!: () => void;
+      const isStarted = new Promise<void>((resolve) => (started = resolve));
+      const held = withRetrievalStoreLock(storeRoot, async () => {
+        started();
+        await new Promise<void>((resolve) => (release = resolve));
+      });
+      await isStarted;
+      return async () => {
+        release();
+        await held;
+      };
+    };
+    const heartbeatAt = () =>
+      JSON.parse(
+        fs.readFileSync(getCodeIndexWriterLeasePath(storeRoot), "utf8"),
+      ).heartbeatAt as number;
+
+    it("renews the lease and reports real fencing", async () => {
+      const lease = await acquire("window-1:job-1", 101);
+      const onError = vi.fn();
+      const heartbeat = startCodeIndexWriterHeartbeat(lease, {
+        onError,
+        intervalMs: 5,
+      });
+      await vi.waitFor(() => expect(heartbeatAt()).toBeGreaterThan(1_000));
+      expect(onError).not.toHaveBeenCalled();
+      await acquire("window-2:job-2", 202, false);
+      await vi.waitFor(() =>
+        expect(onError).toHaveBeenCalledWith(
+          expect.objectContaining({ message: CODE_INDEX_WRITER_FENCED_ERROR }),
+        ),
+      );
+      await heartbeat.stop();
+    });
+
+    it("stays quiet while this process holds the store lock and after release", async () => {
+      const lease = await acquire("window-1:job-1", 101);
+      const onError = vi.fn();
+      const release = await holdLock();
+      const heartbeat = startCodeIndexWriterHeartbeat(lease, {
+        onError,
+        intervalMs: 5,
+        lockOptions: { maxWaitMs: 20, timeoutMs: 20 },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(heartbeatAt()).toBe(1_000);
+      await heartbeat.stop();
+      await release();
+      await releaseCodeIndexWriterLease(lease, options(101));
+      expect(onError).not.toHaveBeenCalled();
+    });
+
+    it("cancels a renewal that is waiting on another process", async () => {
+      const lease = await acquire("window-1:job-1", 101);
+      const onError = vi.fn();
+      const lockDirectory = `${storeRoot}.lock`;
+      fs.mkdirSync(lockDirectory);
+      fs.writeFileSync(
+        path.join(lockDirectory, "other"),
+        JSON.stringify({ pid: process.ppid }),
+      );
+      const heartbeat = startCodeIndexWriterHeartbeat(lease, {
+        onError,
+        intervalMs: 5,
+      });
+      // Long enough for a renewal to start waiting; it waits up to 20s.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const startedAt = Date.now();
+      await heartbeat.stop();
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+      expect(onError).not.toHaveBeenCalled();
+      fs.rmSync(lockDirectory, { recursive: true });
+      await releaseCodeIndexWriterLease(lease, options(101));
+    });
   });
 
   it("persists a monotonic first fence and renews the current owner", async () => {

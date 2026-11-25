@@ -348,6 +348,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
   retainedHttp(
     "vscode_gateway",
     "POST",
+    "/api/transcript-detail",
+    "Direct connections load transcript media referenced by snapshots through an authenticated read; relay clients use transcript.block-detail.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
     "/api/project/default",
     "Requires a project-selection command before Stage 5.",
   ),

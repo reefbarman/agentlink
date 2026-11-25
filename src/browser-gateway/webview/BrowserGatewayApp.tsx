@@ -74,6 +74,7 @@ import type {
 import { DesktopMoreActions } from "./DesktopMoreActions";
 import { LiveLinkIndicator } from "../../agent/webview/components/LiveLinkIndicator";
 import { ChatView } from "../../agent/webview/components/ChatView";
+import type { TranscriptBlockDetailRequest } from "../dataPlane/transcriptBlockDetail";
 import { RemoteToolDetailProvider } from "../../agent/webview/components/RemoteToolDetail";
 import { MarkdownImageProvider } from "../../agent/webview/components/MarkdownImage";
 import type {
@@ -85,6 +86,7 @@ import {
   loadRemoteFinalResult,
   loadRemoteTranscriptBlockDetail,
   loadRemoteWorkSummary,
+  requestDirectTranscriptDetail,
 } from "./toolDetailTransport";
 import { showFileOpenFailure } from "../../agent/webview/components/fileLinkFeedback";
 import { ContextUsageRow } from "../../agent/webview/components/ContextUsageRow";
@@ -934,6 +936,12 @@ export function describeApprovalSubmitFailure(
     return "VS Code is no longer waiting on this approval. It may have been answered elsewhere; check the chat in VS Code.";
   }
   return `This decision wasn't applied: ${body.message ?? body.error ?? `HTTP ${status ?? "error"}`}.`;
+}
+
+function isSessionDetailTooLarge(error: unknown): boolean {
+  return (
+    error instanceof Error && /session_detail_too_large/.test(error.message)
+  );
 }
 
 export function mergeDetachedSessionDetail(
@@ -2537,10 +2545,15 @@ export function BrowserGatewayApp({
     inFlight: boolean;
     dirty: boolean;
   }>({ key: null, timer: null, lastAt: 0, inFlight: false, dirty: false });
+  const oversizedDetailKeyRef = useRef<string | null>(null);
   const scheduleDetachedRefresh = useCallback(
     (selection: BrowserLogicalTabSelection): void => {
       const state = detachedRefreshStateRef.current;
       const key = logicalTabSelectionKey(selection);
+      // Retrying an oversized session only repeats expensive work on its host.
+      // Selecting the tab again makes one new attempt.
+      if (oversizedDetailKeyRef.current === key) return;
+      oversizedDetailKeyRef.current = null;
       if (state.key !== key) {
         // A fetch still running for the previous tab must not hold back or
         // absorb this tab's refresh; its result is discarded by its own
@@ -2855,6 +2868,28 @@ export function BrowserGatewayApp({
     },
   });
 
+  const requestTranscriptDetail = useCallback(
+    (request: TranscriptBlockDetailRequest) =>
+      relayClientEnabled || isAskAgentSelected
+        ? requestRelayBlockDetail(request)
+        : requestDirectTranscriptDetail({
+            authToken,
+            url: buildApiPathForInstance(
+              "/api/transcript-detail",
+              selectedTabId,
+            ),
+            request,
+          }),
+    [
+      authToken,
+      buildApiPathForInstance,
+      isAskAgentSelected,
+      relayClientEnabled,
+      requestRelayBlockDetail,
+      selectedTabId,
+    ],
+  );
+
   useEffect(() => {
     if (!detachedDetailRefresh) return;
     const { selection } = detachedDetailRefresh;
@@ -2883,6 +2918,7 @@ export function BrowserGatewayApp({
         ) {
           return;
         }
+        oversizedDetailKeyRef.current = null;
         cacheDetachedSessionDetail(
           detachedDetailCacheRef.current,
           detailKey,
@@ -2895,6 +2931,9 @@ export function BrowserGatewayApp({
         setSnapshot(mergeDetachedSessionDetail(latestOwner, detail));
       } catch (error) {
         if (cancelled || controller.signal.aborted) return;
+        if (isSessionDetailTooLarge(error)) {
+          oversizedDetailKeyRef.current = detailKey;
+        }
         setStatus(`Session detail unavailable: ${String(error)}`);
       } finally {
         if (!cancelled) {
@@ -3073,6 +3112,7 @@ export function BrowserGatewayApp({
           ) {
             return;
           }
+          oversizedDetailKeyRef.current = null;
           cacheDetachedSessionDetail(
             detachedDetailCacheRef.current,
             detailKey,
@@ -3085,6 +3125,9 @@ export function BrowserGatewayApp({
           setSnapshot(mergeDetachedSessionDetail(latestOwner, detail));
         } catch (error) {
           if (controller.signal.aborted) return;
+          if (isSessionDetailTooLarge(error)) {
+            oversizedDetailKeyRef.current = detailKey;
+          }
           setStatus(`Session detail unavailable: ${String(error)}`);
         }
       })();
@@ -11478,28 +11521,28 @@ export function BrowserGatewayApp({
                       loadRemoteTranscriptBlockDetail(
                         block,
                         foreground?.sessionId ?? "",
-                        requestRelayBlockDetail,
+                        requestTranscriptDetail,
                       )
                     }
                     loadDisplayImage={(reference) =>
                       loadRemoteDisplayImage(
                         reference,
                         foreground?.sessionId ?? "",
-                        requestRelayBlockDetail,
+                        requestTranscriptDetail,
                       )
                     }
                     loadFinalResult={(reference) =>
                       loadRemoteFinalResult(
                         reference,
                         foreground?.sessionId ?? "",
-                        requestRelayBlockDetail,
+                        requestTranscriptDetail,
                       )
                     }
                     loadWorkSummary={(reference) =>
                       loadRemoteWorkSummary(
                         reference,
                         foreground?.sessionId ?? "",
-                        requestRelayBlockDetail,
+                        requestTranscriptDetail,
                       )
                     }
                   >

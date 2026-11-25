@@ -1513,17 +1513,18 @@ function CopyButton({ text }: { text: string }) {
       });
   }, [clipboardText]);
 
+  const label = copied
+    ? "Copied!"
+    : standaloneCode !== null
+      ? "Copy code block"
+      : "Copy message as Markdown";
+
   return (
     <button
       class={`copy-button ${copied ? "copied" : ""}`}
       onClick={handleCopy}
-      title={
-        copied
-          ? "Copied!"
-          : standaloneCode !== null
-            ? "Copy code block"
-            : "Copy as Markdown"
-      }
+      title={label}
+      aria-label={label}
     >
       <i class={`codicon codicon-${copied ? "check" : "copy"}`} />
     </button>
