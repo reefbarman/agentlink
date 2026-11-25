@@ -48,7 +48,7 @@ import {
 } from "./components/ApprovalPanelEmbed";
 import { BackgroundSessionStrip } from "./components/BackgroundSessionStrip";
 import type { BgSessionInfoProps } from "./components/BackgroundSessionStrip";
-import { BtwPanel } from "./components/BtwPanel";
+import { BtwPanel, buildBtwChatMessage } from "./components/BtwPanel";
 import type { BtwState } from "./components/BtwPanel";
 import { WorktreeSetupPanel } from "./components/WorktreeSetupPanel";
 import { ChatHeader } from "./components/ChatHeader";
@@ -2249,6 +2249,7 @@ export function App({
             ...previous,
             [msg.sessionId]: {
               requestId: msg.requestId,
+              history: msg.history ?? [],
               question: msg.question,
               answer: "",
               tools: [],
@@ -4624,12 +4625,16 @@ export function App({
                       requestId,
                     })
                   }
-                  onPromote={(question, answer) => {
+                  onFollowUp={(question, history) => {
                     vscodeApi.postMessage({
-                      command: "agentBtwPromote",
+                      command: "agentBtwAsk",
                       question,
-                      answer,
+                      history,
                     });
+                  }}
+                  onSendToChat={(followUp, thread) => {
+                    const message = buildBtwChatMessage(followUp, thread);
+                    handleSend(message.text, [], message.displayText);
                     if (activeBtwSessionId) {
                       setBtwStates((previous) => {
                         const next = { ...previous };

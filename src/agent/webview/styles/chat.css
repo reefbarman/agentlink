@@ -10870,6 +10870,79 @@ body.approval-resizing {
   background: var(--vscode-button-hoverBackground);
 }
 
+.btw-promote:disabled,
+.btw-secondary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btw-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btw-actions .btw-promote {
+  margin-left: 0;
+}
+
+.btw-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 11px;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+}
+
+.btw-secondary:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.btw-exchange {
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px dashed var(--vscode-panel-border);
+}
+
+.btw-exchange-question {
+  color: #4ec9b0;
+  font-weight: 600;
+  margin-bottom: 4px;
+  white-space: pre-wrap;
+}
+
+.btw-reply {
+  padding: 6px 12px 0;
+  border-top: 1px solid var(--vscode-panel-border);
+  flex-shrink: 0;
+}
+
+.btw-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 26px;
+  max-height: 120px;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+}
+
+.btw-input:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
 .worktree-setup-secondary-action {
   padding: 3px 10px;
   border: none;

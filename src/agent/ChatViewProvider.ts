@@ -71,6 +71,7 @@ import {
 import { resolveReasoningEffortForMode } from "./modeReasoningEffortPreferences.js";
 import type {
   AgentSessionManager,
+  BtwExchange,
   CheckpointRevertResult,
   PersistedSessionMutationResult,
   SessionApprovalMode,
@@ -1142,6 +1143,7 @@ export type ExtensionToWebview =
       sessionId: string;
       requestId: string;
       question: string;
+      history: BtwExchange[];
     }
   | {
       type: "agentBtwProgress";
@@ -10732,11 +10734,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
-      case "agentBtwPromote": {
-        const question = String(msg.question ?? "");
-        const answer = String(msg.answer ?? "");
-        if (question && answer) {
-          await this.promoteBtwAnswer(question, answer, sourceSessionId);
+      case "agentBtwAsk": {
+        const question = String(msg.question ?? "").trim();
+        if (question && sourceSessionId) {
+          void this.handleBtwQuestion(
+            question,
+            sourceSessionId,
+            parseBtwHistory(msg.history),
+          );
         }
         break;
       }
@@ -14005,6 +14010,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async handleBtwQuestion(
     question: string,
     sessionId: string,
+    history: BtwExchange[] = [],
   ): Promise<void> {
     const requestId = randomUUID();
     const controller = new AbortController();
@@ -14015,6 +14021,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       sessionId,
       requestId,
       question,
+      history,
     } as ExtensionToWebview);
 
     const tools: string[] = [];
@@ -14030,6 +14037,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     try {
       const result = await this.sessionManager?.runBtwQuestion(question, {
         sessionId,
+        history,
         signal: controller.signal,
         onProgress: (event) => {
           switch (event.type) {
@@ -14389,34 +14397,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       message,
       ...(config ? { config } : {}),
     } as ExtensionToWebview);
-  }
-
-  /**
-   * Promote a /btw answer into the main conversation as a user-visible
-   * exchange, so a useful side answer isn't lost when the panel is dismissed.
-   */
-  private async promoteBtwAnswer(
-    question: string,
-    answer: string,
-    sessionId?: string,
-  ): Promise<void> {
-    const session = sessionId
-      ? this.sessionManager?.getSession(sessionId)
-      : this.sessionManager?.getForegroundSession();
-    if (!session) return;
-    session.addUserMessage(`/btw ${question}`, {
-      displayText: `/btw ${question}`,
-      isSlashCommand: true,
-      slashCommandLabel: "/btw",
-    });
-    session.appendAssistantTurn([{ type: "text", text: answer }]);
-    this.sessionManager?.saveSession(session.id);
-    this.postMessage(
-      this.buildSessionLoadedMessage(session, {
-        checkpoints: this.getSessionCheckpoints(session.id),
-        tailTurns: 0,
-      }),
-    );
   }
 
   /**
@@ -15796,6 +15776,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 </body>
 </html>`;
   }
+}
+
+/** Bounded validation for a /btw thread history posted by the webview. */
+const MAX_BTW_HISTORY_EXCHANGES = 50;
+export function parseBtwHistory(value: unknown): BtwExchange[] {
+  if (!Array.isArray(value)) return [];
+  const history: BtwExchange[] = [];
+  for (const entry of value.slice(-MAX_BTW_HISTORY_EXCHANGES)) {
+    if (!entry || typeof entry !== "object") continue;
+    const { question, answer } = entry as Record<string, unknown>;
+    if (typeof question !== "string" || typeof answer !== "string") continue;
+    if (!question.trim() || !answer.trim()) continue;
+    history.push({ question, answer });
+  }
+  return history;
 }
 
 export function classifyApprovalInterruptionReason(

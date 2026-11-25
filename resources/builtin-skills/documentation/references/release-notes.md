@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `/btw` is now a proper side discussion. You can ask follow-up questions in the panel and it remembers the earlier side exchanges. **Send to chat** replaces **Add to conversation**: it sends your message to the main agent along with the side thread, instead of only adding the exchange to the transcript, and queues it if the agent is busy. Each `/btw` question can now use up to 25 turns and 50 tool calls (was 5 and 10), with a ten-minute deadline (was two).
+
 ## 1.106.0
 
 - Semantic search can now be turned on and off from the sidebar's **Codebase Index** section, with a review of what is sent to OpenAI, an approximate size, a choice of scope, API key setup and a rebuild. It stays off by default. **Learn More** opens a new bundled guide, and **Set Up Semantic Search** now includes the same step; before, it stored a key but never turned embeddings on.

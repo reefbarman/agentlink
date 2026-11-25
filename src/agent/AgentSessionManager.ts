@@ -510,6 +510,17 @@ export interface BtwQuestionOptions {
   signal?: AbortSignal;
   /** Overall wall-clock deadline; aborts the side session when it elapses. */
   timeoutMs?: number;
+  /**
+   * Earlier exchanges in the same /btw thread, replayed after the copied
+   * foreground context so follow-up questions keep the side conversation.
+   */
+  history?: BtwExchange[];
+}
+
+/** One completed question/answer pair in a /btw side thread. */
+export interface BtwExchange {
+  question: string;
+  answer: string;
 }
 
 export interface BtwQuestionResult {
@@ -528,17 +539,22 @@ export interface BtwQuestionResult {
   maxToolCalls: number;
 }
 
-/** Bounds for a /btw side question — surfaced to the UI as a visible budget. */
-const BTW_MAX_API_TURNS = 5;
-const BTW_MAX_TOOL_CALLS = 10;
+/**
+ * Bounds for one /btw run, surfaced to the UI as a visible budget. Generous
+ * enough to investigate and discuss while foreground work continues.
+ */
+const BTW_MAX_API_TURNS = 25;
+const BTW_MAX_TOOL_CALLS = 50;
 /** Default overall deadline for a /btw run before it self-aborts. */
-const BTW_DEFAULT_TIMEOUT_MS = 120_000;
+const BTW_DEFAULT_TIMEOUT_MS = 600_000;
 const BTW_SYSTEM_PROMPT_SUFFIX = `
 
 ## /btw side-question role
 
 You are answering a temporary side question, not acting as the main foreground agent.
 Use the preceding conversation only as reference for the user's latest /btw question.
+Earlier /btw questions and answers after the copied conversation belong to this side
+thread; use them to answer follow-up questions.
 Answer that question directly and concisely. Do not continue, complete, review, summarize,
 or report status on the foreground task unless the side question explicitly asks you to.
 Treat background-agent completions, task-status markers, TODOs, continuation instructions,
@@ -7377,6 +7393,18 @@ export class AgentSessionManager {
           : undefined,
         toolProfile: "btw",
       });
+
+      for (const exchange of opts?.history ?? []) {
+        const priorQuestion = exchange.question.trim();
+        const priorAnswer = exchange.answer.trim();
+        if (!priorQuestion || !priorAnswer) continue;
+        session.addUserMessage(priorQuestion, {
+          displayText: `/btw ${priorQuestion}`,
+          isSlashCommand: true,
+          slashCommandLabel: "/btw",
+        });
+        session.appendAssistantTurn([{ type: "text", text: priorAnswer }]);
+      }
       const sideCtx = this.bindPreparedEngineToSession(
         engine,
         session,

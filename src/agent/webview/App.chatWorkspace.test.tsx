@@ -1087,6 +1087,74 @@ describe("App chat workspace integration", () => {
     expect(screen.getByText("Answer for A while inactive")).toBeTruthy();
   });
 
+  it("asks /btw follow-ups and sends the thread to the main chat", () => {
+    const vscodeApi = createVsCodeApi();
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+    deliver({
+      type: "agentBtwLoading",
+      sessionId: "session-1",
+      requestId: "btw-1",
+      question: "First side question",
+    });
+    deliver({
+      type: "agentBtwResponse",
+      sessionId: "session-1",
+      requestId: "btw-1",
+      question: "First side question",
+      answer: "First side answer",
+    });
+
+    const input = container.querySelector(".btw-input") as HTMLTextAreaElement;
+    input.value = "Second side question";
+    fireEvent.input(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(postedCommands(vscodeApi.postMessage, "agentBtwAsk")).toEqual([
+      expect.objectContaining({
+        question: "Second side question",
+        history: [
+          { question: "First side question", answer: "First side answer" },
+        ],
+      }),
+    ]);
+
+    deliver({
+      type: "agentBtwLoading",
+      sessionId: "session-1",
+      requestId: "btw-2",
+      question: "Second side question",
+      history: [
+        { question: "First side question", answer: "First side answer" },
+      ],
+    });
+    deliver({
+      type: "agentBtwResponse",
+      sessionId: "session-1",
+      requestId: "btw-2",
+      question: "Second side question",
+      answer: "Second side answer",
+    });
+    expect(screen.getByText("First side answer")).toBeTruthy();
+    expect(screen.getByText("Second side answer")).toBeTruthy();
+
+    input.value = "Please apply this";
+    fireEvent.input(input);
+    fireEvent.click(screen.getByRole("button", { name: /Send to chat/ }));
+
+    const sends = postedCommands(vscodeApi.postMessage, "agentSend");
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.displayText).toBe(
+      "[/btw thread attached: 2 exchanges]\nPlease apply this",
+    );
+    const text = String(sends[0]?.text);
+    expect(text.startsWith("Please apply this\n")).toBe(true);
+    expect(text).toContain("<btw_side_thread>");
+    expect(text).toContain("Q: First side question\n\nA: First side answer");
+    expect(text).toContain("Q: Second side question\n\nA: Second side answer");
+    expect(container.querySelector(".btw-panel")).toBeNull();
+  });
+
   it("isolates context usage and queued messages across tab switches", () => {
     const vscodeApi = createVsCodeApi();
     const { container } = render(<App vscodeApi={vscodeApi} />);

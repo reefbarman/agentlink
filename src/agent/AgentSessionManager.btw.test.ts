@@ -280,6 +280,41 @@ describe("AgentSessionManager /btw side questions", () => {
     expect(fg.getAllMessages()).toHaveLength(2);
   });
 
+  it("replays earlier /btw exchanges so follow-ups keep the side thread", async () => {
+    const provider = makeProvider(() => textResponse("follow-up answer"));
+    providerRegistry.register(provider);
+
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(makeToolCtx());
+    const fg = await mgr.createSession("code");
+    fg.addUserMessage("Foreground context");
+
+    const result = await mgr.runBtwQuestion("and what about tests?", {
+      history: [
+        { question: "how does auth work?", answer: "It uses tokens." },
+        { question: "  ", answer: "ignored blank question" },
+      ],
+    });
+
+    expect(result.answer).toBe("follow-up answer");
+    const messages = provider.requests[0]?.messages ?? [];
+    const tail = messages.slice(-3);
+    expect(tail[0]).toMatchObject({
+      role: "user",
+      content: "how does auth work?",
+    });
+    expect(tail[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "It uses tokens." }],
+    });
+    expect(tail[2]).toMatchObject({
+      role: "user",
+      content: "and what about tests?",
+    });
+    expect(JSON.stringify(messages)).not.toContain("ignored blank question");
+    expect(fg.getAllMessages()).toHaveLength(1);
+  });
+
   it("runs /worktree setup as a minimal session while foreground work continues", async () => {
     const provider = makeProvider(() =>
       textResponse(
@@ -424,8 +459,8 @@ describe("AgentSessionManager /btw side questions", () => {
     expect(events).toContain("tool");
     expect(events).toContain("budget");
     expect(result.toolCallCount).toBe(1);
-    expect(result.maxApiTurns).toBe(5);
-    expect(result.maxToolCalls).toBe(10);
+    expect(result.maxApiTurns).toBe(25);
+    expect(result.maxToolCalls).toBe(50);
     expect(lastBudget?.toolCalls).toBe(1);
     expect(lastBudget?.apiTurns).toBeGreaterThanOrEqual(1);
   });

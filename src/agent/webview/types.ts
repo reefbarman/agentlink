@@ -80,6 +80,12 @@ export interface BtwBudget {
   maxToolCalls: number;
 }
 
+/** One completed question/answer pair in a /btw side thread. */
+export interface BtwExchange {
+  question: string;
+  answer: string;
+}
+
 export interface WorktreeSetupConfig {
   task: string;
   prompt: string;
@@ -790,6 +796,8 @@ export type ExtensionMessage =
       sessionId: string;
       requestId: string;
       question: string;
+      /** Earlier exchanges in this /btw thread; empty for a new thread. */
+      history?: BtwExchange[];
     }
   | {
       type: "agentBtwProgress";
