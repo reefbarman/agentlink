@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A `/btw` thread sent to the main chat now shows as a **/btw thread** card on your message instead of a `[/btw thread attached: …]` text marker. Expand it to read the side questions and answers that went with the message. Queued `/btw` messages show a compact thread chip, and editing one changes only your message while keeping the thread attached.
+
 ## 1.110.0
 
 - Test-only helper now refuses to run Vitest if home directory isolation is unsafe (e.g. threads pool), with no change to shipped extension or desktop behaviour.

@@ -40,6 +40,8 @@ import { useRemoteDisplayImage } from "./RemoteToolDetail";
 import { RemoteFinalMarkerResult } from "./RemoteFinalMarkerResult";
 import { SkillLoadBlock } from "./SkillLoadBlock";
 import { McpPromptBlock } from "./McpPromptBlock";
+import { BtwThreadBlock } from "./BtwThreadBlock";
+import { parseBtwThreadMessage } from "../../../shared/btwThread";
 import { McpResourceUpdateCard } from "../../../shared/ui/McpResourceUpdates";
 import { parseMcpPromptPresentation } from "../../../shared/mcpPromptPresentation.js";
 import { StreamingText } from "./StreamingText";
@@ -409,8 +411,10 @@ export function MessageBubble({
     const displayMedia = message.displayMedia;
     const slashLabel = message.slashCommandLabel;
     const hasSlashLabel = Boolean(message.isSlashCommand && slashLabel);
+    const btwThread = parseBtwThreadMessage(cleanText);
+    const bodyText = btwThread ? btwThread.text : cleanText;
     const mcpPrompt = parseMcpPromptPresentation(
-      cleanText,
+      bodyText,
       hasSlashLabel ? slashLabel : undefined,
     );
     const skillActivations = message.blocks.filter(
@@ -472,6 +476,9 @@ export function MessageBubble({
               onOpenImageInEditor={onOpenImageInEditor}
             />
           )}
+          {btwThread && (
+            <BtwThreadBlock thread={btwThread} onOpenFile={onOpenFile} />
+          )}
           {mcpPrompt ? (
             <>
               {mcpPrompt.before && (
@@ -483,7 +490,7 @@ export function MessageBubble({
               )}
             </>
           ) : (
-            <UserText text={cleanText} onOpenFile={onOpenFile} />
+            bodyText && <UserText text={bodyText} onOpenFile={onOpenFile} />
           )}
         </div>
         {activationCards}

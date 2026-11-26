@@ -13,6 +13,7 @@ import { agentMessagesToChatMessages, initialState, reducer } from "../App";
 
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import { MessageBubble } from "./MessageBubble";
+import { buildBtwChatMessage } from "../../../shared/btwThread";
 import { formatMcpPromptMessage } from "../../../agent/mcpPromptCommands.js";
 
 const TOOL_GROUP_SETTLE_MS_FOR_TEST = 350;
@@ -132,6 +133,61 @@ describe("user-selected MCP prompt cards", () => {
     );
     expect(container.querySelector(".mcp-prompt-block")).toBeNull();
     expect(container.textContent).toContain("<mcp_prompt");
+  });
+});
+
+describe("/btw thread attachments", () => {
+  it("shows the follow-up and an expandable thread card instead of raw tags", () => {
+    const { displayText } = buildBtwChatMessage(
+      "okay lets do what you suggest",
+      [{ question: "Should we split it?", answer: "Yes, into **two** files." }],
+    );
+    const message: ChatMessage = {
+      id: "user-btw",
+      role: "user",
+      content: displayText,
+      timestamp: Date.now(),
+      blocks: [],
+    };
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+
+    expect(container.textContent).not.toContain("<btw_side_thread>");
+    expect(screen.getByText("okay lets do what you suggest")).toBeTruthy();
+    const header = container.querySelector(
+      ".btw-thread-block .tool-call-header",
+    ) as HTMLButtonElement;
+    expect(header.textContent).toContain("1 exchange");
+    expect(container.querySelector(".btw-thread-details")).toBeNull();
+
+    fireEvent.click(header);
+    expect(container.querySelector(".btw-thread-question")?.textContent).toBe(
+      "Should we split it?",
+    );
+    expect(
+      container.querySelector(".btw-thread-answer strong")?.textContent,
+    ).toBe("two");
+  });
+
+  it("renders legacy indicator messages as a non-expandable card", () => {
+    const message: ChatMessage = {
+      id: "user-btw-legacy",
+      role: "user",
+      content: "[/btw thread attached: 2 exchanges]\nokay go",
+      timestamp: Date.now(),
+      blocks: [],
+    };
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+    expect(container.textContent).not.toContain("[/btw thread attached");
+    expect(screen.getByText("okay go")).toBeTruthy();
+    const header = container.querySelector(
+      ".btw-thread-block .tool-call-header",
+    ) as HTMLButtonElement;
+    expect(header.disabled).toBe(true);
+    expect(header.textContent).toContain("2 exchanges");
   });
 });
 

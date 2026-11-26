@@ -1802,6 +1802,55 @@ body.chat-activity-shelf-resizing * {
   min-width: 0;
 }
 
+/* /btw side thread attached to a user message */
+.user-content .btw-thread-block {
+  margin: 0 0 6px;
+}
+
+.user-content .btw-thread-block:last-child {
+  margin-bottom: 0;
+}
+
+.btw-thread-block .tool-call-header:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.btw-thread-block .tool-call-status-icon {
+  color: var(--vscode-terminal-ansiCyan, #4ec9b0);
+}
+
+.btw-thread-details {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.btw-thread-exchange + .btw-thread-exchange {
+  padding-top: 10px;
+  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
+}
+
+.btw-thread-question {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  font-weight: 600;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.btw-thread-question .codicon {
+  margin-top: 2px;
+  opacity: 0.7;
+}
+
+.btw-thread-answer {
+  margin-top: 4px;
+  padding-left: 20px;
+  min-width: 0;
+}
+
 .user-content {
   background: var(
     --vscode-textCodeBlock-background,
@@ -5200,6 +5249,21 @@ body.chat-activity-shelf-resizing * {
   padding-left: 4px;
   border-left: 2px solid var(--vscode-focusBorder);
   background: color-mix(in srgb, var(--vscode-focusBorder) 8%, transparent);
+}
+
+.queue-item-btw-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--vscode-badge-background, rgba(128, 128, 128, 0.2));
+  color: var(--vscode-badge-foreground, inherit);
+  font-size: 11px;
+}
+
+.queue-item-btw-chip .codicon {
+  font-size: 11px;
 }
 
 .queue-item-text {

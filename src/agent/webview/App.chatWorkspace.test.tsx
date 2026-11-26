@@ -1144,14 +1144,16 @@ describe("App chat workspace integration", () => {
 
     const sends = postedCommands(vscodeApi.postMessage, "agentSend");
     expect(sends).toHaveLength(1);
-    expect(sends[0]?.displayText).toBe(
-      "[/btw thread attached: 2 exchanges]\nPlease apply this",
-    );
     const text = String(sends[0]?.text);
+    expect(sends[0]?.displayText).toBe(text);
     expect(text.startsWith("Please apply this\n")).toBe(true);
     expect(text).toContain("<btw_side_thread>");
-    expect(text).toContain("Q: First side question\n\nA: First side answer");
-    expect(text).toContain("Q: Second side question\n\nA: Second side answer");
+    expect(text).toContain(
+      "<question>\nFirst side question\n</question>\n<answer>\nFirst side answer\n</answer>",
+    );
+    expect(text).toContain(
+      "<question>\nSecond side question\n</question>\n<answer>\nSecond side answer\n</answer>",
+    );
     expect(container.querySelector(".btw-panel")).toBeNull();
   });
 
