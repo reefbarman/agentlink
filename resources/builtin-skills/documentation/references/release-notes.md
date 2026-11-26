@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.108.0
+
 - Approval rules now work the same way on every file card (outside-workspace reads, writes inside and outside the workspace, and renames): one editor with **Prefix**, **Exact** and **Glob**, defaulting to a prefix on the file's folder. Switching mode swaps an untouched pattern to the full path or a glob for that folder, picking a match mode switches the rule on at Session scope (command rules too), and the pattern field wraps so long paths stay readable in a narrow panel. **All files** is still offered for writes inside the workspace; **This file only** is now **Exact**.
 - Added **Allow Folder for Session** to file approval cards: one click accepts the request and trusts the file's folder for the session.
 - Approve for Me asks you less often when the agent reverts a file to undo unwanted formatting. For `git checkout` and `git restore` of files, Guardian now receives the diff that would be discarded plus AgentLink's own record of whether this session edited the file, whether it was clean before that, and whether anything else changed it since. A revert that only discards the session's own edits can be approved without a prompt; files with earlier or outside changes, and directory-wide restores, still come to you.
