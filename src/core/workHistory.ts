@@ -84,6 +84,16 @@ export interface WorkHistoryFreezeOptions {
   observe?: (absolutePath: string) => Promise<WorkHistoryDiskObservation>;
 }
 
+/** Boundary facts about one session's recorded edits to a single file. */
+export interface WorkHistoryFileFacts {
+  /** The file immediately before the earliest retained recorded edit. */
+  firstBefore: { exists: boolean; hash: string };
+  /** The file immediately after the latest recorded edit. */
+  lastAfter: { exists: boolean; hash: string };
+  /** False when something else changed the file between recorded edits. */
+  continuous: boolean;
+}
+
 interface CapturedState {
   exists: boolean;
   hash: string;
@@ -175,6 +185,24 @@ export class WorkHistoryJournal {
 
   get hasSessionChanges(): boolean {
     return this.session.files.size > 0;
+  }
+
+  /** True once a limit dropped edits, so an untracked file may still have been edited. */
+  get isStorageLimited(): boolean {
+    return this.storageLimited;
+  }
+
+  /** Facts about this session's recorded edits to one file, if it has any. */
+  describeFile(fileKey: string): WorkHistoryFileFacts | undefined {
+    const track = this.session.files.get(fileKey);
+    const first = track?.segments[0];
+    const last = track?.segments.at(-1);
+    if (!first || !last) return undefined;
+    return {
+      firstBefore: { exists: first.before.exists, hash: first.before.hash },
+      lastAfter: { exists: last.after.exists, hash: last.after.hash },
+      continuous: track!.segments.length === 1,
+    };
   }
 
   /**

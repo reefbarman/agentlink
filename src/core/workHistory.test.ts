@@ -246,4 +246,36 @@ describe("WorkHistoryJournal", () => {
     );
     expect(second!.session!.coverageNotes).toContain("capture_restarted");
   });
+
+  it("describes the boundary states of a file's recorded edits", async () => {
+    const journal = new WorkHistoryJournal();
+    expect(journal.describeFile("a.ts")).toBeUndefined();
+
+    journal.record(edit("a.ts", "1", "2"));
+    journal.record(edit("a.ts", "2", "3"));
+    expect(journal.describeFile("a.ts")).toEqual({
+      firstBefore: { exists: true, hash: hashWorkHistoryContent(true, "1") },
+      lastAfter: { exists: true, hash: hashWorkHistoryContent(true, "3") },
+      continuous: true,
+    });
+
+    // The facts survive a summary, and an outside change breaks continuity.
+    await freeze(journal);
+    journal.record(edit("a.ts", "3 formatted elsewhere", "4"));
+    expect(journal.describeFile("a.ts")).toMatchObject({
+      firstBefore: { hash: hashWorkHistoryContent(true, "1") },
+      lastAfter: { hash: hashWorkHistoryContent(true, "4") },
+      continuous: false,
+    });
+    expect(journal.isStorageLimited).toBe(false);
+  });
+
+  it("reports when a limit may have dropped edits", () => {
+    const journal = new WorkHistoryJournal({ maxTrackedFiles: 1 });
+    journal.record(edit("a.ts", "1", "2"));
+    journal.record(edit("b.ts", "1", "2"));
+
+    expect(journal.describeFile("b.ts")).toBeUndefined();
+    expect(journal.isStorageLimited).toBe(true);
+  });
 });

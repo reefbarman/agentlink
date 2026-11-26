@@ -9,6 +9,7 @@ import {
   type CommittedEditRecord,
   type WorkHistoryActivity,
   type WorkHistoryDiskObservation,
+  type WorkHistoryFileFacts,
 } from "../core/workHistory.js";
 import { canonicalizePath } from "../util/canonicalPath.js";
 
@@ -90,6 +91,31 @@ export class WorkHistoryRegistry {
 
   hasSessionChanges(sessionId: string): boolean {
     return this.journals.get(sessionId)?.hasSessionChanges ?? false;
+  }
+
+  /**
+   * What this host lifetime recorded about a session's edits to one file.
+   * `complete` is false when edits may be missing (the session was restored
+   * after a reload, or a journal limit was hit), so an absent `file` then does
+   * not prove the session never edited it. Never throws.
+   */
+  describeSessionFile(
+    sessionId: string,
+    absolutePath: string,
+  ): { complete: boolean; file?: WorkHistoryFileFacts } {
+    try {
+      const journal = this.journals.get(sessionId);
+      const file = journal?.describeFile(canonicalizePath(absolutePath));
+      return {
+        complete:
+          !this.restoredSessions.has(sessionId) &&
+          !this.restartedSessions.has(sessionId) &&
+          !journal?.isStorageLimited,
+        ...(file ? { file } : {}),
+      };
+    } catch {
+      return { complete: false };
+    }
   }
 
   async freeze(

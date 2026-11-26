@@ -82,6 +82,8 @@ import {
   type RetainedCommandReviewDenials,
 } from "../approvals/commandApprovalReview.js";
 import { collectCommandReviewEvidenceWithMetadata } from "../approvals/commandReviewEvidence.js";
+import { collectRestoreTargetEvidence } from "../approvals/restoreTargetEvidence.js";
+import { workHistoryRegistry } from "../agent/WorkHistoryRegistry.js";
 import type {
   ReviewPublicationContext,
   ReviewPublicationHost,
@@ -5520,6 +5522,15 @@ async function approveSubCommands(
           reviewedCommand,
           { cwd, workspaceRoots },
         );
+        const restoreEvidence = await collectRestoreTargetEvidence(
+          reviewedCommand,
+          {
+            cwd,
+            workspaceRoots,
+            describeSessionFile: (absolutePath) =>
+              workHistoryRegistry.describeSessionFile(sessionId, absolutePath),
+          },
+        );
         review = await reviewProviders.commandApprovalReviewer.review({
           sessionId,
           command: reviewedCommand,
@@ -5536,7 +5547,7 @@ async function approveSubCommands(
             : {}),
           security: options?.security,
           inlineFiles,
-          evidence: collectedEvidence.evidence,
+          evidence: { ...collectedEvidence.evidence, ...restoreEvidence },
           evidenceMetadata: {
             ...contextSnapshot?.metadata,
             ...collectedEvidence.metadata,

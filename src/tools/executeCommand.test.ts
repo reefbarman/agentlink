@@ -2846,6 +2846,107 @@ describe("handleExecuteCommand", () => {
     });
   });
 
+  it("passes the session's own edit record for a file restore to the guardian review", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const realOs = await vi.importActual<typeof import("node:os")>("node:os");
+    const path = await import("node:path");
+    const { execFileSync } = await import("node:child_process");
+    const repo = fs.realpathSync(
+      fs.mkdtempSync(path.join(realOs.tmpdir(), "agentlink-restore-review-")),
+    );
+    try {
+      const git = (...args: string[]) =>
+        execFileSync(
+          "git",
+          [
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            ...args,
+          ],
+          { cwd: repo, stdio: "pipe" },
+        );
+      const file = path.join(repo, "a.ts");
+      fs.writeFileSync(file, "const a = 1;\n");
+      git("init", "-q");
+      git("add", "-A");
+      git("commit", "-q", "-m", "initial");
+      fs.writeFileSync(file, "const a = 2;\n");
+      getWorkspaceRoots.mockReturnValue([repo]);
+      tryGetFirstWorkspaceRoot.mockReturnValue(repo);
+
+      const sessionId = "session-restore-evidence";
+      const { workHistoryRegistry } =
+        await import("../agent/WorkHistoryRegistry.js");
+      workHistoryRegistry.runWithCapture({ sessionId }, () =>
+        workHistoryRegistry.recordCommittedEdit({
+          absolutePath: file,
+          displayPath: "a.ts",
+          before: { exists: true, content: "const a = 1;\n" },
+          after: { exists: true, content: "const a = 2;\n" },
+        }),
+      );
+      const review = vi.fn(async () => ({
+        outcome: "allow" as const,
+        risk: "low" as const,
+        userAuthorization: "medium" as const,
+        rationale: "Task-only restore",
+        model: "review-model",
+        status: "reviewed" as const,
+      }));
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      await handleExecuteCommand(
+        { command: "git checkout -- a.ts", cwd: repo },
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        { enqueueCommandApproval: vi.fn() } as never,
+        sessionId,
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: { review },
+          isSessionActive: () => true,
+        },
+      );
+
+      expect(review).toHaveBeenCalledOnce();
+      expect(review).toHaveBeenCalledWith(
+        expect.objectContaining({
+          evidence: expect.objectContaining({
+            restoreTargetsOmitted: 0,
+            restoreTargets: [
+              expect.objectContaining({
+                target: "a.ts",
+                resolvedPath: file,
+                changedFileCount: 1,
+                diff: expect.stringContaining("+const a = 2;"),
+                sessionEdited: true,
+                cleanBeforeSessionEdits: true,
+                changedOutsideSessionEdits: false,
+              }),
+            ],
+          }),
+        }),
+      );
+      workHistoryRegistry.dispose(sessionId);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("clears a retained guardian denial once a human approves the command", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>

@@ -1384,6 +1384,15 @@ describe("one-shot command approval reviewer", () => {
     expect(request?.systemPrompt).toContain(
       "Broad working-tree restores, unrelated changes, mixed ownership, or uncertain discarded content need direct user authorization",
     );
+    expect(request?.systemPrompt).toContain(
+      "Host-measured restoreTargets evidence counts as inspected changes and can establish this on its own",
+    );
+    expect(request?.systemPrompt).toContain(
+      "cleanBeforeSessionEdits true with changedOutsideSessionEdits false establishes that the whole diff is this session's own edits",
+    );
+    expect(request?.systemPrompt).toContain(
+      "null means the host could not determine the fact, never yes or no",
+    );
     expect(request?.messages).toHaveLength(1);
     expect(request?.messages[0]?.role).toBe("user");
     const content = request?.messages[0]?.content;
@@ -1666,6 +1675,61 @@ describe("one-shot command approval reviewer", () => {
     expect(content).toContain('"target":"shots"');
     expect(content).toContain('"sampleEntries":["a.png","b.png","c.png"]');
     expect(content).toContain('"deletionTargetsOmitted":1');
+  });
+
+  it("sends restore target evidence only when the command restores files", async () => {
+    const { provider, complete, sessionModel } = makeProvider({});
+    const reviewer = createCommandApprovalReviewer({
+      resolveContext: () => ({ provider, sessionModel }),
+    });
+    const restoreTarget = {
+      target: "src/a.ts",
+      resolvedPath: path.join(root, "src", "a.ts"),
+      insideWorkspace: true,
+      kind: "file" as const,
+      sourceKind: "index" as const,
+      sourceRef: null,
+      changedFileCount: 1,
+      sampleChangedFiles: ["src/a.ts"],
+      linesAdded: 1,
+      linesRemoved: 1,
+      diff: "@@ -1 +1 @@\n-const a = 1;\n+const a = 2;\n",
+      diffTruncated: false,
+      diffRedacted: false,
+      diffUnavailableReason: null,
+      sessionEdited: true,
+      cleanBeforeSessionEdits: true,
+      changedOutsideSessionEdits: false,
+    };
+
+    await reviewer.review({
+      ...reviewInput("git checkout -- src/a.ts"),
+      evidence: {
+        referencedScripts: [],
+        deletionTargets: [],
+        deletionTargetsOmitted: 0,
+        restoreTargets: [restoreTarget],
+        restoreTargetsOmitted: 2,
+      },
+    });
+    await reviewer.review({
+      ...reviewInput("git status"),
+      evidence: {
+        referencedScripts: [],
+        deletionTargets: [],
+        deletionTargetsOmitted: 0,
+        restoreTargets: [],
+      },
+    });
+
+    const content = complete.mock.calls[0]?.[0]?.messages[0]?.content;
+    expect(content).toContain(
+      `"restoreTargets":[${JSON.stringify(restoreTarget)}]`,
+    );
+    expect(content).toContain('"restoreTargetsOmitted":2');
+    expect(complete.mock.calls[1]?.[0]?.messages[0]?.content).not.toContain(
+      "restoreTargets",
+    );
   });
 
   it("sends empty evidence defaults when no evidence was collected", async () => {

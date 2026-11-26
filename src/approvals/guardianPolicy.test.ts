@@ -18,7 +18,7 @@ describe("shared Guardian policy", () => {
         .digest("hex")
         .slice(0, 16),
     );
-    expect(COMMAND_REVIEW_POLICY_FINGERPRINT).toBe("51b66547c3dcc7e8");
+    expect(COMMAND_REVIEW_POLICY_FINGERPRINT).toBe("c0d22d958491d001");
     expect(GUARDIAN_REVIEW_SYSTEM_PROMPT).toContain(
       "Ordinary Git and GitHub publishing workflow is authorized by default",
     );

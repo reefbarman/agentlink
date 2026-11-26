@@ -858,6 +858,12 @@ function serializeReviewData(
       referencedScripts: input.evidence?.referencedScripts ?? [],
       deletionTargets: input.evidence?.deletionTargets ?? [],
       deletionTargetsOmitted: input.evidence?.deletionTargetsOmitted ?? 0,
+      ...(input.evidence?.restoreTargets?.length
+        ? {
+            restoreTargets: input.evidence.restoreTargets,
+            restoreTargetsOmitted: input.evidence.restoreTargetsOmitted ?? 0,
+          }
+        : {}),
       ...(reviewPublicationContext
         ? {
             reviewPublicationContext: {

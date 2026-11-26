@@ -6,6 +6,7 @@ import * as path from "path";
 import { expandSubCommands, splitCompoundCommand } from "./commandSplitter.js";
 
 import type { GuardianEvidenceSourceMetadata } from "./guardianReviewEvidence.js";
+import type { RestoreTargetEvidence } from "./restoreTargetEvidence.js";
 import { isCommandPathInsideWorkspace } from "./commandTierClassifier.js";
 import { scanShellLexWords } from "../util/shellLex.js";
 
@@ -77,6 +78,13 @@ export interface CommandReviewEvidence {
   referencedScripts: ReferencedScriptEvidence[];
   deletionTargets: DeletionTargetEvidence[];
   deletionTargetsOmitted: number;
+  /**
+   * Present only when the command restores working-tree paths with
+   * `git checkout`/`git restore`. Collected separately because it needs git:
+   * see collectRestoreTargetEvidence.
+   */
+  restoreTargets?: RestoreTargetEvidence[];
+  restoreTargetsOmitted?: number;
 }
 
 export interface CommandReviewEvidenceContext {
