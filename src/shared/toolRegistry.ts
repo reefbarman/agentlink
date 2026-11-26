@@ -363,13 +363,13 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     label: "Triage feedback entries",
     devOnly: true,
     description:
-      "Mark active feedback as accepted for fixing or improvement with a required P0-P3 priority, or return it to the untriaged queue. Use stable IDs from get_feedback. Evaluate bugs and grounded feature opportunities separately; accepting a report does not establish its suspected cause or authorize implementation. Triage metadata is stored separately so the primary feedback file remains append-only.",
+      "Mark active feedback as accepted for fixing or improvement with a required P0-P3 priority, or return it to the untriaged queue. Use stable IDs from get_feedback. Evaluate bugs and grounded feature opportunities separately; accepting a report does not establish its suspected cause or authorize implementation. Triage metadata is stored separately from the reports.",
   },
   delete_feedback: {
-    label: "Hide feedback entries",
+    label: "Delete feedback entries",
     devOnly: true,
     description:
-      "Logically hide active feedback entries by stable ID (preferred) or legacy global index. Never pass filtered-list positions as indices. The primary feedback file remains append-only and retains raw records; the result identifies exactly which entries were hidden.",
+      "Permanently delete active feedback entries from disk, with their full content and triage history, by stable ID (preferred) or global index. Global indices renumber after every deletion, so never reuse indices from an earlier read or pass filtered-list positions. Deletion cannot be undone; the result identifies exactly which entries were deleted.",
   },
 };
 

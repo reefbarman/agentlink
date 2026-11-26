@@ -273,7 +273,7 @@ export function FeedbackList({ entries, postCommand }: Props) {
         {entries.length > 0 && (
           <button
             class="btn btn-cancel"
-            title="Hide every active feedback entry; raw records remain in the append-only file"
+            title="Permanently delete every active feedback entry from disk"
             onClick={() => postCommand("clearAllFeedback")}
           >
             Hide All

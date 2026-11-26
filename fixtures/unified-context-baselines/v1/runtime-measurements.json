@@ -841,44 +841,44 @@
     {
       "mode": "code",
       "toolCount": 67,
-      "chars": 108923,
-      "estimatedTokens": 27231,
-      "sha256": "9be4b10ded6c301c833032e673009301c0e8bc70339a17461c73a748ce2753cc"
+      "chars": 109039,
+      "estimatedTokens": 27260,
+      "sha256": "be4eb467df81adf6fb4b22e5f5d8f288618993ccf4a3b10ad66501329bd70857"
     },
     {
       "mode": "architect",
       "toolCount": 62,
-      "chars": 102295,
-      "estimatedTokens": 25574,
-      "sha256": "2ac607c57c105a7ee8aabf021e6092bd379173beeab5be83bcfb1a5c97047a7e"
+      "chars": 102411,
+      "estimatedTokens": 25603,
+      "sha256": "845afd400da0afaf5e45939e460200ed915297f4a96d75eb310cb18c6058e2dc"
     },
     {
       "mode": "orchestrate",
       "toolCount": 56,
-      "chars": 73983,
-      "estimatedTokens": 18496,
-      "sha256": "a3eeb0d66e4c8b608058cb834af0a23bd5ba9292ae58e06e14346baa97c824d7"
+      "chars": 74099,
+      "estimatedTokens": 18525,
+      "sha256": "9f6ac9c519905c41fa7e0c3af28a59d3b16f31e938e5e74352a846ba95857568"
     },
     {
       "mode": "ask",
       "toolCount": 41,
-      "chars": 65255,
-      "estimatedTokens": 16314,
-      "sha256": "28cf9319cc8378490ea2edbc4d2a510bd59750550d16b9dba609e352d0ae6dd7"
+      "chars": 65371,
+      "estimatedTokens": 16343,
+      "sha256": "79cfb867703c2c2b806cf1344b5a8c237c34f58aae409a726bed3025dc0dd816"
     },
     {
       "mode": "debug",
       "toolCount": 59,
-      "chars": 89726,
-      "estimatedTokens": 22432,
-      "sha256": "a606f40cf743681025008ed76f126ec44199fc43cb29aeb5b14bf4e00b9ce3df"
+      "chars": 89842,
+      "estimatedTokens": 22461,
+      "sha256": "3417441a462c2f72cf67a1f8e566178094407908fb001191f89a3b15f2592de6"
     },
     {
       "mode": "review",
       "toolCount": 53,
-      "chars": 85791,
-      "estimatedTokens": 21448,
-      "sha256": "9295f9cdf7fcc35350f4fe321ed3768fb82367254861f3edb6a85d586c864451"
+      "chars": 85907,
+      "estimatedTokens": 21477,
+      "sha256": "8b95e25574b9c46ae6b45dcb4295b40c875b989db7b02d5a76d393caaaaf9a81"
     }
   ],
   "projectedToolsByMode": [

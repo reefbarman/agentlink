@@ -64,7 +64,7 @@ When triaging, validate the reported consequence, workaround and recurrence agai
 
 ### triage_feedback
 
-Mark active feedback as accepted for fixing or improvement with a required priority, or return it to the untriaged queue. “Triaged” means accepted, not merely reviewed. The triage workflow reviews improvement and feature proposals, provides an AI verdict (worth pursuing, simplify, investigate first, or decline) with benefit-versus-complexity reasoning and alternatives, then asks the user to approve for backlog, refine/discuss, defer, or decline. The assessment is included in each question's context before the user decides; the workflow does not routinely ask the user to supply the analysis. Deferred proposals remain active and untriaged. Ordinary evidence-based bug triage continues without this extra product-approval step. This is workflow guidance, not a new tool-enforced approval gate. Deliberately declined feedback can be hidden with `delete_feedback`.
+Mark active feedback as accepted for fixing or improvement with a required priority, or return it to the untriaged queue. “Triaged” means accepted, not merely reviewed. The triage workflow reviews improvement and feature proposals, provides an AI verdict (worth pursuing, simplify, investigate first, or decline) with benefit-versus-complexity reasoning and alternatives, then asks the user to approve for backlog, refine/discuss, defer, or decline. The assessment is included in each question's context before the user decides; the workflow does not routinely ask the user to supply the analysis. Deferred proposals remain active and untriaged. Ordinary evidence-based bug triage continues without this extra product-approval step. This is workflow guidance, not a new tool-enforced approval gate. Deliberately declined feedback can be deleted with `delete_feedback`.
 
 | Parameter  | Type     | Description                                                           |
 | ---------- | -------- | --------------------------------------------------------------------- |
@@ -72,20 +72,22 @@ Mark active feedback as accepted for fixing or improvement with a required prior
 | `triaged`  | boolean  | `true` to accept for fixing; `false` to return to the untriaged queue |
 | `priority` | P0-P3?   | Required when triaging and forbidden when untriaging; P0 is highest   |
 
-Triage metadata is stored as immutable events in append order under `~/.agentlink/agentlink-feedback-triage.jsonl`. The primary feedback JSONL remains append-only. The result includes exact `updated_entries` and `unknown_ids`.
+Triage metadata is stored as events in append order under `~/.agentlink/agentlink-feedback-triage.jsonl`; deleting feedback drops its events and compacts the file to the latest event per report. The result includes exact `updated_entries` and `unknown_ids`.
 
 The development sidebar defaults to the untriaged queue grouped by tool. It can switch between all, untriaged, and triaged feedback; filter accepted items by priority; group by tool or priority; and search tool names, categories, report text, evidence, diagnoses, and proposals. Reports show their category when supplied, with separate expandable observed impact/need, workaround/outcome, recurrence, unverified suspected cause, proposed change, and success check, alongside the original inputs/results. Assigning a priority accepts an item for fixing or improvement, while **Untriage** clears its priority.
 
 ### delete_feedback
 
-Logically hide specific feedback entries from active reads and telemetry. Pass exactly one selector; stable IDs are preferred. The primary feedback JSONL remains append-only and retains raw feedback at rest. New deletions use atomically created per-ID tombstones under `~/.agentlink/agentlink-feedback-deletions/`; the legacy `agentlink-feedback-deletions.jsonl` log remains readable. This prevents concurrent feedback appends from being lost and makes repeated cross-window deletion deterministic.
+Permanently delete specific feedback entries from disk: the line in `~/.agentlink/agentlink-feedback.jsonl`, the full-content file in `agentlink-feedback-content/`, and the entry's triage events. Pass exactly one selector; stable IDs are preferred. The primary file is rewritten atomically. Appends, triage and deletion share a lock file (`agentlink-feedback.lock`), so a report sent from another window during a deletion is not lost.
 
-| Parameter | Type      | Description                                                                |
-| --------- | --------- | -------------------------------------------------------------------------- |
-| `ids`     | string[]? | Stable IDs returned by `get_feedback` (preferred)                          |
-| `indices` | number[]? | Legacy immutable global indices; never positions in a filtered result list |
+Builds before physical deletion only hid entries with tombstones under `agentlink-feedback-deletions/` (or the legacy `agentlink-feedback-deletions.jsonl`). Tombstones still hide their entries, and the next deletion purges every tombstoned entry from disk and removes the tombstones (`purged_hidden` in the result).
 
-The result includes exact `removed_entries`, `already_deleted_ids`, `unknown_ids`, and `unknown_indices`. Repeating an ID is safe and reported as already deleted. Logical deletion does not redact or compact the append-only primary file.
+| Parameter | Type      | Description                                                                                      |
+| --------- | --------- | ------------------------------------------------------------------------------------------------ |
+| `ids`     | string[]? | Stable IDs returned by `get_feedback` (preferred)                                                |
+| `indices` | number[]? | Global indices from the latest read; they renumber after each deletion, never filtered positions |
+
+The result includes exact `removed_entries`, `already_deleted_ids` (tombstoned by an older build), `unknown_ids`, `unknown_indices`, and `purged_hidden`. Repeating a deleted ID reports it as unknown.
 
 ## Streaming Baseline
 

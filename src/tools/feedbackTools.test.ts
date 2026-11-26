@@ -191,6 +191,7 @@ describe("feedback tools", () => {
       already_deleted_ids: ["old-id"],
       unknown_ids: ["missing-id"],
       unknown_indices: [],
+      purged_hidden_ids: ["old-id"],
     });
 
     const result = await handleDeleteFeedback({
@@ -209,6 +210,7 @@ describe("feedback tools", () => {
       already_deleted_ids: ["old-id"],
       unknown_ids: ["missing-id"],
       unknown_indices: [],
+      purged_hidden: 1,
     });
   });
 

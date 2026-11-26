@@ -2338,7 +2338,7 @@ Press F5 in VS Code to launch the Extension Development Host for testing.
 
 ### Development feedback tools
 
-Development builds expose local tools for collecting and managing AgentLink bug reports, workflow improvements, and feature requests grounded in actual use. This is a reviewed self-improvement loop, not autonomous self-modification. Raw feedback is appended to `~/.agentlink/agentlink-feedback.jsonl`; triage and deletion are metadata overlays, so the primary file is never rewritten.
+Development builds expose local tools for collecting and managing AgentLink bug reports, workflow improvements, and feature requests grounded in actual use. This is a reviewed self-improvement loop, not autonomous self-modification. Raw feedback is appended to `~/.agentlink/agentlink-feedback.jsonl`; triage is a metadata overlay, and deletion removes entries from disk.
 
 #### `send_feedback`
 
@@ -2395,11 +2395,11 @@ The development sidebar displays supplied categories and separate expandable obs
 | `triaged`  | boolean  | `true` to accept for fixing; `false` to return to the review queue  |
 | `priority` | P0-P3?   | Required when triaging and forbidden when untriaging; P0 is highest |
 
-The response includes the exact `updated_entries` and any `unknown_ids`. Immutable triage events are stored in append order under `~/.agentlink/agentlink-feedback-triage.jsonl`.
+The response includes the exact `updated_entries` and any `unknown_ids`. Triage events are stored in append order under `~/.agentlink/agentlink-feedback-triage.jsonl`.
 
 #### `delete_feedback`
 
-Logically hides feedback by stable `ids` (preferred) or legacy immutable `indices`. The response includes exact `removed_entries`, `already_deleted_ids`, `unknown_ids`, and `unknown_indices`. Deletion tombstones are stored under `~/.agentlink/agentlink-feedback-deletions/`; hidden raw records remain in the primary JSONL file.
+Permanently deletes feedback from disk, including its full content and triage history, by stable `ids` (preferred) or global `indices`. Indices renumber after every deletion, so take them from the latest `get_feedback` read. The response includes exact `removed_entries`, `already_deleted_ids`, `unknown_ids`, `unknown_indices`, and `purged_hidden` (entries an older build had only hidden, which are purged on the next deletion).
 
 The development sidebar defaults to untriaged feedback grouped by tool. It can switch among all, untriaged, and triaged views; filter accepted feedback by priority; group by tool or priority; and search feedback text and tool names. Assigning a priority accepts an item for fixing, while **Untriage** clears its priority.
 

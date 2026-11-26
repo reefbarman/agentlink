@@ -15,6 +15,9 @@ export default defineConfig({
     // Let jsdom provide browser storage instead of Node's file-backed Web Storage.
     execArgv: ["--no-experimental-webstorage"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    // Each test file runs in its own process so isolatedHome.ts can redirect
+    // os.homedir(). Worker threads cannot, and isolatedHome.ts rejects them.
+    pool: "forks",
     sequence: { sequencer: TestPartsSequencer },
     // Absolute so workspaces that inherit this config (apps/desktop) resolve it.
     setupFiles: [

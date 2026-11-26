@@ -19,6 +19,7 @@ export async function handleDeleteFeedback(params: {
             already_deleted_ids: result.already_deleted_ids,
             unknown_ids: result.unknown_ids,
             unknown_indices: result.unknown_indices,
+            purged_hidden: result.purged_hidden_ids.length,
           }),
         },
       ],

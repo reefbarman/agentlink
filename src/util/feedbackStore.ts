@@ -17,6 +17,10 @@ const LEGACY_TOMBSTONE_FILE = "agentlink-feedback-deletions.jsonl";
 const TOMBSTONE_DIRECTORY = "agentlink-feedback-deletions";
 const TRIAGE_FILE = "agentlink-feedback-triage.jsonl";
 const CONTENT_DIRECTORY = "agentlink-feedback-content";
+const LOCK_FILE = "agentlink-feedback.lock";
+const LOCK_WAIT_MS = 10_000;
+/** A lock older than this was left by a crashed process and may be broken. */
+const LOCK_STALE_MS = 30_000;
 const FEEDBACK_PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
 
 /**
@@ -229,11 +233,75 @@ export interface DeleteFeedbackResult {
   already_deleted_ids: string[];
   unknown_ids: string[];
   unknown_indices: number[];
+  /** Records hidden by older builds' tombstones, purged from disk in this call. */
+  purged_hidden_ids: string[];
 }
 
 function appendLine(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.appendFileSync(filePath, JSON.stringify(value) + "\n", "utf-8");
+}
+
+const lockSleepCell = new Int32Array(new SharedArrayBuffer(4));
+
+function isStaleLock(lockPath: string): boolean {
+  try {
+    return Date.now() - fs.statSync(lockPath).mtimeMs > LOCK_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Serializes every write to the feedback store across processes (VS Code
+ * windows, background agents). Deletion rewrites files, so an unlocked append
+ * landing between its read and rename would be lost.
+ */
+function withFeedbackLock<T>(operation: () => T): T {
+  const lockPath = getStorePath(LOCK_FILE);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lockPath, "wx", 0o600));
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    if (isStaleLock(lockPath)) {
+      fs.rmSync(lockPath, { force: true });
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        "timed out waiting for another AgentLink process to finish writing feedback",
+      );
+    }
+    Atomics.wait(lockSleepCell, 0, 0, 10);
+  }
+  try {
+    return operation();
+  } finally {
+    fs.rmSync(lockPath, { force: true });
+  }
+}
+
+/** Replaces a file in one rename so readers never see a partial rewrite. */
+function writeFileAtomic(filePath: string, content: string): void {
+  const temp = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  const descriptor = fs.openSync(temp, "wx", 0o600);
+  try {
+    fs.writeFileSync(descriptor, content, "utf-8");
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  try {
+    fs.renameSync(temp, filePath);
+  } catch (error) {
+    fs.rmSync(temp, { force: true });
+    throw error;
+  }
 }
 
 function sha256Hex(value: string): string {
@@ -661,29 +729,12 @@ function projectFeedbackRecord(
   };
 }
 
-function appendTombstone(tombstone: FeedbackTombstone): boolean {
-  const directory = getTombstoneDirectory();
-  fs.mkdirSync(directory, { recursive: true });
-  let descriptor: number;
-  try {
-    descriptor = fs.openSync(tombstonePath(tombstone.id), "wx", 0o600);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
-    throw error;
-  }
-  try {
-    fs.writeFileSync(descriptor, JSON.stringify(tombstone) + "\n", "utf-8");
-  } finally {
-    fs.closeSync(descriptor);
-  }
-  return true;
-}
-
 /**
  * Appends one feedback report without losing accepted content. The bounded
  * index line keeps the existing atomic-append ceiling; when its preview must
  * shorten or omit fields, the complete canonical record is first written to an
  * immutable ID-addressed file. Readers only discover records via the index.
+ * Both writes happen under the store lock so deletion cannot drop them.
  */
 export function appendFeedback(entry: FeedbackEntry): FeedbackRecord {
   const id = randomUUID();
@@ -708,32 +759,42 @@ export function appendFeedback(entry: FeedbackEntry): FeedbackRecord {
   const sha256 = sha256Hex(json);
   const { line, entry: indexEntry } = buildPreviewLine(record, bytes, sha256);
   const capture = indexEntry.content_capture as FeedbackContentCapture;
-
-  if (capture.storage === "overflow") {
-    try {
-      writeOverflowContent(id, json);
-      readOverflowContent(id, capture);
-    } catch (error) {
-      throw new FeedbackRecordError(
-        "feedback_storage_failed",
-        `Feedback was not recorded: its full content could not be stored safely (${error instanceof Error ? error.message : String(error)}).`,
-        { id },
-      );
-    }
-  }
-
   const unknown = (reason: string) =>
     new FeedbackRecordError(
       "feedback_recording_unknown",
       `Feedback recording state is unknown: ${reason}.`,
       { id },
     );
+
   try {
-    fs.mkdirSync(path.dirname(getFeedbackPath()), { recursive: true });
-    fs.appendFileSync(getFeedbackPath(), line, "utf-8");
+    withFeedbackLock(() => {
+      if (capture.storage === "overflow") {
+        try {
+          writeOverflowContent(id, json);
+          readOverflowContent(id, capture);
+        } catch (error) {
+          throw new FeedbackRecordError(
+            "feedback_storage_failed",
+            `Feedback was not recorded: its full content could not be stored safely (${error instanceof Error ? error.message : String(error)}).`,
+            { id },
+          );
+        }
+      }
+      try {
+        fs.mkdirSync(path.dirname(getFeedbackPath()), { recursive: true });
+        fs.appendFileSync(getFeedbackPath(), line, "utf-8");
+      } catch (error) {
+        throw unknown(
+          `the index append failed (${error instanceof Error ? error.message : String(error)})`,
+        );
+      }
+    });
   } catch (error) {
-    throw unknown(
-      `the index append failed (${error instanceof Error ? error.message : String(error)})`,
+    if (error instanceof FeedbackRecordError) throw error;
+    throw new FeedbackRecordError(
+      "feedback_storage_failed",
+      `Feedback was not recorded: ${error instanceof Error ? error.message : String(error)}.`,
+      { id },
     );
   }
   let published: FeedbackRecord;
@@ -802,13 +863,22 @@ function legacyFeedbackId(
     .digest("hex")}`;
 }
 
-function readAllFeedbackRecords(): StoredFeedbackRecord[] {
+interface FeedbackLine {
+  raw: string;
+  /** Set for valid report lines. */
+  record?: StoredFeedbackRecord;
+  /** The stored line has no `id`, so its ID is derived from its content. */
+  derivedId?: boolean;
+}
+
+function readFeedbackLines(): FeedbackLine[] {
   const feedbackPath = getFeedbackPath();
   if (!fs.existsSync(feedbackPath)) return [];
 
   const raw = fs.readFileSync(feedbackPath, "utf-8");
-  const records: StoredFeedbackRecord[] = [];
+  const lines: FeedbackLine[] = [];
   const duplicateOrdinals = new Map<string, number>();
+  let globalIndex = 0;
 
   for (const rawLine of raw.split(/\r?\n/)) {
     if (!rawLine.trim()) continue;
@@ -822,22 +892,34 @@ function readAllFeedbackRecords(): StoredFeedbackRecord[] {
         typeof entry.feedback !== "string" ||
         typeof entry.extension_version !== "string"
       ) {
+        lines.push({ raw: rawLine });
         continue;
       }
       const canonicalEntry = canonicalLegacyEntry(entry);
       const duplicateOrdinal = duplicateOrdinals.get(canonicalEntry) ?? 0;
       duplicateOrdinals.set(canonicalEntry, duplicateOrdinal + 1);
-      const id =
-        typeof entry.id === "string" && entry.id.trim()
-          ? entry.id
-          : legacyFeedbackId(canonicalEntry, duplicateOrdinal);
-      records.push({ ...entry, id, global_index: records.length });
+      const hasId = typeof entry.id === "string" && entry.id.trim() !== "";
+      const id = hasId
+        ? (entry.id as string)
+        : legacyFeedbackId(canonicalEntry, duplicateOrdinal);
+      lines.push({
+        raw: rawLine,
+        record: { ...entry, id, global_index: globalIndex++ },
+        derivedId: !hasId,
+      });
     } catch {
-      // Skip malformed lines while preserving the global index among valid entries.
+      // Malformed lines are kept on disk but never consume a global index.
+      lines.push({ raw: rawLine });
     }
   }
 
-  return records;
+  return lines;
+}
+
+function readAllFeedbackRecords(): StoredFeedbackRecord[] {
+  return readFeedbackLines().flatMap((line) =>
+    line.record ? [line.record] : [],
+  );
 }
 
 function collectTombstoneIds(raw: string, ids: Set<string>): void {
@@ -875,20 +957,35 @@ function tombstoneName(id: string): string {
   return path.basename(tombstonePath(id));
 }
 
+/**
+ * IDs hidden by tombstones. Deletion no longer writes tombstones, but builds
+ * before physical deletion did (and other open windows may still run one), so
+ * they keep hiding records until the next deletion purges them.
+ */
+function readHiddenIds(records: readonly StoredFeedbackRecord[]): Set<string> {
+  const legacyDeletedIds = readLegacyDeletedIds();
+  const deletedTombstones = readDeletedTombstoneNames();
+  return new Set(
+    records
+      .filter(
+        (entry) =>
+          legacyDeletedIds.has(entry.id) ||
+          deletedTombstones.has(tombstoneName(entry.id)),
+      )
+      .map((entry) => entry.id),
+  );
+}
+
 export function readFeedback(
   filter: string | FeedbackReadFilter = {},
 ): FeedbackRecord[] {
   const normalized =
     typeof filter === "string" ? { tool_name: filter } : filter;
-  const legacyDeletedIds = readLegacyDeletedIds();
-  const deletedTombstones = readDeletedTombstoneNames();
   const triageEvents = readLatestTriageEvents();
-  return readAllFeedbackRecords()
-    .filter(
-      (entry) =>
-        !legacyDeletedIds.has(entry.id) &&
-        !deletedTombstones.has(tombstoneName(entry.id)),
-    )
+  const records = readAllFeedbackRecords();
+  const hiddenIds = readHiddenIds(records);
+  return records
+    .filter((entry) => !hiddenIds.has(entry.id))
     .map((entry) => projectFeedbackRecord(entry, triageEvents))
     .filter(
       (entry) =>
@@ -920,30 +1017,91 @@ export function triageFeedback(
     throw new Error("Untriaged feedback cannot have a priority.");
   }
 
-  const activeById = new Map(readFeedback().map((entry) => [entry.id, entry]));
-  const updated: FeedbackRecord[] = [];
-  const unknownIds: string[] = [];
-  for (const id of new Set(request.ids)) {
-    const active = activeById.get(id);
-    if (!active) {
-      unknownIds.push(id);
-      continue;
+  return withFeedbackLock(() => {
+    const activeById = new Map(
+      readFeedback().map((entry) => [entry.id, entry]),
+    );
+    const updated: FeedbackRecord[] = [];
+    const unknownIds: string[] = [];
+    for (const id of new Set(request.ids)) {
+      const active = activeById.get(id);
+      if (!active) {
+        unknownIds.push(id);
+        continue;
+      }
+      const updatedAt = new Date().toISOString();
+      appendTriageEvent({
+        id,
+        triaged: request.triaged,
+        priority: request.triaged ? request.priority : undefined,
+        updated_at: updatedAt,
+      });
+      updated.push({
+        ...active,
+        triaged: request.triaged,
+        priority: request.triaged ? request.priority : undefined,
+        triaged_at: request.triaged ? updatedAt : undefined,
+      });
     }
-    const updatedAt = new Date().toISOString();
-    appendTriageEvent({
-      id,
-      triaged: request.triaged,
-      priority: request.triaged ? request.priority : undefined,
-      updated_at: updatedAt,
-    });
-    updated.push({
-      ...active,
-      triaged: request.triaged,
-      priority: request.triaged ? request.priority : undefined,
-      triaged_at: request.triaged ? updatedAt : undefined,
-    });
+    return { updated, unknown_ids: unknownIds };
+  });
+}
+
+/**
+ * Removes the given records from disk: their index lines, overflow content and
+ * triage history. Also drops overflow files and triage events that no longer
+ * belong to any remaining record, and the tombstones older builds wrote.
+ * Callers must hold the store lock.
+ */
+function purgeFeedback(removeIds: ReadonlySet<string>): void {
+  const lines = readFeedbackLines();
+  if (lines.some((line) => line.record && removeIds.has(line.record.id))) {
+    const kept = lines
+      .filter((line) => !(line.record && removeIds.has(line.record.id)))
+      .map((line) => {
+        if (!line.record || !line.derivedId) return line.raw;
+        // Removing a line can shift the duplicate ordinal a derived ID depends
+        // on, so store the ID explicitly to keep it stable.
+        const { global_index: _globalIndex, ...entry } = line.record;
+        return JSON.stringify(entry);
+      });
+    writeFileAtomic(
+      getFeedbackPath(),
+      kept.map((line) => `${line}\n`).join(""),
+    );
   }
-  return { updated, unknown_ids: unknownIds };
+
+  const remaining = readAllFeedbackRecords();
+  const remainingIds = new Set(remaining.map((record) => record.id));
+
+  const triagePath = getTriagePath();
+  if (fs.existsSync(triagePath)) {
+    const latest = [...readLatestTriageEvents().values()].filter((event) =>
+      remainingIds.has(event.id),
+    );
+    const content = latest
+      .map((event) => `${JSON.stringify(event)}\n`)
+      .join("");
+    if (content !== fs.readFileSync(triagePath, "utf-8")) {
+      writeFileAtomic(triagePath, content);
+    }
+  }
+
+  const contentDirectory = getContentDirectory();
+  if (fs.existsSync(contentDirectory)) {
+    assertContentDirectory(contentDirectory);
+    const referenced = new Set(
+      remaining.map((record) => path.basename(contentPath(record.id))),
+    );
+    for (const name of fs.readdirSync(contentDirectory)) {
+      if (name.endsWith(".json") && !referenced.has(name)) {
+        fs.rmSync(path.join(contentDirectory, name), { force: true });
+      }
+    }
+  }
+
+  fs.rmSync(getTombstoneDirectory(), { recursive: true, force: true });
+  fs.rmSync(getLegacyTombstonePath(), { force: true });
 }
 
 export function deleteFeedback(
@@ -974,63 +1132,61 @@ export function deleteFeedback(
     );
   }
 
-  const allRecords = readAllFeedbackRecords();
-  const activeRecordById = new Map(
-    readFeedback().map((record) => [record.id, record]),
-  );
-  const recordById = new Map(allRecords.map((record) => [record.id, record]));
-  const unknownIndices = hasIndices
-    ? [
-        ...new Set(
-          normalized.indices?.filter((index) => !allRecords[index]) ?? [],
-        ),
-      ]
-    : [];
-  const requestedIds = hasIds
-    ? [...new Set(normalized.ids)]
-    : [
-        ...new Set(
-          normalized.indices
-            ?.map((index) => allRecords[index]?.id)
-            .filter((id): id is string => id !== undefined) ?? [],
-        ),
-      ];
+  return withFeedbackLock(() => {
+    const allRecords = readAllFeedbackRecords();
+    const hiddenIds = readHiddenIds(allRecords);
+    const activeRecordById = new Map(
+      readFeedback().map((record) => [record.id, record]),
+    );
+    const recordById = new Map(allRecords.map((record) => [record.id, record]));
+    const unknownIndices = hasIndices
+      ? [
+          ...new Set(
+            normalized.indices?.filter((index) => !allRecords[index]) ?? [],
+          ),
+        ]
+      : [];
+    const requestedIds = hasIds
+      ? [...new Set(normalized.ids)]
+      : [
+          ...new Set(
+            normalized.indices
+              ?.map((index) => allRecords[index]?.id)
+              .filter((id): id is string => id !== undefined) ?? [],
+          ),
+        ];
 
-  const removed: FeedbackRecord[] = [];
-  const alreadyDeletedIds: string[] = [];
-  const unknownIds: string[] = [];
-  const legacyDeletedIds = readLegacyDeletedIds();
-  for (const id of requestedIds) {
-    const record = recordById.get(id);
-    if (!record) {
-      unknownIds.push(id);
-      continue;
+    const removed: FeedbackRecord[] = [];
+    const alreadyDeletedIds: string[] = [];
+    const unknownIds: string[] = [];
+    for (const id of requestedIds) {
+      if (!recordById.has(id)) {
+        unknownIds.push(id);
+        continue;
+      }
+      if (hiddenIds.has(id)) {
+        alreadyDeletedIds.push(id);
+        continue;
+      }
+      const activeRecord = activeRecordById.get(id);
+      if (!activeRecord) {
+        throw new Error(
+          `Active feedback record disappeared during deletion: ${id}`,
+        );
+      }
+      removed.push(activeRecord);
     }
-    if (legacyDeletedIds.has(id)) {
-      alreadyDeletedIds.push(id);
-      continue;
-    }
-    const appended = appendTombstone({
-      id,
-      deleted_at: new Date().toISOString(),
-    });
-    if (!appended) {
-      alreadyDeletedIds.push(id);
-      continue;
-    }
-    const activeRecord = activeRecordById.get(id);
-    if (!activeRecord) {
-      throw new Error(
-        `Active feedback record disappeared during deletion: ${id}`,
-      );
-    }
-    removed.push(activeRecord);
-  }
 
-  return {
-    removed,
-    already_deleted_ids: alreadyDeletedIds,
-    unknown_ids: unknownIds,
-    unknown_indices: unknownIndices,
-  };
+    purgeFeedback(
+      new Set([...removed.map((record) => record.id), ...hiddenIds]),
+    );
+
+    return {
+      removed,
+      already_deleted_ids: alreadyDeletedIds,
+      unknown_ids: unknownIds,
+      unknown_indices: unknownIndices,
+      purged_hidden_ids: [...hiddenIds],
+    };
+  });
 }

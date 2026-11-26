@@ -349,10 +349,10 @@ describe("feedbackStore", () => {
     ).toHaveLength(3);
   });
 
-  it("deletes by stable ID using append-only tombstones", () => {
+  it("deletes by stable ID from disk", () => {
     const keep = appendFeedback(makeEntry({ feedback: "keep" }));
     const remove = appendFeedback(makeEntry({ feedback: "delete me" }));
-    const primaryBefore = fs.readFileSync(feedbackPath, "utf-8");
+    const keptLine = fs.readFileSync(feedbackPath, "utf-8").split("\n")[0];
 
     const result = deleteFeedback({ ids: [remove.id] });
 
@@ -362,12 +362,77 @@ describe("feedbackStore", () => {
     expect(readFeedback()).toEqual([
       expect.objectContaining({ id: keep.id, feedback: "keep" }),
     ]);
-    expect(fs.readFileSync(feedbackPath, "utf-8")).toBe(primaryBefore);
-    const tombstones = fs.readdirSync(tombstoneDirectory);
-    expect(tombstones).toHaveLength(1);
+    expect(fs.readFileSync(feedbackPath, "utf-8")).toBe(`${keptLine}\n`);
+    expect(fs.existsSync(tombstoneDirectory)).toBe(false);
     expect(
-      fs.readFileSync(path.join(tombstoneDirectory, tombstones[0]!), "utf-8"),
-    ).toContain(remove.id);
+      fs.existsSync(
+        path.join(tmpHome, ".agentlink", "agentlink-feedback.lock"),
+      ),
+    ).toBe(false);
+  });
+
+  it("purges records hidden by older tombstones with their triage and content", () => {
+    const hidden = appendFeedback(
+      makeEntry({ feedback: "hidden", tool_params: "p".repeat(5000) }),
+    );
+    const keep = appendFeedback(makeEntry({ feedback: "keep" }));
+    const remove = appendFeedback(makeEntry({ feedback: "remove" }));
+    triageFeedback({
+      ids: [hidden.id, keep.id],
+      triaged: true,
+      priority: "P2",
+    });
+    triageFeedback({ ids: [keep.id], triaged: true, priority: "P1" });
+    fs.mkdirSync(tombstoneDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(
+        tombstoneDirectory,
+        `${createHash("sha256").update(hidden.id).digest("hex")}.json`,
+      ),
+      `${JSON.stringify({ id: hidden.id, deleted_at: "t" })}\n`,
+    );
+    fs.writeFileSync(legacyTombstonePath, "not json\n");
+    expect(readFeedback().map((entry) => entry.id)).toEqual([
+      keep.id,
+      remove.id,
+    ]);
+
+    const result = deleteFeedback({ ids: [remove.id] });
+
+    expect(result.purged_hidden_ids).toEqual([hidden.id]);
+    const raw = fs.readFileSync(feedbackPath, "utf-8");
+    expect(raw).not.toContain(hidden.id);
+    expect(raw).not.toContain(remove.id);
+    expect(
+      fs.readdirSync(
+        path.join(tmpHome, ".agentlink", "agentlink-feedback-content"),
+      ),
+    ).toEqual([]);
+    expect(fs.existsSync(tombstoneDirectory)).toBe(false);
+    expect(fs.existsSync(legacyTombstonePath)).toBe(false);
+    expect(
+      fs
+        .readFileSync(triagePath, "utf-8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([expect.objectContaining({ id: keep.id, priority: "P1" })]);
+    expect(readFeedback()).toEqual([
+      expect.objectContaining({ id: keep.id, global_index: 0, priority: "P1" }),
+    ]);
+  });
+
+  it("keeps derived legacy IDs stable when an earlier duplicate is deleted", () => {
+    const line = JSON.stringify(makeEntry({ timestamp: "t", feedback: "dup" }));
+    fs.mkdirSync(path.dirname(feedbackPath), { recursive: true });
+    fs.writeFileSync(feedbackPath, `${line}\n${line}\n`, "utf-8");
+    const [first, second] = readFeedback();
+
+    deleteFeedback({ ids: [first!.id] });
+
+    expect(readFeedback()).toEqual([
+      expect.objectContaining({ id: second!.id, feedback: "dup" }),
+    ]);
   });
 
   it("keeps appends made after a deletion snapshot", () => {
@@ -380,19 +445,19 @@ describe("feedbackStore", () => {
     ]);
   });
 
-  it("keeps legacy global indices stable after deletion", () => {
+  it("renumbers global indices after deletion", () => {
     const first = appendFeedback(makeEntry({ feedback: "first" }));
-    appendFeedback(makeEntry({ feedback: "second" }));
+    const second = appendFeedback(makeEntry({ feedback: "second" }));
     const third = appendFeedback(makeEntry({ feedback: "third" }));
 
     expect(deleteFeedback({ indices: [0] }).removed[0]?.id).toBe(first.id);
     expect(
       readFeedback().map(({ id, global_index }) => ({ id, global_index })),
     ).toEqual([
-      { id: expect.any(String), global_index: 1 },
-      { id: third.id, global_index: 2 },
+      { id: second.id, global_index: 0 },
+      { id: third.id, global_index: 1 },
     ]);
-    expect(deleteFeedback({ indices: [2] }).removed[0]?.id).toBe(third.id);
+    expect(deleteFeedback({ indices: [1] }).removed[0]?.id).toBe(third.id);
   });
 
   it("honors valid legacy tombstones", () => {
@@ -410,17 +475,18 @@ describe("feedbackStore", () => {
     expect(deleteFeedback({ ids: [entry!.id] }).already_deleted_ids).toEqual([
       entry!.id,
     ]);
+    expect(fs.readFileSync(feedbackPath, "utf-8")).toBe("");
   });
 
-  it("reports idempotent IDs and unknown IDs and indices explicitly", () => {
+  it("reports deleted IDs as unknown on repeat, and unknown indices", () => {
     const entry = appendFeedback(makeEntry());
     deleteFeedback({ ids: [entry.id] });
 
     const result = deleteFeedback({ ids: [entry.id, "missing-id"] });
 
     expect(result.removed).toEqual([]);
-    expect(result.already_deleted_ids).toEqual([entry.id]);
-    expect(result.unknown_ids).toEqual(["missing-id"]);
+    expect(result.already_deleted_ids).toEqual([]);
+    expect(result.unknown_ids).toEqual([entry.id, "missing-id"]);
     expect(result.unknown_indices).toEqual([]);
     expect(deleteFeedback({ indices: [999] }).unknown_indices).toEqual([999]);
   });
@@ -767,10 +833,15 @@ describe("feedbackStore", () => {
       expect(triaged.record.priority).toBe("P2");
       expect(triaged.sha256).toBe(first.content_capture?.sha256);
       deleteFeedback({ ids: [first.id] });
-      expect(fs.existsSync(overflowPath(first.id))).toBe(true);
+      expect(fs.existsSync(overflowPath(first.id))).toBe(false);
+      expect(fs.existsSync(overflowPath(second.id))).toBe(true);
+      expect(fs.readFileSync(triagePath, "utf-8")).toBe("");
       expect(readFeedback()).toEqual([
-        expect.objectContaining({ id: second.id, global_index: 1 }),
+        expect.objectContaining({ id: second.id, global_index: 0 }),
       ]);
+      expect(readFeedbackContent(second.id).sha256).toBe(
+        second.content_capture?.sha256,
+      );
     });
 
     it("keeps independent complete records from concurrent writer processes", async () => {

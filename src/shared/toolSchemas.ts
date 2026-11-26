@@ -234,7 +234,7 @@ export const deleteFeedbackSchema = {
     .array(z.number().int().nonnegative())
     .optional()
     .describe(
-      "Legacy global 0-based feedback indices to delete; never use filtered-list positions",
+      "Global 0-based feedback indices to delete, from the latest get_feedback read; they renumber after each deletion. Never use filtered-list positions",
     ),
 };
 
