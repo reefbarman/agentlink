@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "0dc88b64a80cf3e0976cdd81c4553d23578eb752",
-  "createdAt": "2026-11-26T00:21:57.677Z",
+  "sourceSha": "8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2",
+  "createdAt": "2026-11-26T05:13:02.934Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,67 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.107.0",
-      "baselineRef": "v1.107.0",
-      "reserved": "1.107.0",
-      "commits": [
-        "cf5857f771495dee83fc721fa77cbe5e294f413d",
-        "0dc88b64a80cf3e0976cdd81c4553d23578eb752"
-      ],
-      "unknownPaths": [],
+      "published": "1.108.0",
+      "baselineRef": "v1.108.0",
+      "reserved": "1.108.0",
+      "commits": ["8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2"],
+      "unknownPaths": ["vitest.testPartsSequencer.mts"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.108.0",
+      "version": "1.109.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.108.0",
+      "tag": "v1.109.0",
       "notes": [
         {
-          "sha": "cf5857f771495dee83fc721fa77cbe5e294f413d",
-          "subject": "feat(approvals): align file rule editors and add one-click folder approval",
-          "summary": "File approval cards now share one rule editor with folder-prefix defaults, outside-workspace write cards keep their layout, rule patterns wrap, and a new Allow Folder for Session button approves a file's folder in one click.",
-          "breaking": false
-        },
-        {
-          "sha": "0dc88b64a80cf3e0976cdd81c4553d23578eb752",
-          "subject": "feat(approvals): give the Guardian host-measured evidence for file restores",
-          "summary": "The Approve for Me Guardian now receives host-measured diffs and session-edit facts for git checkout/restore file reverts, so it can approve restoring a session's own edits without the agent printing the diff first.",
+          "sha": "8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2",
+          "subject": "feat: restore browser gateway views and streamline test runs",
+          "summary": "The browser gateway now remembers the last VS Code workspace and chat across visits, uses iPhone safe areas without wasting chat space, and moves Check for updates into the chat toolbar; also adds provider-editing docs and faster test runs.}",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.107.0",
-      "baselineRef": "desktop-v0.107.0",
-      "reserved": "0.107.0",
-      "commits": [
-        "cf5857f771495dee83fc721fa77cbe5e294f413d",
-        "0dc88b64a80cf3e0976cdd81c4553d23578eb752"
-      ],
-      "unknownPaths": [],
+      "published": "0.108.0",
+      "baselineRef": "desktop-v0.108.0",
+      "reserved": "0.108.0",
+      "commits": ["8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2"],
+      "unknownPaths": ["vitest.testPartsSequencer.mts"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.108.0",
+      "version": "0.109.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.108.0",
+      "tag": "desktop-v0.109.0",
       "notes": [
         {
-          "sha": "cf5857f771495dee83fc721fa77cbe5e294f413d",
-          "subject": "feat(approvals): align file rule editors and add one-click folder approval",
-          "summary": "File approval cards now share one rule editor with folder-prefix defaults, outside-workspace write cards keep their layout, rule patterns wrap, and a new Allow Folder for Session button approves a file's folder in one click.",
-          "breaking": false
-        },
-        {
-          "sha": "0dc88b64a80cf3e0976cdd81c4553d23578eb752",
-          "subject": "feat(approvals): give the Guardian host-measured evidence for file restores",
-          "summary": "The Approve for Me Guardian now receives host-measured diffs and session-edit facts for git checkout/restore file reverts, so it can approve restoring a session's own edits without the agent printing the diff first.",
+          "sha": "8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2",
+          "subject": "feat: restore browser gateway views and streamline test runs",
+          "summary": "The browser gateway now remembers the last VS Code workspace and chat across visits, uses iPhone safe areas without wasting chat space, and moves Check for updates into the chat toolbar; also adds provider-editing docs and faster test runs.}",
           "breaking": false
         }
       ]
@@ -79,13 +61,25 @@
       "published": "0.75.0",
       "baselineRef": "cli-v0.75.0",
       "reserved": "0.75.0",
-      "commits": [],
-      "unknownPaths": [],
+      "commits": ["8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2"],
+      "unknownPaths": ["vitest.testPartsSequencer.mts"],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.76.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.76.0",
+      "notes": [
+        {
+          "sha": "8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2",
+          "subject": "feat: restore browser gateway views and streamline test runs",
+          "summary": "The browser gateway now remembers the last VS Code workspace and chat across visits, uses iPhone safe areas without wasting chat space, and moves Check for updates into the chat toolbar; also adds provider-editing docs and faster test runs.}",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.60.0",
@@ -100,34 +94,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.77.0",
-      "baselineRef": "assistant-v0.77.0",
-      "reserved": "0.77.0",
-      "commits": [
-        "cf5857f771495dee83fc721fa77cbe5e294f413d",
-        "0dc88b64a80cf3e0976cdd81c4553d23578eb752"
-      ],
-      "unknownPaths": [],
+      "published": "0.78.0",
+      "baselineRef": "assistant-v0.78.0",
+      "reserved": "0.78.0",
+      "commits": ["8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2"],
+      "unknownPaths": ["vitest.testPartsSequencer.mts"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.78.0",
+      "version": "0.79.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.78.0",
+      "tag": "assistant-v0.79.0",
       "notes": [
         {
-          "sha": "cf5857f771495dee83fc721fa77cbe5e294f413d",
-          "subject": "feat(approvals): align file rule editors and add one-click folder approval",
-          "summary": "File approval cards now share one rule editor with folder-prefix defaults, outside-workspace write cards keep their layout, rule patterns wrap, and a new Allow Folder for Session button approves a file's folder in one click.",
-          "breaking": false
-        },
-        {
-          "sha": "0dc88b64a80cf3e0976cdd81c4553d23578eb752",
-          "subject": "feat(approvals): give the Guardian host-measured evidence for file restores",
-          "summary": "The Approve for Me Guardian now receives host-measured diffs and session-edit facts for git checkout/restore file reverts, so it can approve restoring a session's own edits without the agent printing the diff first.",
+          "sha": "8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2",
+          "subject": "feat: restore browser gateway views and streamline test runs",
+          "summary": "The browser gateway now remembers the last VS Code workspace and chat across visits, uses iPhone safe areas without wasting chat space, and moves Check for updates into the chat toolbar; also adds provider-editing docs and faster test runs.}",
           "breaking": false
         }
       ]
@@ -162,6 +147,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "The Approve for Me Guardian now receives host-measured diffs and session-edit facts for git checkout/restore file reverts, so it can approve restoring a session's own edits without the agent printing the diff first.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The browser gateway now remembers the last VS Code workspace and chat across visits, uses iPhone safe areas without wasting chat space, and moves Check for updates into the chat toolbar; also adds provider-editing docs and faster test runs.}",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

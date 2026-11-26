@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.109.0
+
 - The browser gateway now reopens the last VS Code workspace and chat tab you viewed, alongside remembering whether you were in Ask Agent or VS Code. The selection stays in that browser across reloads and new visits.
 - The browser gateway uses the extra screen width on iPhone for the transcript and composer, not just the background. The gateway header and VS Code History and New Chat controls stay clear of cutouts. The VS Code chat panel paints behind the home indicator without adding a separate strip below the composer, and the update check shares the toolbar rather than taking up its own row.
 
