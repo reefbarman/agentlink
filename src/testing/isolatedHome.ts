@@ -6,11 +6,26 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isMainThread } from "node:worker_threads";
+
+// Changes to process.env in worker threads don't reliably affect native home
+// lookups. Reject that pool before any test can load or write real user config.
+if (!isMainThread) {
+  throw new Error(
+    "AgentLink test home isolation requires Vitest's forks pool. Remove --pool=threads or use --pool=forks.",
+  );
+}
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-test-home-"));
 
 process.env.HOME = home;
 process.env.USERPROFILE = home;
+if (os.homedir() !== home) {
+  fs.rmSync(home, { recursive: true, force: true });
+  throw new Error(
+    "AgentLink tests refused to run: temporary home isolation failed.",
+  );
+}
 // Version-manager shims (mise, asdf, volta) look up their state under the home
 // directory and fail without it. Put the Node running the tests first on PATH
 // so a test that spawns `node` or `npm` gets that one directly.
