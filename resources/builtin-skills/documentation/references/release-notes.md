@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The browser gateway now reopens the last VS Code workspace and chat tab you viewed, alongside remembering whether you were in Ask Agent or VS Code. The selection stays in that browser across reloads and new visits.
+- The browser gateway uses the extra screen width on iPhone for the transcript and composer, not just the background. The gateway header and VS Code History and New Chat controls stay clear of cutouts. The VS Code chat panel paints behind the home indicator without adding a separate strip below the composer, and the update check shares the toolbar rather than taking up its own row.
+
 ## 1.108.0
 
 - Approval rules now work the same way on every file card (outside-workspace reads, writes inside and outside the workspace, and renames): one editor with **Prefix**, **Exact** and **Glob**, defaulting to a prefix on the file's folder. Switching mode swaps an untouched pattern to the full path or a glob for that folder, picking a match mode switches the rule on at Session scope (command rules too), and the pattern field wraps so long paths stay readable in a narrow panel. **All files** is still offered for writes inside the workspace; **This file only** is now **Exact**.

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   DevicePoll,
@@ -64,15 +64,20 @@ function git(cwd: string, ...args: string[]): string {
   }).trim();
 }
 
-/** A remote (bare) and a task clone on the task branch with one commit. */
-async function fixture() {
+const WORKSPACE_PATH = path.join("tasks", "0123456789ab", "hello");
+
+/**
+ * The repository pair every test starts from, built once: ten git processes.
+ * Each test gets its own copy, so tests still cannot affect each other.
+ */
+let template: Promise<{ root: string; commit: string }> | undefined;
+
+async function buildTemplate() {
   const root = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "publisher-")),
+    await fs.mkdtemp(path.join(os.tmpdir(), "publisher-template-")),
   );
-  roots.push(root);
   const remote = path.join(root, "remote.git");
-  const tasksRoot = path.join(root, "tasks");
-  const workspace = path.join(tasksRoot, "0123456789ab", "hello");
+  const workspace = path.join(root, WORKSPACE_PATH);
   await fs.mkdir(path.dirname(workspace), { recursive: true });
   git(root, "init", "-q", "--bare", "-b", "main", remote);
   git(root, "clone", "-q", remote, workspace);
@@ -84,7 +89,32 @@ async function fixture() {
   await fs.writeFile(path.join(workspace, "DOCS.md"), "docs\n");
   git(workspace, "add", "DOCS.md");
   git(workspace, "commit", "-q", "-m", "Add docs");
-  const commit = git(workspace, "rev-parse", "HEAD");
+  return { root, commit: git(workspace, "rev-parse", "HEAD") };
+}
+
+afterAll(async () => {
+  const built = await template?.catch(() => undefined);
+  if (built) await fs.rm(built.root, { recursive: true, force: true });
+});
+
+/** A remote (bare) and a task clone on the task branch with one commit. */
+async function fixture() {
+  template ??= buildTemplate();
+  const { root: templateRoot, commit } = await template;
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "publisher-")),
+  );
+  roots.push(root);
+  await fs.cp(templateRoot, root, { recursive: true });
+  const remote = path.join(root, "remote.git");
+  const tasksRoot = path.join(root, "tasks");
+  const workspace = path.join(root, WORKSPACE_PATH);
+  // The clone records its remote by absolute path: point it at this copy.
+  const config = path.join(workspace, ".git", "config");
+  await fs.writeFile(
+    config,
+    (await fs.readFile(config, "utf8")).replaceAll(templateRoot, root),
+  );
   const scratchRoot = path.join(root, "scratch");
   await fs.mkdir(scratchRoot);
   const calls: {
@@ -536,8 +566,6 @@ describe("connections", { timeout: 30_000 }, () => {
       expiresAt: 1_000,
       now: () => 10_000,
     });
-    const second = await fixture();
-    void second;
     await Promise.all([
       publisher.status(CONNECTION),
       publisher.publish(request(setup)),

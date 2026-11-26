@@ -300,6 +300,25 @@ export async function stopChild(child: ChildProcess): Promise<void> {
   });
 }
 
+/**
+ * Stops a worker mid-build for tests about resuming, not about lock recovery.
+ * The kill can land while the worker is taking the store lock: after creating
+ * the lock directory, or part-way through writing its owner file. The next
+ * worker cannot tell who owns such a lock and waits out the 10 second staleness
+ * window. The killed worker was the only process using this workspace's store,
+ * so whatever lock it left is safe to remove.
+ */
+export async function interruptWorker(
+  child: ChildProcess,
+  workspace: WorkspaceFixture,
+): Promise<void> {
+  await stopChild(child);
+  fs.rmSync(`${workspace.retrievalStoreRoot}.lock`, {
+    recursive: true,
+    force: true,
+  });
+}
+
 export async function withRepository<T>(
   root: string,
   run: (repository: LanceDbRetrievalRepository) => Promise<T>,

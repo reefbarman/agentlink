@@ -41,6 +41,8 @@ type TrackedStream = {
   readonly release: () => void;
 };
 
+const IDLE_CONNECTION_SWEEP_MS = 25;
+
 export class HelperLifecycleCoordinator {
   private readonly server: http.Server;
   private readonly shutdownTimeoutMs: number;
@@ -174,6 +176,17 @@ export class HelperLifecycleCoordinator {
     }, this.shutdownTimeoutMs);
 
     const serverClosed = this.stopAccepting();
+    // A connection that finishes its request during the drain goes idle after
+    // stopAccepting() swept. Keep sweeping, or close() waits for the client's
+    // keep-alive timeout (seconds) before shutdown can finish.
+    const idleSweep = setInterval(() => {
+      try {
+        this.server.closeIdleConnections?.();
+      } catch {
+        // The deadline still forces every connection closed.
+      }
+    }, IDLE_CONNECTION_SWEEP_MS);
+    idleSweep.unref?.();
     let drainError: unknown;
     const drained = Promise.resolve()
       .then(() => hooks.drain(controller.signal))
@@ -194,6 +207,7 @@ export class HelperLifecycleCoordinator {
       Promise.all([drained, serverClosed, cleanup]),
       deadline,
     ]);
+    clearInterval(idleSweep);
     if (!timedOut) {
       this.cancelTimeout(deadlineTimer);
       resolveDeadline();

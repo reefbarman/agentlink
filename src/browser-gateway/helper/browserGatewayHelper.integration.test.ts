@@ -8,7 +8,7 @@ import * as https from "https";
 import * as os from "os";
 import * as path from "path";
 
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, vi } from "vitest";
 
 const testHome = vi.hoisted(() => {
   const fs = require("node:fs") as typeof import("node:fs");
@@ -93,6 +93,11 @@ import {
   BROWSER_GATEWAY_CLIENT_ORIGIN_HEADER,
   BROWSER_GATEWAY_HELPER_SECRET_HEADER,
 } from "../browserGatewayRequestTrust.js";
+import { partitionTests } from "../../testing/testParts.js";
+
+// Runs as three parallel files: this one and the .part2 and .part3 files.
+// Tests in different files overlap, so each needs its own helper port.
+const { it } = partitionTests(3);
 
 async function waitForListening(
   server: http.Server,
@@ -1767,7 +1772,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
   it("mints and validates authenticated model-auth leases for connected owners", async () => {
     const extensionRootPath = await makeExtensionRoot();
 
-    const helperPort = 47206;
+    const helperPort = await getAvailablePort();
     const helperServer = http.createServer();
     servers.push(helperServer);
 
@@ -4072,7 +4077,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
 
   it("skips debounced Ask Agent memory summarization when credentials are cleared before it runs", async () => {
     const extensionRootPath = await makeExtensionRoot();
-    const helperPort = 47217;
+    const helperPort = await getAvailablePort();
     const helperServer = http.createServer();
     servers.push(helperServer);
     const askAgentLogPath = path.join(
@@ -4676,7 +4681,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
 
   it("skips Ask Agent memory persistence when generated summaries contain secret-like content", async () => {
     const extensionRootPath = await makeExtensionRoot();
-    const helperPort = 47217;
+    const helperPort = await getAvailablePort();
     const helperServer = http.createServer();
     servers.push(helperServer);
     const askAgentLogPath = path.join(

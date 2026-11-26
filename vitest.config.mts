@@ -1,3 +1,4 @@
+import { TestPartsSequencer } from "./vitest.testPartsSequencer.mts";
 import { defineConfig } from "vitest/config";
 import path from "path";
 
@@ -14,8 +15,11 @@ export default defineConfig({
     // Let jsdom provide browser storage instead of Node's file-backed Web Storage.
     execArgv: ["--no-experimental-webstorage"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    sequence: { sequencer: TestPartsSequencer },
     // Absolute so workspaces that inherit this config (apps/desktop) resolve it.
     setupFiles: [
+      path.resolve(import.meta.dirname, "src/testing/isolatedHome.ts"),
+      path.resolve(import.meta.dirname, "src/testing/skipFsync.ts"),
       path.resolve(import.meta.dirname, "src/testing/vitestSetup.ts"),
     ],
   },

@@ -26,7 +26,7 @@ import {
   getIndexResetStatePath,
   loadIndexResetState,
 } from "./collectionResetState.js";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, onTestFinished } from "vitest";
 
 import {
   getCodeSourceId,
@@ -40,9 +40,12 @@ import {
 
 import { LanceDbRetrievalRepository } from "../storage/retrieval/LanceDbRetrievalRepository.js";
 import { STRUCTURAL_EXTRACTOR_VERSION } from "./structuralExtractor.js";
+import { partitionTests } from "../testing/testParts.js";
 
 // Slow scenarios live in workerFixtureRecovery.test.ts and
-// workerFixtureResume.test.ts so Vitest can run them in parallel.
+// workerFixtureResume.test.ts so Vitest can run them in parallel. The rest
+// run as three parallel files: this one and the .part2 and .part3 files.
+const { it } = partitionTests(3);
 setUpWorkerFixtureBuild();
 
 describe("indexer worker fixture", () => {

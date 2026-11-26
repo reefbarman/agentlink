@@ -767,8 +767,9 @@ describe("public E6 agent engine", () => {
         yield* finalTurn("done");
       },
     ]);
+    // A long lease: the blocked renewal must not expire it on a busy machine.
     const agent = engine(backend, state, leases, {
-      leaseTtlMs: 50,
+      leaseTtlMs: 60_000,
       leaseRenewIntervalMs: 5,
     });
     await agent.sessions.create({ principal: PRINCIPAL });

@@ -30,6 +30,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { classifyCommand } from "./commandTierClassifier.js";
 import { evaluateCommandRulePolicy } from "./commandRulePolicy.js";
+import { withTimersAdvanced } from "../testing/fakeTimers.js";
+
+// Longer than the real backoff across every retry (1.5s), far shorter than any
+// review timeout. Tests that exhaust the retries skip the waiting with it.
+const RETRY_BACKOFF_MS = 5_000;
 
 const root = path.resolve("/workspace/project");
 const context = { cwd: root, workspaceRoots: [root] };
@@ -1820,7 +1825,12 @@ describe("one-shot command approval reviewer", () => {
         sessionModel: failed.sessionModel,
       }),
     });
-    await expect(failedReviewer.review(reviewInput())).resolves.toMatchObject({
+    await expect(
+      withTimersAdvanced(
+        () => failedReviewer.review(reviewInput()),
+        RETRY_BACKOFF_MS,
+      ),
+    ).resolves.toMatchObject({
       outcome: "deny",
       rationale: "Command review was unavailable",
     });
@@ -1865,7 +1875,12 @@ describe("one-shot command approval reviewer", () => {
       resolveContext: () => ({ provider, sessionModel }),
     });
 
-    await expect(reviewer.review(reviewInput())).resolves.toMatchObject({
+    await expect(
+      withTimersAdvanced(
+        () => reviewer.review(reviewInput()),
+        RETRY_BACKOFF_MS,
+      ),
+    ).resolves.toMatchObject({
       status: "unavailable",
       outcome: "deny",
     });
@@ -1903,7 +1918,12 @@ describe("one-shot command approval reviewer", () => {
       resolveContext: () => ({ provider, sessionModel }),
     });
 
-    await expect(reviewer.review(reviewInput())).resolves.toMatchObject({
+    await expect(
+      withTimersAdvanced(
+        () => reviewer.review(reviewInput()),
+        RETRY_BACKOFF_MS,
+      ),
+    ).resolves.toMatchObject({
       status: "invalid",
       outcome: "deny",
     });

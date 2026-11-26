@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it as vitestIt, vi } from "vitest";
 
 import { createHash } from "node:crypto";
 import {
@@ -20,6 +20,25 @@ import type {
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// Vitest runs the tests in one file in order, so this long file runs as three
+// parallel files: it and the .part2 and .part3 files each register every third
+// test (a whole `it.each` table counts as one). Tests in different files
+// overlap, so they must not share fixed paths or ports.
+const TEST_PARTS = 3;
+const testPart: number =
+  Reflect.get(globalThis, Symbol.for("agentlink.testPart"))?.part ?? 1;
+let declaredTests = 0;
+const isMyTest = () => declaredTests++ % TEST_PARTS === testPart - 1;
+const it = new Proxy(vitestIt, {
+  apply: (target, thisArgument, argumentsList) =>
+    isMyTest() ? Reflect.apply(target, thisArgument, argumentsList) : undefined,
+  get: (target, property) =>
+    property === "each"
+      ? (...table: unknown[]) =>
+          isMyTest() ? Reflect.apply(target.each, target, table) : () => {}
+      : Reflect.get(target, property),
+});
 
 function toolCall(
   name: string,

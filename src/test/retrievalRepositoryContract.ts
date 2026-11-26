@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it as vitestIt } from "vitest";
 
 import type { RetrievalFingerprint } from "@agentlink/protocol/retrieval-fingerprint";
 import type { RetrievalPublicationRequest } from "@agentlink/protocol/retrieval-publication";
@@ -60,6 +60,12 @@ export interface RetrievalRepositoryContractOptions {
    * under full-suite CPU contention without any logic fault.
    */
   testTimeoutMs?: number;
+  /**
+   * Registers the contract tests. A caller that runs as several parallel
+   * files passes its `partitionedIt` so the contract is divided with its own
+   * tests.
+   */
+  it?: typeof vitestIt;
 }
 
 export function describeRetrievalRepositoryContract(
@@ -68,6 +74,7 @@ export function describeRetrievalRepositoryContract(
   options: RetrievalRepositoryContractOptions = {},
 ): void {
   const timeout = options.testTimeoutMs;
+  const it = options.it ?? vitestIt;
   describe(`${name} retrieval repository contract`, { timeout }, () => {
     it("keeps prepared generations hidden until an atomic commit", async () => {
       await withRepository(factory, async (repository) => {

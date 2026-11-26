@@ -62,6 +62,12 @@ const {
   closeRetrievalRepository: vi.fn(),
 }));
 
+// Embedding retries back off for seconds in production; the backoff itself is
+// covered by embeddingClient.test.ts, so here the waits are instant.
+vi.mock("../util/sleep.js", () => ({
+  sleep: vi.fn(async () => undefined),
+}));
+
 vi.mock("fs/promises", () => ({
   readFile: readFileMock,
   stat: statMock,

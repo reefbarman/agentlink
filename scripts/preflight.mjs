@@ -4,8 +4,10 @@
 // Checks out the exact commit (HEAD by default) into a temporary git worktree,
 // so uncommitted files, including other agents' work in a shared checkout,
 // cannot hide a missing change. Then runs what the CI `verify` job runs
-// (npm ci, lint, build, test, packed SDK consumer), plus extra checks chosen
-// from the files changed since the base ref. A pass is recorded against the
+// (npm ci, lint, build, test), plus slower checks chosen from the files
+// changed since the base ref (packed SDK consumer, CLI bundle, actionlint, and
+// the storage tests inside `npm test`).
+// CI still runs them on every push. A pass is recorded against the
 // commit's tree so the opt-in pre-push hook (.githooks/pre-push) can check it.
 //
 // Usage:
@@ -27,6 +29,15 @@ const ZERO_SHA = /^0+$/;
 /** Extra checks keyed by the changed paths that make them worth running. */
 export const PATH_TRIGGERED_CHECKS = Object.freeze([
   {
+    // Packs and installs only the SDK packages, so nothing else can break it.
+    id: "core-sdk-consumer",
+    reason: "SDK packages, dependencies, or the packed-consumer gate changed",
+    matches: (file) =>
+      /^(packages\/|fixtures\/core-sdk-consumer\/|package(-lock)?\.json$|scripts\/run-core-sdk-consumer-gate\.mjs$)/.test(
+        file,
+      ),
+  },
+  {
     id: "cli-bundle",
     reason:
       "CLI, shared packages, dependencies, or CLI packaging scripts changed",
@@ -39,6 +50,17 @@ export const PATH_TRIGGERED_CHECKS = Object.freeze([
     id: "actionlint",
     reason: "GitHub workflows changed",
     matches: (file) => file.startsWith(".github/workflows/"),
+  },
+  {
+    // Not a separate step: decides whether `npm test` includes the LanceDB and
+    // indexer worker tests (see scripts/run-tests.mjs).
+    id: "storage-tests",
+    reason:
+      "Retrieval storage, the indexer, their contracts, dependencies, or the test runner changed",
+    matches: (file) =>
+      /^(src\/storage\/retrieval\/|src\/indexer\/|src\/core\/(retrieval|memory)\/|src\/test\/(retrievalRepositoryContract|memoryServiceContract)\.|src\/testing\/|package(-lock)?\.json$|vitest\.|scripts\/run-tests\.)/.test(
+        file,
+      ),
   },
 ]);
 
@@ -237,17 +259,27 @@ export function buildSteps({
   nodeMajor,
   hasActionlint,
 }) {
+  // Explicit either way, because preflight sets CI, which would include them.
+  const storageTests = triggered.includes("storage-tests") ? "1" : "0";
   const steps = [
     { id: "npm-ci", label: "npm ci", command: "npm ci", blocking: true },
     { id: "lint", label: "npm run lint", command: "npm run lint" },
     { id: "build", label: "npm run build", command: "npm run build" },
-    { id: "test", label: "npm test", command: "npm test" },
     {
+      id: "test",
+      label:
+        storageTests === "1" ? "npm test (with storage tests)" : "npm test",
+      command: "npm test",
+      env: { AGENTLINK_STORAGE_TESTS: storageTests },
+    },
+  ];
+  if (triggered.includes("core-sdk-consumer")) {
+    steps.push({
       id: "core-sdk-consumer",
       label: "npm run test:core-sdk-consumer",
       command: "npm run test:core-sdk-consumer",
-    },
-  ];
+    });
+  }
   if (triggered.includes("cli-bundle")) {
     steps.push({
       id: "cli-bundle",
@@ -298,7 +330,7 @@ export function buildSteps({
       label: `Linux container (node:${nodeMajor}): lint, build, test`,
       // Reap orphaned subprocesses like a normal CI host, so killed background
       // jobs do not remain visible as zombies to process-lifecycle tests.
-      command: `git archive --format=tar HEAD | docker run --init --rm -i -e CI=true -v agentlink-preflight-npm:/home/node/.npm node:${nodeMajor}-bookworm bash -c ${shellQuote(inner)}`,
+      command: `git archive --format=tar HEAD | docker run --init --rm -i -e CI=true -e AGENTLINK_STORAGE_TESTS=${storageTests} -v agentlink-preflight-npm:/home/node/.npm node:${nodeMajor}-bookworm bash -c ${shellQuote(inner)}`,
     });
   }
   return steps.map((step) => ({ ...step, cwd: worktree }));

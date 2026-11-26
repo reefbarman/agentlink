@@ -12,13 +12,20 @@ import test from "node:test";
 test("selects the CLI bundle check for CLI, package, and lockfile changes", () => {
   for (const file of [
     "apps/cli/src/index.ts",
-    "packages/node-host/src/keychainSecretStorage.ts",
-    "package-lock.json",
     "apps/desktop/package.json",
     "scripts/verify-cli-bundle.mjs",
   ]) {
     assert.deepEqual(selectTriggeredChecks([file]), ["cli-bundle"], file);
   }
+  assert.deepEqual(
+    selectTriggeredChecks(["packages/node-host/src/keychainSecretStorage.ts"]),
+    ["core-sdk-consumer", "cli-bundle"],
+  );
+  assert.deepEqual(selectTriggeredChecks(["package-lock.json"]), [
+    "core-sdk-consumer",
+    "cli-bundle",
+    "storage-tests",
+  ]);
   assert.deepEqual(
     selectTriggeredChecks(["src/agent/AgentSession.ts", "README.md"]),
     [],
@@ -26,6 +33,65 @@ test("selects the CLI bundle check for CLI, package, and lockfile changes", () =
   assert.deepEqual(selectTriggeredChecks([".github/workflows/ci.yml"]), [
     "actionlint",
   ]);
+});
+
+test("runs the packed SDK consumer check only when its inputs change", () => {
+  for (const file of [
+    "fixtures/core-sdk-consumer/package.json",
+    "scripts/run-core-sdk-consumer-gate.mjs",
+  ]) {
+    assert.deepEqual(selectTriggeredChecks([file]), ["core-sdk-consumer"]);
+  }
+  const stepIds = (triggered) =>
+    buildSteps({
+      worktree: "/fixture",
+      triggered,
+      linux: false,
+      nodeMajor: 22,
+      hasActionlint: false,
+    }).map((step) => step.id);
+  assert.deepEqual(stepIds([]), ["npm-ci", "lint", "build", "test"]);
+  assert.deepEqual(stepIds(["core-sdk-consumer"]), [
+    "npm-ci",
+    "lint",
+    "build",
+    "test",
+    "core-sdk-consumer",
+  ]);
+});
+
+test("includes the storage tests in npm test only when related code changed", () => {
+  for (const file of [
+    "src/storage/retrieval/LanceDbRetrievalRepository.ts",
+    "src/indexer/worker.ts",
+    "src/core/retrieval/InMemoryRetrievalRepository.ts",
+    "src/core/memory/memoryTypes.ts",
+    "src/test/retrievalRepositoryContract.ts",
+    "src/test/memoryServiceContract.ts",
+    "src/testing/isolatedHome.ts",
+    "vitest.config.mts",
+    "scripts/run-tests.mjs",
+  ]) {
+    assert.deepEqual(selectTriggeredChecks([file]), ["storage-tests"], file);
+  }
+  const testStep = (triggered, linux = false) =>
+    buildSteps({
+      worktree: "/fixture",
+      triggered,
+      linux,
+      nodeMajor: 22,
+      hasActionlint: false,
+    }).find((step) => step.id === (linux ? "linux" : "test"));
+  // Always explicit: preflight sets CI, which would otherwise include them.
+  assert.deepEqual(testStep([]).env, { AGENTLINK_STORAGE_TESTS: "0" });
+  assert.deepEqual(testStep(["storage-tests"]).env, {
+    AGENTLINK_STORAGE_TESTS: "1",
+  });
+  assert.match(testStep([], true).command, /-e AGENTLINK_STORAGE_TESTS=0 /u);
+  assert.match(
+    testStep(["storage-tests"], true).command,
+    /-e AGENTLINK_STORAGE_TESTS=1 /u,
+  );
 });
 
 test("summarizes failing tests, type errors, and npm errors without ANSI codes", () => {

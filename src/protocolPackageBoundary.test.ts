@@ -303,13 +303,2285 @@ const FORBIDDEN_PROTOCOL_RULES = [
   },
 ];
 
+/** A check against the built `packages/protocol/dist/cjs` output. */
+type ProtocolModuleDistCheck =
+  /** `index.d.cts` re-exports the module. */
+  | "rootDeclaration"
+  /** `<fileName>.cjs` exists. */
+  | "cjsFile"
+  /** `index.cjs` exists. */
+  | "rootCjsFile"
+  /** `require("@agentlink/protocol")` does not throw. */
+  | "requireRoot"
+  /** `require("@agentlink/protocol/<exportPath>")` does not throw. */
+  | "requireSubpath";
+
+interface ProtocolModuleWiringContext {
+  wiring: ProtocolModuleWiring;
+  /** Loads the built CommonJS module for this row's subpath export. */
+  requireSubpath: () => unknown;
+  /** Loads the built CommonJS root module. */
+  requireRoot: () => unknown;
+}
+
+/**
+ * How one `packages/protocol` module must be wired through the package
+ * manifest, the root index, both CJS build scripts and the built output.
+ * `checkProtocolModuleWiring` applies a row; only the fields a row sets are
+ * asserted.
+ */
+interface ProtocolModuleWiring {
+  /**
+   * Test title. Defaults to `wires <exportPath> through every public package
+   * build surface`. Rows sharing a title run in one test.
+   */
+  title?: string;
+  /** Subpath export name, as in `@agentlink/protocol/<exportPath>`. */
+  exportPath: string;
+  /** Source module name, as in `packages/protocol/src/<fileName>.ts`. */
+  fileName: string;
+  /**
+   * `standard` (default): the export entry has the exact browser/import/require
+   * shape for `fileName`. `present`: the export entry only has to exist.
+   */
+  manifest?: "standard" | "present";
+  /**
+   * `root`: `src/index.ts` re-exports the module. `subpath-only`: the index
+   * documents it as subpath-only and does not re-export it.
+   */
+  index: "root" | "subpath-only";
+  /**
+   * What both build scripts must say about the generated CJS root index:
+   * `export-star` contains `export * from "./<fileName>.cjs";\n` (escaped
+   * newline); `quoted-specifier` contains `"./<fileName>.cjs"`;
+   * `no-export-star` and `no-quoted-specifier` must not contain those;
+   * `unchecked` asserts nothing.
+   */
+  cjsRootReexport:
+    | "export-star"
+    | "quoted-specifier"
+    | "no-export-star"
+    | "no-quoted-specifier"
+    | "unchecked";
+  /** `false` skips the `"dist/cjs/<fileName>.d.cts"` build-script check. */
+  declarationOutput?: false;
+  /** Build scripts contain `readFile("dist/<fileName>.d.ts", "utf8")`. */
+  readsEsmDeclaration?: true;
+  /** Literal text both build scripts must contain. */
+  buildScriptContains?: readonly string[];
+  /**
+   * Modules whose `.js` specifier both build scripts rewrite to `.cjs`, and
+   * which the built `.d.cts` must import as `from "./<dependency>.cjs";`.
+   */
+  rewrittenDependencies?: readonly string[];
+  /** Patterns both whitespace-normalised build scripts must match. */
+  normalizedBuildScriptMatches?: readonly RegExp[];
+  /** Checks against the built CJS output. */
+  dist?: readonly ProtocolModuleDistCheck[];
+  /** Literal text the built `<fileName>.d.cts` must contain. */
+  declarationContains?: readonly string[];
+  /** Exported runtime arrays: exact values and whether they are frozen. */
+  runtimeLists?: readonly {
+    name: string;
+    values: readonly string[];
+    frozen: boolean;
+  }[];
+  /** Assertions specific to this module that fit no field above. */
+  extra?: (context: ProtocolModuleWiringContext) => void;
+}
+
+const FULL_DIST_CHECKS = [
+  "rootDeclaration",
+  "cjsFile",
+  "requireRoot",
+  "requireSubpath",
+] as const satisfies readonly ProtocolModuleDistCheck[];
+
+const PHASE_A2_BATCH_WIRING_TITLE =
+  "wires the final Phase A2 browser-gateway DTO batch through every public package surface";
+const COMMAND_METADATA_AND_OPERATION_STATE_WIRING_TITLE =
+  "wires browser-gateway command metadata and operation state through every public package build surface";
+const EMBEDDED_AGENT_TRANSPORT_WIRING_TITLE =
+  "wires embedded-agent transport through every public package build surface";
+
+const PROTOCOL_MODULE_WIRINGS: readonly ProtocolModuleWiring[] = [
+  {
+    title: PHASE_A2_BATCH_WIRING_TITLE,
+    exportPath: "browser-gateway-data-plane-transport",
+    fileName: "browserGatewayDataPlaneTransport",
+    index: "root",
+    cjsRootReexport: "export-star",
+    buildScriptContains: [
+      `'"./browserGatewayCapabilityStatus.cjs"'`,
+      `'"./browserGatewayDataPlaneIdentity.cjs"'`,
+      `'"./browserGatewayOwnerControlMetadata.cjs"'`,
+      `'"./browserGatewayDataPlaneVersion.cjs"'`,
+    ],
+    dist: ["cjsFile", "requireSubpath"],
+    declarationContains: [
+      'from "./browserGatewayCapabilityStatus.cjs"',
+      'from "./browserGatewayDataPlaneIdentity.cjs"',
+      'from "./browserGatewayOwnerControlMetadata.cjs"',
+      'from "./browserGatewayDataPlaneVersion.cjs"',
+    ],
+  },
+  {
+    title: PHASE_A2_BATCH_WIRING_TITLE,
+    exportPath: "browser-gateway-owner-interaction-payload",
+    fileName: "browserGatewayOwnerInteractionPayload",
+    index: "root",
+    cjsRootReexport: "export-star",
+    buildScriptContains: [
+      `'"./approvalTransport.cjs"'`,
+      `'"./mcpElicitation.cjs"'`,
+      `'"./mcpUrlElicitation.cjs"'`,
+      `'"./structuredQuestion.cjs"'`,
+    ],
+    dist: ["cjsFile", "requireSubpath"],
+    declarationContains: [
+      'from "./approvalTransport.cjs"',
+      'from "./mcpElicitation.cjs"',
+      'from "./mcpUrlElicitation.cjs"',
+      'from "./structuredQuestion.cjs"',
+    ],
+  },
+  {
+    exportPath: "approval-transport",
+    fileName: "approvalTransport",
+    index: "subpath-only",
+    cjsRootReexport: "no-export-star",
+  },
+  {
+    exportPath: "web-access-policy",
+    fileName: "webAccessPolicy",
+    index: "root",
+    cjsRootReexport: "export-star",
+    readsEsmDeclaration: true,
+    normalizedBuildScriptMatches: [
+      /readFile\("dist\/webAccessPolicy\.d\.ts", "utf8"\)\.then\(\(content\) => writeFile\( "dist\/cjs\/webAccessPolicy\.d\.cts", content\.replaceAll\(\s*'"\.\/webActivity\.js"'\s*,\s*'"\.\/webActivity\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: ['from "./webActivity.cjs";'],
+  },
+  {
+    exportPath: "web-activity",
+    fileName: "webActivity",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: FULL_DIST_CHECKS,
+    declarationContains: ["export interface CoreWebActivity"],
+  },
+  {
+    exportPath: "provider-replay",
+    fileName: "providerReplay",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: FULL_DIST_CHECKS,
+    declarationContains: ["export interface CoreProviderReplayEnvelope"],
+  },
+  {
+    exportPath: "retrieval-deletion",
+    fileName: "retrievalDeletion",
+    index: "root",
+    cjsRootReexport: "export-star",
+    readsEsmDeclaration: true,
+    normalizedBuildScriptMatches: [
+      /readFile\("dist\/retrievalDeletion\.d\.ts", "utf8"\)\.then\(\(content\) => writeFile\( "dist\/cjs\/retrievalDeletion\.d\.cts", content\.replaceAll\(\s*'"\.\/retrievalRecords\.js"'\s*,\s*'"\.\/retrievalRecords\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: ['from "./retrievalRecords.cjs";'],
+  },
+  {
+    exportPath: "retrieval-fingerprint",
+    fileName: "retrievalFingerprint",
+    index: "root",
+    cjsRootReexport: "export-star",
+  },
+  {
+    exportPath: "retrieval-maintenance",
+    fileName: "retrievalMaintenance",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: [
+      "rootDeclaration",
+      "cjsFile",
+      "rootCjsFile",
+      "requireRoot",
+      "requireSubpath",
+    ],
+    declarationContains: ["export interface RetrievalAggregateMetrics"],
+  },
+  {
+    exportPath: "retrieval-structural-snapshot",
+    fileName: "retrievalStructuralSnapshot",
+    index: "root",
+    cjsRootReexport: "export-star",
+    readsEsmDeclaration: true,
+    normalizedBuildScriptMatches: [
+      /content \.replaceAll\(\s*'"\.\/retrievalFingerprint\.js"'\s*,\s*'"\.\/retrievalFingerprint\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/retrievalQuery\.js"'\s*,\s*'"\.\/retrievalQuery\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/retrievalRecords\.js"'\s*,\s*'"\.\/retrievalRecords\.cjs"'\s*,?\s*\)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      'from "./retrievalFingerprint.cjs";',
+      'from "./retrievalQuery.cjs";',
+      'from "./retrievalRecords.cjs";',
+    ],
+  },
+  {
+    exportPath: "retrieval-health",
+    fileName: "retrievalHealth",
+    index: "root",
+    cjsRootReexport: "export-star",
+    readsEsmDeclaration: true,
+    normalizedBuildScriptMatches: [
+      /content\.replaceAll\(\s*'"\.\/retrievalFingerprint\.js"'\s*,\s*'"\.\/retrievalFingerprint\.cjs"'\s*,?\s*\)/,
+      /content\.replaceAll\(\s*'"\.\/retrievalHealth\.js"'\s*,\s*'"\.\/retrievalHealth\.cjs"'\s*,?\s*\)/,
+    ],
+  },
+  {
+    exportPath: "retrieval-publication",
+    fileName: "retrievalPublication",
+    index: "root",
+    cjsRootReexport: "export-star",
+    readsEsmDeclaration: true,
+    normalizedBuildScriptMatches: [
+      /readFile\("dist\/retrievalPublication\.d\.ts", "utf8"\)\.then\(\(content\) => writeFile\( "dist\/cjs\/retrievalPublication\.d\.cts", content\.replaceAll\(\s*'"\.\/retrievalRecords\.js"'\s*,\s*'"\.\/retrievalRecords\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+  },
+  {
+    exportPath: "retrieval-query",
+    fileName: "retrievalQuery",
+    index: "root",
+    cjsRootReexport: "export-star",
+    readsEsmDeclaration: true,
+    normalizedBuildScriptMatches: [
+      /readFile\("dist\/retrievalQuery\.d\.ts", "utf8"\)\.then\(\(content\) => writeFile\( "dist\/cjs\/retrievalQuery\.d\.cts", content \.replaceAll\(\s*'"\.\/retrievalHealth\.js"'\s*,\s*'"\.\/retrievalHealth\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/retrievalRecords\.js"'\s*,\s*'"\.\/retrievalRecords\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+  },
+  {
+    exportPath: "retrieval-records",
+    fileName: "retrievalRecords",
+    index: "root",
+    cjsRootReexport: "export-star",
+  },
+  {
+    exportPath: "session-handoff-draft",
+    fileName: "sessionHandoffDraft",
+    index: "root",
+    cjsRootReexport: "quoted-specifier",
+  },
+  {
+    exportPath: "sidebar-transport",
+    fileName: "sidebarTransport",
+    index: "subpath-only",
+    cjsRootReexport: "no-quoted-specifier",
+  },
+  {
+    exportPath: "browser-gateway-ask-agent-identity",
+    fileName: "browserGatewayAskAgentIdentity",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      "export declare function isBrowserGatewayAskAgentSessionId",
+    ],
+  },
+  {
+    exportPath: "browser-gateway-core-owner-registration",
+    fileName: "browserGatewayCoreOwnerRegistration",
+    index: "root",
+    cjsRootReexport: "export-star",
+    normalizedBuildScriptMatches: [
+      /\.replaceAll\('"\.\/session\.js"', '"\.\/session\.cjs"'\)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: ['from "./session.cjs";'],
+  },
+  {
+    exportPath: "browser-gateway-helper-lifecycle",
+    fileName: "browserGatewayHelperLifecycle",
+    index: "root",
+    cjsRootReexport: "export-star",
+    normalizedBuildScriptMatches: [
+      /\.replaceAll\( '"\.\/browserGatewayDataPlaneMode\.js"', '"\.\/browserGatewayDataPlaneMode\.cjs"', \)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: ['from "./browserGatewayDataPlaneMode.cjs";'],
+  },
+  {
+    title:
+      "wires browser-gateway relay theme state through the existing public package surface",
+    exportPath: "browser-gateway-theme",
+    fileName: "browserGatewayTheme",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: ["rootDeclaration"],
+    declarationContains: ["export interface BrowserGatewayThemeState"],
+    runtimeLists: [
+      {
+        name: "BROWSER_GATEWAY_COLOR_SCHEMES",
+        values: ["light", "dark", "hc", "hc-light"],
+        frozen: true,
+      },
+    ],
+  },
+  {
+    exportPath: "browser-gateway-background-summary",
+    fileName: "browserGatewayBackgroundSummary",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: FULL_DIST_CHECKS,
+    declarationContains: ["export interface BrowserGatewayBackgroundSummary"],
+  },
+  {
+    exportPath: "browser-gateway-transcript-window",
+    fileName: "browserGatewayTranscriptWindow",
+    index: "root",
+    cjsRootReexport: "export-star",
+    normalizedBuildScriptMatches: [
+      /readFile\("dist\/browserGatewayTranscriptWindow\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayTranscriptWindow\.d\.cts", content\.replaceAll\(\s*'"\.\/browserGatewayTranscriptMessage\.js"'\s*,\s*'"\.\/browserGatewayTranscriptMessage\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      'import type { BrowserGatewayTranscriptMessage } from "./browserGatewayTranscriptMessage.cjs";',
+    ],
+  },
+  {
+    exportPath: "browser-gateway-transcript-message",
+    fileName: "browserGatewayTranscriptMessage",
+    index: "root",
+    cjsRootReexport: "export-star",
+    normalizedBuildScriptMatches: [
+      /readFile\("dist\/browserGatewayTranscriptMessage\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayTranscriptMessage\.d\.cts", content \.replaceAll\(\s*'"\.\/chatTranscript\.js"'\s*,\s*'"\.\/chatTranscript\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayTranscriptBlock\.js"'\s*,\s*'"\.\/browserGatewayTranscriptBlock\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayTranscriptText\.js"'\s*,\s*'"\.\/browserGatewayTranscriptText\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/toolResult\.js"'\s*,\s*'"\.\/toolResult\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      'from "./chatTranscript.cjs";',
+      'from "./browserGatewayTranscriptBlock.cjs";',
+      'from "./browserGatewayTranscriptText.cjs";',
+      'from "./toolResult.cjs";',
+    ],
+  },
+  {
+    exportPath: "browser-gateway-transcript-block",
+    fileName: "browserGatewayTranscriptBlock",
+    index: "root",
+    cjsRootReexport: "export-star",
+    normalizedBuildScriptMatches: [
+      /readFile\("dist\/browserGatewayTranscriptBlock\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayTranscriptBlock\.d\.cts", content \.replaceAll\(\s*'"\.\/backgroundResult\.js"'\s*,\s*'"\.\/backgroundResult\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayTranscriptText\.js"'\s*,\s*'"\.\/browserGatewayTranscriptText\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/chatTranscript\.js"'\s*,\s*'"\.\/chatTranscript\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/modelCatalog\.js"'\s*,\s*'"\.\/modelCatalog\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      'from "./backgroundResult.cjs";',
+      'from "./browserGatewayTranscriptText.cjs";',
+      'from "./chatTranscript.cjs";',
+      'from "./modelCatalog.cjs";',
+    ],
+  },
+  {
+    exportPath: "browser-gateway-transcript-text",
+    fileName: "browserGatewayTranscriptText",
+    index: "root",
+    cjsRootReexport: "export-star",
+    normalizedBuildScriptMatches: [
+      /readFile\("dist\/browserGatewayTranscriptText\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayTranscriptText\.d\.cts", content\.replaceAll\(\s*'"\.\/browserGatewayDataPlaneIdentity\.js"'\s*,\s*'"\.\/browserGatewayDataPlaneIdentity\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      'import type { BrowserGatewayDetailHandle } from "./browserGatewayDataPlaneIdentity.cjs";',
+    ],
+  },
+  {
+    exportPath: "browser-gateway-detached-session-selection",
+    fileName: "browserGatewayDetachedSessionSelection",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: ["rootDeclaration", "requireRoot", "requireSubpath"],
+    declarationContains: [
+      "export interface BrowserGatewayDetachedSessionSelection",
+    ],
+  },
+  {
+    exportPath: "browser-gateway-diff-preview",
+    fileName: "browserGatewayDiffPreview",
+    index: "root",
+    cjsRootReexport: "export-star",
+    normalizedBuildScriptMatches: [
+      /readFile\("dist\/browserGatewayDiffPreview\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayDiffPreview\.d\.cts", content\.replaceAll\(\s*'"\.\/browserGatewayDataPlaneIdentity\.js"'\s*,\s*'"\.\/browserGatewayDataPlaneIdentity\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      'import type { BrowserGatewayDetailHandle } from "./browserGatewayDataPlaneIdentity.cjs";',
+    ],
+  },
+  {
+    exportPath: "browser-gateway-interaction-state",
+    fileName: "browserGatewayInteractionState",
+    index: "root",
+    cjsRootReexport: "export-star",
+    normalizedBuildScriptMatches: [
+      /readFile\("dist\/browserGatewayInteractionState\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayInteractionState\.d\.cts", content \.replaceAll\(\s*'"\.\/browserGatewayInteractionSummary\.js"'\s*,\s*'"\.\/browserGatewayInteractionSummary\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayOperationState\.js"'\s*,\s*'"\.\/browserGatewayOperationState\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayQueueItem\.js"'\s*,\s*'"\.\/browserGatewayQueueItem\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayTodoItem\.js"'\s*,\s*'"\.\/browserGatewayTodoItem\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      'from "./browserGatewayInteractionSummary.cjs";',
+      'from "./browserGatewayOperationState.cjs";',
+      'from "./browserGatewayQueueItem.cjs";',
+      'from "./browserGatewayTodoItem.cjs";',
+    ],
+  },
+  {
+    exportPath: "browser-gateway-interaction-summary",
+    fileName: "browserGatewayInteractionSummary",
+    index: "root",
+    cjsRootReexport: "export-star",
+    normalizedBuildScriptMatches: [
+      /readFile\("dist\/browserGatewayInteractionSummary\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayInteractionSummary\.d\.cts", content\.replaceAll\(\s*'"\.\/browserGatewayDataPlaneIdentity\.js"'\s*,\s*'"\.\/browserGatewayDataPlaneIdentity\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      'import type { BrowserGatewayDetailHandle } from "./browserGatewayDataPlaneIdentity.cjs";',
+    ],
+  },
+  {
+    title:
+      "wires browser-gateway owner-control metadata through every public package build surface",
+    exportPath: "browser-gateway-owner-control-metadata",
+    fileName: "browserGatewayOwnerControlMetadata",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: ["rootDeclaration", "cjsFile", "requireRoot"],
+    declarationContains: [
+      "export declare const BROWSER_GATEWAY_OWNER_CONTROL_KINDS",
+    ],
+    runtimeLists: [
+      {
+        name: "BROWSER_GATEWAY_OWNER_CONTROL_KINDS",
+        values: [
+          "hello",
+          "demand.changed",
+          "checkpoint.requested",
+          "command.cancelled",
+          "drain",
+        ],
+        frozen: false,
+      },
+      {
+        name: "BROWSER_GATEWAY_RELAY_RESET_REASONS",
+        values: [
+          "helper_generation_changed",
+          "owner_generation_changed",
+          "sequence_gap",
+          "stale_replay_cursor",
+          "subscription_changed",
+          "checkpoint_required",
+        ],
+        frozen: true,
+      },
+    ],
+  },
+  {
+    title:
+      "wires browser-gateway owner-event metadata through every public package build surface",
+    exportPath: "browser-gateway-owner-event-metadata",
+    fileName: "browserGatewayOwnerEventMetadata",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: ["rootDeclaration", "cjsFile", "requireRoot"],
+    declarationContains: [
+      "export declare const BROWSER_GATEWAY_OWNER_EVENT_KINDS",
+    ],
+    runtimeLists: [
+      {
+        name: "BROWSER_GATEWAY_OWNER_EVENT_KINDS",
+        values: [
+          "foreground.control.updated",
+          "session.catalog.updated",
+          "transcript.message.appended",
+          "transcript.message.upserted",
+          "transcript.block.delta",
+          "transcript.history.prepended",
+          "interaction.updated",
+          "queue.updated",
+          "todo.updated",
+          "background.updated",
+          "fleet.updated",
+          "diff.preview.updated",
+          "repository.updated",
+          "theme.updated",
+          "model_catalog.revision.updated",
+          "plugin_catalog.revision.updated",
+          "owner.capabilities.updated",
+          "operation.updated",
+        ],
+        frozen: true,
+      },
+    ],
+  },
+  {
+    title: COMMAND_METADATA_AND_OPERATION_STATE_WIRING_TITLE,
+    exportPath: "browser-gateway-owner-command-metadata",
+    fileName: "browserGatewayOwnerCommandMetadata",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: ["rootDeclaration", "cjsFile", "requireSubpath"],
+  },
+  {
+    title: COMMAND_METADATA_AND_OPERATION_STATE_WIRING_TITLE,
+    exportPath: "browser-gateway-operation-state",
+    fileName: "browserGatewayOperationState",
+    index: "root",
+    cjsRootReexport: "export-star",
+    normalizedBuildScriptMatches: [
+      /readFile\("dist\/browserGatewayOperationState\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayOperationState\.d\.cts", content \.replaceAll\(\s*'"\.\/browserGatewayDataPlaneIdentity\.js"'\s*,\s*'"\.\/browserGatewayDataPlaneIdentity\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayOwnerCommandMetadata\.js"'\s*,\s*'"\.\/browserGatewayOwnerCommandMetadata\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      'from "./browserGatewayDataPlaneIdentity.cjs";',
+      'from "./browserGatewayOwnerCommandMetadata.cjs";',
+    ],
+  },
+  {
+    exportPath: "browser-gateway-todo-item",
+    fileName: "browserGatewayTodoItem",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: ["rootDeclaration"],
+    declarationContains: ["export interface BrowserGatewayTodoItem"],
+    runtimeLists: [
+      {
+        name: "BROWSER_GATEWAY_TODO_ITEM_STATES",
+        values: ["pending", "in_progress", "completed"],
+        frozen: true,
+      },
+    ],
+  },
+  {
+    exportPath: "browser-gateway-queue-item",
+    fileName: "browserGatewayQueueItem",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: ["rootDeclaration"],
+    declarationContains: ["export interface BrowserGatewayQueueItem"],
+    runtimeLists: [
+      {
+        name: "BROWSER_GATEWAY_QUEUE_ITEM_STATES",
+        values: ["queued", "running", "completed", "failed"],
+        frozen: true,
+      },
+    ],
+  },
+  {
+    exportPath: "browser-gateway-repository-state",
+    fileName: "browserGatewayRepositoryState",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: FULL_DIST_CHECKS,
+    declarationContains: ["export interface BrowserGatewayRepositoryState"],
+  },
+  {
+    exportPath: "browser-gateway-context-budget",
+    fileName: "browserGatewayContextBudget",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: FULL_DIST_CHECKS,
+    declarationContains: ["export interface BrowserGatewayContextBudget"],
+  },
+  {
+    exportPath: "browser-gateway-capability-status",
+    fileName: "browserGatewayCapabilityStatus",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: ["rootDeclaration", "cjsFile", "requireRoot"],
+    declarationContains: ["export interface BrowserGatewayCapabilityStatus"],
+    runtimeLists: [
+      {
+        name: "BROWSER_GATEWAY_CAPABILITY_STATES",
+        values: ["enabled", "disabled", "requires_approval", "unavailable"],
+        frozen: true,
+      },
+    ],
+  },
+  {
+    exportPath: "browser-gateway-protocol-error",
+    fileName: "browserGatewayProtocolError",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: ["rootDeclaration"],
+    declarationContains: [
+      "export declare class BrowserGatewayProtocolError extends Error",
+    ],
+    extra: checkBrowserGatewayProtocolErrorRuntime,
+  },
+  {
+    exportPath: "browser-gateway-owner-publication-batch",
+    fileName: "browserGatewayOwnerPublicationBatch",
+    index: "root",
+    cjsRootReexport: "export-star",
+    rewrittenDependencies: [
+      "browserGatewayDataPlaneIdentity",
+      "browserGatewayDataPlaneVersion",
+      "browserGatewayOwnerCheckpoint",
+      "browserGatewayOwnerEvent",
+    ],
+    dist: FULL_DIST_CHECKS,
+  },
+  {
+    exportPath: "browser-gateway-owner-checkpoint",
+    fileName: "browserGatewayOwnerCheckpoint",
+    index: "root",
+    cjsRootReexport: "export-star",
+    rewrittenDependencies: [
+      "browserGatewayBackgroundSummary",
+      "browserGatewayCapabilityStatus",
+      "browserGatewayDataPlaneIdentity",
+      "browserGatewayDataPlaneVersion",
+      "browserGatewayDiffPreview",
+      "browserGatewayForegroundControlState",
+      "browserGatewayInteractionState",
+      "browserGatewayRepositoryState",
+      "browserGatewaySessionCatalog",
+      "browserGatewayTheme",
+      "browserGatewayTranscriptWindow",
+    ],
+    dist: FULL_DIST_CHECKS,
+  },
+  {
+    exportPath: "browser-gateway-owner-event",
+    fileName: "browserGatewayOwnerEvent",
+    index: "root",
+    cjsRootReexport: "export-star",
+    rewrittenDependencies: [
+      "browserGatewayBackgroundSummary",
+      "browserGatewayCapabilityStatus",
+      "browserGatewayDataPlaneIdentity",
+      "browserGatewayDataPlaneVersion",
+      "browserGatewayDiffPreview",
+      "browserGatewayForegroundControlState",
+      "browserGatewayInteractionSummary",
+      "browserGatewayOperationState",
+      "browserGatewayOwnerEventMetadata",
+      "browserGatewayQueueItem",
+      "browserGatewayRepositoryState",
+      "browserGatewaySessionCatalog",
+      "browserGatewayTheme",
+      "browserGatewayTodoItem",
+      "browserGatewayTranscriptMessage",
+      "browserGatewayTranscriptWindow",
+    ],
+    dist: FULL_DIST_CHECKS,
+  },
+  {
+    exportPath: "browser-gateway-owner-control",
+    fileName: "browserGatewayOwnerControl",
+    index: "root",
+    cjsRootReexport: "export-star",
+    rewrittenDependencies: [
+      "browserGatewayDataPlaneIdentity",
+      "browserGatewayDataPlaneVersion",
+      "browserGatewayOwnerControlMetadata",
+    ],
+    dist: FULL_DIST_CHECKS,
+  },
+  {
+    exportPath: "browser-gateway-owner-command-ack",
+    fileName: "browserGatewayOwnerCommandAck",
+    index: "root",
+    cjsRootReexport: "export-star",
+    rewrittenDependencies: [
+      "browserGatewayDataPlaneIdentity",
+      "browserGatewayDataPlaneVersion",
+      "browserGatewayOperationState",
+    ],
+    dist: FULL_DIST_CHECKS,
+  },
+  {
+    exportPath: "browser-gateway-owner-command",
+    fileName: "browserGatewayOwnerCommand",
+    index: "root",
+    cjsRootReexport: "export-star",
+    rewrittenDependencies: [
+      "browserGatewayDataPlaneIdentity",
+      "browserGatewayDataPlaneVersion",
+      "browserGatewayOwnerCommandBody",
+      "browserGatewayOwnerCommandMetadata",
+    ],
+    dist: FULL_DIST_CHECKS,
+  },
+  {
+    exportPath: "browser-gateway-owner-command-body",
+    fileName: "browserGatewayOwnerCommandBody",
+    index: "root",
+    cjsRootReexport: "export-star",
+    normalizedBuildScriptMatches: [
+      /readFile\("dist\/browserGatewayOwnerCommandBody\.d\.ts", "utf8"\)\.then\(\s*(?:\(content\)|content) =>\s*writeFile\( "dist\/cjs\/browserGatewayOwnerCommandBody\.d\.cts", content\.replaceAll\(\s*'"\.\/browserGatewayDataPlaneIdentity\.js"'\s*,\s*'"\.\/browserGatewayDataPlaneIdentity\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      'import type { BrowserGatewayDetailHandle } from "./browserGatewayDataPlaneIdentity.cjs";',
+    ],
+  },
+  {
+    exportPath: "browser-gateway-foreground-control-state",
+    fileName: "browserGatewayForegroundControlState",
+    index: "root",
+    cjsRootReexport: "export-star",
+    rewrittenDependencies: [
+      "terminal",
+      "browserGatewayContextBudget",
+      "chatWorkspace",
+      "commandApprovalPolicy",
+      "contextHealth",
+      "modelCatalog",
+      "sessionHydration",
+    ],
+    dist: FULL_DIST_CHECKS,
+  },
+  {
+    exportPath: "browser-gateway-session-catalog",
+    fileName: "browserGatewaySessionCatalog",
+    index: "root",
+    cjsRootReexport: "export-star",
+    normalizedBuildScriptMatches: [
+      /readFile\("dist\/browserGatewaySessionCatalog\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewaySessionCatalog\.d\.cts", content\.replaceAll\(\s*'"\.\/browserGatewayChatWorkspaceSummary\.js"'\s*,\s*'"\.\/browserGatewayChatWorkspaceSummary\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      'import type { BrowserGatewayChatWorkspaceSummary } from "./browserGatewayChatWorkspaceSummary.cjs";',
+    ],
+  },
+  {
+    exportPath: "browser-gateway-chat-workspace-summary",
+    fileName: "browserGatewayChatWorkspaceSummary",
+    index: "root",
+    cjsRootReexport: "export-star",
+    normalizedBuildScriptMatches: [
+      /readFile\(\s*"dist\/browserGatewayChatWorkspaceSummary\.d\.ts",\s*"utf8",?\s*\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayChatWorkspaceSummary\.d\.cts", content\.replaceAll\(\s*'"\.\/chatWorkspace\.js"'\s*,\s*'"\.\/chatWorkspace\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      'import type { ChatWorkspaceInteractiveExecutionPhase } from "./chatWorkspace.cjs";',
+    ],
+  },
+  {
+    exportPath: "browser-gateway-data-plane-version",
+    fileName: "browserGatewayDataPlaneVersion",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: ["rootDeclaration", "requireRoot"],
+    declarationContains: [
+      'export declare const BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION = "1";',
+    ],
+    extra: checkBrowserGatewayDataPlaneVersionRuntime,
+  },
+  {
+    exportPath: "browser-gateway-data-plane-identity",
+    fileName: "browserGatewayDataPlaneIdentity",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: ["rootDeclaration", "cjsFile", "requireRoot"],
+    declarationContains: ["export interface BrowserGatewayDetailHandle"],
+    runtimeLists: [
+      {
+        name: "BROWSER_GATEWAY_DETAIL_HANDLE_KINDS",
+        values: ["message", "tool", "diff", "media", "interaction", "session"],
+        frozen: true,
+      },
+    ],
+  },
+  {
+    exportPath: "browser-gateway-instance-status",
+    fileName: "browserGatewayInstanceStatus",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      "export interface BrowserGatewayInstanceStatusSummary",
+    ],
+  },
+  {
+    exportPath: "browser-gateway-model-provider-identity",
+    fileName: "browserGatewayModelProviderIdentity",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      "export declare function normalizeBrowserGatewayModelCredentialProviderId",
+    ],
+  },
+  {
+    exportPath: "browser-gateway-data-plane-limits",
+    fileName: "browserGatewayDataPlaneLimits",
+    index: "root",
+    cjsRootReexport: "export-star",
+    normalizedBuildScriptMatches: [
+      /readFile\("dist\/browserGatewayDataPlaneLimits\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayDataPlaneLimits\.d\.cts", content \.replaceAll\(\s*'"\.\/browserGatewayDataPlaneIdentity\.js"'\s*,\s*'"\.\/browserGatewayDataPlaneIdentity\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayOwnerCommandMetadata\.js"'\s*,\s*'"\.\/browserGatewayOwnerCommandMetadata\.cjs"'\s*,?\s*\), \), \)/,
+    ],
+    dist: FULL_DIST_CHECKS,
+    declarationContains: [
+      'from "./browserGatewayDataPlaneIdentity.cjs";',
+      "export type BrowserGatewayDataPlaneLimitName",
+    ],
+  },
+  {
+    exportPath: "browser-gateway-data-plane-mode",
+    fileName: "browserGatewayDataPlaneMode",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: FULL_DIST_CHECKS,
+    declarationContains: ["export type BrowserGatewayDataPlaneMode"],
+  },
+  {
+    exportPath: "surface-model-message",
+    fileName: "surfaceModelMessage",
+    index: "root",
+    cjsRootReexport: "export-star",
+    dist: FULL_DIST_CHECKS,
+    declarationContains: ["export interface CoreSurfaceModelMessage"],
+  },
+  {
+    exportPath: "terminal-security",
+    fileName: "terminalSecurity",
+    index: "root",
+    cjsRootReexport: "quoted-specifier",
+  },
+  {
+    exportPath: "terminal-surface",
+    fileName: "terminalSurface",
+    index: "root",
+    cjsRootReexport: "quoted-specifier",
+  },
+  {
+    exportPath: "diff-snapshot",
+    fileName: "diffSnapshot",
+    index: "root",
+    cjsRootReexport: "quoted-specifier",
+  },
+  {
+    title: EMBEDDED_AGENT_TRANSPORT_WIRING_TITLE,
+    exportPath: "embedded-agent-presentation",
+    fileName: "embeddedAgentPresentation",
+    index: "root",
+    cjsRootReexport: "unchecked",
+    declarationOutput: false,
+  },
+  {
+    title: EMBEDDED_AGENT_TRANSPORT_WIRING_TITLE,
+    exportPath: "embedded-agent-transport",
+    fileName: "embeddedAgentTransport",
+    index: "root",
+    cjsRootReexport: "quoted-specifier",
+  },
+  {
+    exportPath: "chat-pane-transport",
+    fileName: "chatPaneTransport",
+    index: "root",
+    cjsRootReexport: "quoted-specifier",
+  },
+  {
+    exportPath: "find-replace-preview",
+    fileName: "findReplacePreview",
+    index: "subpath-only",
+    cjsRootReexport: "unchecked",
+  },
+  {
+    exportPath: "chat-state",
+    fileName: "chatState",
+    manifest: "present",
+    index: "root",
+    cjsRootReexport: "quoted-specifier",
+  },
+  {
+    exportPath: "chat-session-history",
+    fileName: "chatSessionHistory",
+    manifest: "present",
+    index: "root",
+    cjsRootReexport: "quoted-specifier",
+  },
+  {
+    exportPath: "chat-transcript",
+    fileName: "chatTranscript",
+    manifest: "present",
+    index: "root",
+    cjsRootReexport: "quoted-specifier",
+  },
+];
+
+/**
+ * A root `src/` file that only forwards package-owned contracts, plus who may
+ * still import those contracts through it. `checkCompatibilityFacade` applies
+ * a row; only the fields a row sets are asserted.
+ */
+interface CompatibilityFacade {
+  /** Test title. Rows sharing a title run in one test. */
+  title: string;
+  /** Root-relative path of the compatibility file. */
+  compatibilityPath: string;
+  /** Exact content of the compatibility file. */
+  sourceIs?: string;
+  /** Literal text the compatibility file must contain. */
+  sourceContains?: readonly string[];
+  /** Patterns the compatibility file must not match. */
+  sourceNotMatching?: readonly RegExp[];
+  /** A package file that must contain the given literal text. */
+  packageSource?: { path: string; contains: readonly string[] };
+  /**
+   * Names the package now owns. When set, only imports of these names through
+   * the compatibility file count as importers.
+   */
+  extractedNames?: readonly string[];
+  /**
+   * Builds, per extracted name, a pattern for a local declaration the
+   * compatibility file must not contain.
+   */
+  forbiddenLocalDeclaration?: (extractedName: string) => RegExp;
+  /**
+   * `unused`: nothing may import through the compatibility file. `baseline`:
+   * importers must all be in the list and may not outnumber it.
+   */
+  importers: "unused" | { baseline: readonly string[] };
+}
+
+const PHASE_A2_FACADES_TITLE =
+  "keeps the final Phase A2 DTO compatibility facades package-owned with bounded importers";
+const TERMINAL_SECURITY_FACADES_TITLE =
+  "keeps terminal-security compatibility package-owned and unused";
+const TERMINAL_SURFACE_FACADES_TITLE =
+  "keeps terminal-surface compatibility package-owned with bounded importers";
+
+const COMPATIBILITY_FACADES: readonly CompatibilityFacade[] = [
+  {
+    title: "keeps approval-transport compatibility package-owned and unused",
+    compatibilityPath: "src/approvals/webview/types.ts",
+    sourceIs: [
+      "export type {",
+      "  ApprovalKind,",
+      "  ApprovalProjectContext,",
+      "  ApprovalRequest,",
+      "  CommandRecoveryAttempt,",
+      "  CommandReviewSummary,",
+      "  CommandTierLevel,",
+      "  DecisionMessage,",
+      "  ExtensionMessage,",
+      "  InlineCommandFilePreview,",
+      "  MemoryOperation,",
+      "  MemoryScope,",
+      "  MemoryTier,",
+      "  NetworkReviewSummary,",
+      "  RuleEntry,",
+      "  SubCommandEntry,",
+      "  SuggestRegexMessage,",
+      '} from "@agentlink/protocol/approval-transport";',
+      "",
+    ].join("\n"),
+    importers: "unused",
+  },
+  {
+    title:
+      "keeps web-access-policy compatibility package-owned with bounded importers",
+    compatibilityPath: "src/core/webAccess.ts",
+    sourceIs: 'export * from "@agentlink/core/web-access";\n',
+    packageSource: {
+      path: "packages/core/src/webAccess.ts",
+      contains: [
+        [
+          "export type {",
+          "  CoreHostedToolDefinition,",
+          "  CoreHostedWebCapabilities,",
+          "  CoreHostedWebFetchDefinition,",
+          "  CoreHostedWebSearchDefinition,",
+          "  CoreHostedWebToolCapability,",
+          "  CoreResolveWebAccessPolicyInput,",
+          "  CoreResolvedWebAccessPolicy,",
+          "  CoreResolvedWebAccessRoute,",
+          "  CoreWebAccessResolutionReason,",
+          "  CoreWebAccessSelection,",
+          "  CoreWebAccessSettings,",
+          "  CoreWebAccessSettingsInput,",
+          "  CoreWebSearchMode,",
+          '} from "@agentlink/protocol/web-access-policy";',
+        ].join("\n"),
+      ],
+    },
+    extractedNames: [
+      "CoreHostedToolDefinition",
+      "CoreHostedWebCapabilities",
+      "CoreHostedWebFetchDefinition",
+      "CoreHostedWebSearchDefinition",
+      "CoreHostedWebToolCapability",
+      "CoreResolveWebAccessPolicyInput",
+      "CoreResolvedWebAccessPolicy",
+      "CoreResolvedWebAccessRoute",
+      "CoreWebAccessResolutionReason",
+      "CoreWebAccessSelection",
+      "CoreWebAccessSettings",
+      "CoreWebAccessSettingsInput",
+      "CoreWebSearchMode",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: {
+      baseline: [
+        "src/agent/AgentSessionManager.ts",
+        "src/agent/ChatViewProvider.ts",
+        "src/browser-gateway/helper/browserGatewayHelper.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps web-activity compatibility package-owned with bounded importers",
+    compatibilityPath: "src/core/webAccess.ts",
+    sourceIs: 'export * from "@agentlink/core/web-access";\n',
+    packageSource: {
+      path: "packages/core/src/webAccess.ts",
+      contains: ['} from "@agentlink/protocol/web-activity";'],
+    },
+    extractedNames: [
+      "CoreWebAccessBackend",
+      "CoreWebActivity",
+      "CoreWebActivityStatus",
+      "CoreWebCitation",
+      "CoreWebToolKind",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: {
+      baseline: [
+        "src/agent/toolAdapter.ts",
+        "src/browser-gateway/helper/browserGatewayHelper.ts",
+        "src/core/tools/types.ts",
+        "src/shared/chatProjection.ts",
+      ],
+    },
+  },
+  {
+    title: "keeps provider-replay compatibility package-owned and unused",
+    compatibilityPath: "src/core/webAccess.ts",
+    sourceIs: 'export * from "@agentlink/core/web-access";\n',
+    packageSource: {
+      path: "packages/core/src/webAccess.ts",
+      contains: [
+        [
+          "export type {",
+          "  CoreJsonValue,",
+          "  CoreProviderReplayEnvelope,",
+          '} from "@agentlink/protocol/provider-replay";',
+        ].join("\n"),
+      ],
+    },
+    extractedNames: ["CoreJsonValue", "CoreProviderReplayEnvelope"],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: "unused",
+  },
+  {
+    title: "keeps retrieval-deletion compatibility package-owned and unused",
+    compatibilityPath: "src/core/retrieval/contracts.ts",
+    sourceContains: ['} from "@agentlink/protocol/retrieval-deletion";'],
+    extractedNames: [
+      "RetrievalDeleteScopeOutcome",
+      "RetrievalDeleteScopeRequest",
+      "RetrievalDeleteSourceOutcome",
+      "RetrievalDeleteSourceRequest",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: "unused",
+  },
+  {
+    title: "keeps retrieval-fingerprint compatibility package-owned and unused",
+    compatibilityPath: "src/core/retrieval/contracts.ts",
+    sourceContains: ['} from "@agentlink/protocol/retrieval-fingerprint";'],
+    extractedNames: [
+      "RetrievalEmbeddingFingerprint",
+      "RetrievalFingerprint",
+      "RetrievalFingerprintDisposition",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: "unused",
+  },
+  {
+    title: "keeps retrieval-publication compatibility package-owned and unused",
+    compatibilityPath: "src/core/retrieval/contracts.ts",
+    sourceContains: ['} from "@agentlink/protocol/retrieval-publication";'],
+    extractedNames: [
+      "RetrievalAbortPublicationOutcome",
+      "RetrievalPublicationBatchOutcome",
+      "RetrievalPublicationOutcome",
+      "RetrievalPublicationPreparation",
+      "RetrievalPublicationRequest",
+      "RetrievalStagedChunkBatch",
+      "RetrievalStagedPublicationBundle",
+      "RetrievalStagedPublicationInspection",
+      "RetrievalStagedPublicationManifest",
+      "RetrievalStagedRelationBatch",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: "unused",
+  },
+  {
+    title: "keeps retrieval-query compatibility package-owned and unused",
+    compatibilityPath: "src/core/retrieval/contracts.ts",
+    sourceContains: ['} from "@agentlink/protocol/retrieval-query";'],
+    extractedNames: [
+      "RetrievalCandidateScores",
+      "RetrievalDiversityPolicy",
+      "RetrievalQuery",
+      "RetrievalQueryCandidate",
+      "RetrievalQueryFilter",
+      "RetrievalQueryFreshnessSummary",
+      "RetrievalQueryResult",
+      "RetrievalRankingInput",
+      "RetrievalSourceFreshness",
+      "RetrievalStaleSource",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: "unused",
+  },
+  {
+    title: "keeps retrieval-records compatibility package-owned and unused",
+    compatibilityPath: "src/core/retrieval/contracts.ts",
+    sourceContains: ['} from "@agentlink/protocol/retrieval-records";'],
+    extractedNames: [
+      "RetrievalChunkLocation",
+      "RetrievalChunkRecord",
+      "RetrievalNamespace",
+      "RetrievalRelationRecord",
+      "RetrievalSourceDocument",
+      "RetrievalSourceKind",
+      "RetrievalSourceRevision",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: "unused",
+  },
+  {
+    title: "keeps retrieval-maintenance compatibility package-owned and unused",
+    compatibilityPath: "src/core/retrieval/contracts.ts",
+    sourceContains: ['} from "@agentlink/protocol/retrieval-maintenance";'],
+    extractedNames: [
+      "RetrievalAggregateMetrics",
+      "RetrievalMigrationOutcome",
+      "RetrievalOptimizeOutcome",
+      "RetrievalRepairOutcome",
+      "RetrievalSnapshot",
+      "RetrievalSnapshotOutcome",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: "unused",
+  },
+  {
+    title:
+      "keeps retrieval-structural-snapshot compatibility package-owned and unused",
+    compatibilityPath: "src/core/retrieval/contracts.ts",
+    sourceContains: [
+      '} from "@agentlink/protocol/retrieval-structural-snapshot";',
+    ],
+    extractedNames: [
+      "RetrievalActiveSource",
+      "RetrievalStructuralSnapshot",
+      "RetrievalStructuralSnapshotRequest",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: "unused",
+  },
+  {
+    title:
+      "keeps retrieval-health compatibility package-owned with bounded importers",
+    compatibilityPath: "src/core/retrieval/contracts.ts",
+    sourceContains: ['} from "@agentlink/protocol/retrieval-health";'],
+    extractedNames: [
+      "RetrievalHealthReason",
+      "RetrievalHealthSnapshot",
+      "RetrievalLexicalReadiness",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: { baseline: ["src/agent/ChatViewProvider.ts"] },
+  },
+  {
+    title: "keeps sidebar-transport compatibility package-owned and unused",
+    compatibilityPath: "src/sidebar/webview/types.ts",
+    sourceIs: [
+      "export type {",
+      "  CommandRule,",
+      "  ExtensionMessage,",
+      "  FeedbackEntry,",
+      "  FeedbackPriority,",
+      "  IndexStatusInfo,",
+      "  PathRule,",
+      "  PostCommand,",
+      "  RuleEditCommand,",
+      "  RuleRemoveCommand,",
+      "  SessionInfo,",
+      "  SidebarState,",
+      "  TrackedCallInfo,",
+      "  WebviewCommand,",
+      "  WriteApprovalMode,",
+      '} from "@agentlink/protocol/sidebar-transport";',
+      "",
+    ].join("\n"),
+    importers: "unused",
+  },
+  {
+    title:
+      "keeps browser Ask Agent identity compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/browserGatewayAskAgentIdentity.ts",
+    sourceIs:
+      'export * from "@agentlink/protocol/browser-gateway-ask-agent-identity";\n',
+    importers: {
+      baseline: [
+        "src/browser-gateway/browserGatewayAskAgentSessionStore.ts",
+        "src/browser-gateway/helper/browserGatewayHelper.ts",
+        "src/browser-gateway/webview/BrowserGatewayApp.test.ts",
+        "src/browser-gateway/webview/BrowserGatewayApp.tsx",
+        "src/browser-gateway/webview/relay/relayClientSelection.test.ts",
+        "src/browser-gateway/webview/relay/useRelayGatewayConnection.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway core-owner registration compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/coreOwnerRegistry.ts",
+    sourceContains: [
+      '} from "@agentlink/protocol/browser-gateway-core-owner-registration";',
+      "export class BrowserGatewayCoreOwnerRegistry",
+      "export interface BrowserGatewayCoreOwnerRegistryOptions",
+    ],
+    extractedNames: [
+      "BrowserGatewayCoreOwnerHeartbeat",
+      "BrowserGatewayCoreOwnerRegistration",
+      "BrowserGatewayCoreOwnerRegistrationResolution",
+      "BrowserGatewayCoreOwnerRegistrationResult",
+      "BrowserGatewayCoreOwnerStatus",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/OwnerTransport.ts",
+        "src/browser-gateway/protocol.ts",
+        "src/browser-gateway/testing/GatewayGenerationFaultHarness.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway helper lifecycle compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/protocol.ts",
+    sourceContains: [
+      [
+        "export {",
+        "  BROWSER_GATEWAY_DATA_PLANE_FEATURES,",
+        "  BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,",
+        '} from "@agentlink/protocol/browser-gateway-helper-lifecycle";',
+      ].join("\n"),
+      [
+        "export type {",
+        "  BrowserGatewayDataPlaneFeature,",
+        "  BrowserGatewayHelperDiscoveryRecord,",
+        "  BrowserGatewayHelperHealthResponse,",
+        '} from "@agentlink/protocol/browser-gateway-helper-lifecycle";',
+      ].join("\n"),
+    ],
+    extractedNames: [
+      "BROWSER_GATEWAY_DATA_PLANE_FEATURES",
+      "BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION",
+      "BrowserGatewayDataPlaneFeature",
+      "BrowserGatewayHelperDiscoveryRecord",
+      "BrowserGatewayHelperHealthResponse",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type|const"),
+    importers: {
+      baseline: [
+        "src/browser-gateway/browserGatewayCommands.test.ts",
+        "src/browser-gateway/browserGatewayCommands.ts",
+        "src/browser-gateway/browserGatewayHelperDiscovery.test.ts",
+        "src/browser-gateway/browserGatewayHelperDiscovery.ts",
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/dataPlane/OwnerTransport.ts",
+        "src/browser-gateway/helper/bootstrapHelper.test.ts",
+        "src/browser-gateway/helper/bootstrapHelper.ts",
+        "src/browser-gateway/helper/browserGatewayGenerationFaults.test.ts",
+        "src/browser-gateway/helper/browserGatewayHelper.lifecycle.integration.test.ts",
+        "src/browser-gateway/helper/browserGatewayHelper.ts",
+        "src/extension.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway capability-status compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayCapabilityStatus } from "@agentlink/protocol/browser-gateway-capability-status";',
+    ],
+    sourceNotMatching: [
+      /export\s+interface\s+BrowserGatewayCapabilityStatus\b/,
+    ],
+    extractedNames: ["BrowserGatewayCapabilityStatus"],
+    importers: {
+      baseline: ["src/browser-gateway/dataPlane/ownerProjectionAdapter.ts"],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway relay theme-state compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      [
+        "export type {",
+        "  BrowserGatewayThemeState,",
+        "  BrowserGatewayThemeVariable,",
+        '} from "@agentlink/protocol/browser-gateway-theme";',
+      ].join("\n"),
+    ],
+    extractedNames: ["BrowserGatewayThemeState", "BrowserGatewayThemeVariable"],
+    forbiddenLocalDeclaration: exportedInterfaceDeclaration,
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/testing/stateEquivalenceOracle.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway background-summary compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayBackgroundSummary } from "@agentlink/protocol/browser-gateway-background-summary";',
+    ],
+    sourceNotMatching: [
+      /export\s+interface\s+BrowserGatewayBackgroundSummary\b/,
+    ],
+    extractedNames: ["BrowserGatewayBackgroundSummary"],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/webview/relay/relaySnapshotProjection.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway transcript-window compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayTranscriptWindow } from "@agentlink/protocol/browser-gateway-transcript-window";',
+    ],
+    sourceNotMatching: [
+      /export\s+interface\s+BrowserGatewayTranscriptWindow\b/,
+    ],
+    extractedNames: ["BrowserGatewayTranscriptWindow"],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/testing/stateEquivalenceOracle.ts",
+        "src/browser-gateway/webview/relay/RelayOwnerStore.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway transcript-message compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayTranscriptMessage } from "@agentlink/protocol/browser-gateway-transcript-message";',
+    ],
+    sourceNotMatching: [
+      /export\s+interface\s+BrowserGatewayTranscriptMessage\b/,
+    ],
+    extractedNames: ["BrowserGatewayTranscriptMessage"],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/OwnerTransport.ts",
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/testing/phase3LiveParityGate.ts",
+        "src/browser-gateway/testing/phase3ReliabilityGate.ts",
+        "src/browser-gateway/testing/stateEquivalenceOracle.ts",
+        "src/browser-gateway/webview/relay/RelayOwnerStore.ts",
+        "src/browser-gateway/webview/relay/relaySnapshotProjection.test.ts",
+        "src/browser-gateway/webview/relay/relaySnapshotProjection.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway transcript-block compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayTranscriptBlock } from "@agentlink/protocol/browser-gateway-transcript-block";',
+    ],
+    sourceNotMatching: [/export\s+type\s+BrowserGatewayTranscriptBlock\b\s*=/],
+    extractedNames: ["BrowserGatewayTranscriptBlock"],
+    importers: {
+      baseline: ["src/browser-gateway/dataPlane/ownerProjectionAdapter.ts"],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway transcript-text compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayTranscriptText } from "@agentlink/protocol/browser-gateway-transcript-text";',
+    ],
+    sourceNotMatching: [/export\s+type\s+BrowserGatewayTranscriptText\b\s*=/],
+    extractedNames: ["BrowserGatewayTranscriptText"],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/testing/stateEquivalenceOracle.ts",
+        "src/browser-gateway/webview/relay/relaySnapshotProjection.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway detached-session selection compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/BrowserGatewayService.ts",
+    sourceContains: [
+      'export type { BrowserGatewayDetachedSessionSelection } from "@agentlink/protocol/browser-gateway-detached-session-selection";',
+    ],
+    sourceNotMatching: [
+      /export\s+(?:interface|type)\s+BrowserGatewayDetachedSessionSelection\b(?:\s*=)?/,
+    ],
+    extractedNames: ["BrowserGatewayDetachedSessionSelection"],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerCommandExecutor.ts",
+        "src/browser-gateway/webview/sessionDetailTransport.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway diff-preview compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayDiffPreview } from "@agentlink/protocol/browser-gateway-diff-preview";',
+    ],
+    sourceNotMatching: [/export\s+interface\s+BrowserGatewayDiffPreview\b/],
+    extractedNames: ["BrowserGatewayDiffPreview"],
+    importers: {
+      baseline: ["src/browser-gateway/dataPlane/ownerProjectionAdapter.ts"],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway interaction-state compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayInteractionState } from "@agentlink/protocol/browser-gateway-interaction-state";',
+    ],
+    sourceNotMatching: [
+      /export\s+interface\s+BrowserGatewayInteractionState\b/,
+    ],
+    extractedNames: ["BrowserGatewayInteractionState"],
+    importers: {
+      baseline: ["src/browser-gateway/dataPlane/ownerProjectionAdapter.ts"],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway interaction-summary compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayInteractionSummary } from "@agentlink/protocol/browser-gateway-interaction-summary";',
+    ],
+    sourceNotMatching: [
+      /export\s+interface\s+BrowserGatewayInteractionSummary\b/,
+    ],
+    extractedNames: ["BrowserGatewayInteractionSummary"],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/testing/stateEquivalenceOracle.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway owner-control metadata compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'from "@agentlink/protocol/browser-gateway-owner-control-metadata";',
+    ],
+    sourceNotMatching: [
+      /export\s+const\s+BROWSER_GATEWAY_OWNER_CONTROL_KINDS\b/,
+      /export\s+type\s+BrowserGateway(?:OwnerControlKind|RelayResetReason)\b/,
+    ],
+    extractedNames: [
+      "BROWSER_GATEWAY_OWNER_CONTROL_KINDS",
+      "BROWSER_GATEWAY_RELAY_RESET_REASONS",
+      "BrowserGatewayOwnerControlKind",
+      "BrowserGatewayRelayResetReason",
+    ],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/protocol.test.ts",
+        "src/browser-gateway/helper/OwnerRelayStore.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway owner-event metadata compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'from "@agentlink/protocol/browser-gateway-owner-event-metadata";',
+    ],
+    sourceNotMatching: [
+      /export\s+const\s+BROWSER_GATEWAY_OWNER_EVENT_KINDS\b/,
+      /export\s+type\s+BrowserGatewayOwnerEventKind\b/,
+    ],
+    extractedNames: [
+      "BROWSER_GATEWAY_OWNER_EVENT_KINDS",
+      "BrowserGatewayOwnerEventKind",
+    ],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/OwnerTransport.ts",
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/dataPlane/protocol.test.ts",
+        "src/browser-gateway/testing/ownerDataPlaneLoadFixture.ts",
+        "src/browser-gateway/testing/phase3MobileBrowserFixture.ts",
+        "src/browser-gateway/webview/relay/useRelayGatewayConnection.test.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway operation-state compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      "type BrowserGatewayOperationState,",
+      'from "@agentlink/protocol/browser-gateway-operation-state";',
+    ],
+    sourceNotMatching: [/export\s+interface\s+BrowserGatewayOperationState\b/],
+    extractedNames: [
+      "BROWSER_GATEWAY_OPERATION_STATUSES",
+      "BrowserGatewayOperationState",
+      "BrowserGatewayOperationStatus",
+    ],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
+        "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
+        "src/browser-gateway/helper/commandRoutes.test.ts",
+        "src/browser-gateway/helper/commandRoutes.ts",
+        "src/browser-gateway/helper/relayRoutes.ts",
+        "src/browser-gateway/testing/stateEquivalenceOracle.ts",
+        "src/browser-gateway/webview/relay/RelayConnectionManager.ts",
+        "src/browser-gateway/webview/relay/RelayOwnerStore.ts",
+        "src/browser-gateway/webview/relay/useRelayGatewayConnection.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway command-metadata compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'from "@agentlink/protocol/browser-gateway-owner-command-metadata";',
+    ],
+    sourceNotMatching: [
+      /export\s+const\s+BROWSER_GATEWAY_OWNER_COMMAND_KINDS\b/,
+      /export\s+const\s+BROWSER_GATEWAY_COMMAND_(?:DEADLINE_CLASSES|IDEMPOTENCIES|IDEMPOTENCY)\b/,
+    ],
+    extractedNames: [
+      "BROWSER_GATEWAY_COMMAND_DEADLINE_CLASSES",
+      "BROWSER_GATEWAY_COMMAND_IDEMPOTENCIES",
+      "BROWSER_GATEWAY_COMMAND_IDEMPOTENCY",
+      "BROWSER_GATEWAY_OWNER_COMMAND_KINDS",
+      "BrowserGatewayCommandDeadlineClass",
+      "BrowserGatewayCommandIdempotency",
+      "BrowserGatewayOwnerCommandKind",
+    ],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerCommandExecutor.ts",
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.test.ts",
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
+        "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/helper/AskAgentOwnerAdapter.test.ts",
+        "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
+        "src/browser-gateway/helper/commandRoutes.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.unit.test.ts",
+        "src/browser-gateway/migration/actionSurfaceInventory.test.ts",
+        "src/browser-gateway/migration/actionSurfaceInventory.ts",
+        "src/browser-gateway/webview/relay/RelayConnectionManager.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway todo-item compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayTodoItem } from "@agentlink/protocol/browser-gateway-todo-item";',
+    ],
+    sourceNotMatching: [/export\s+interface\s+BrowserGatewayTodoItem\b/],
+    extractedNames: ["BrowserGatewayTodoItem"],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/testing/stateEquivalenceOracle.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway queue-item compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayQueueItem } from "@agentlink/protocol/browser-gateway-queue-item";',
+    ],
+    sourceNotMatching: [/export\s+interface\s+BrowserGatewayQueueItem\b/],
+    extractedNames: ["BrowserGatewayQueueItem"],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/testing/stateEquivalenceOracle.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway repository-state compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayRepositoryState } from "@agentlink/protocol/browser-gateway-repository-state";',
+    ],
+    sourceNotMatching: [/export\s+interface\s+BrowserGatewayRepositoryState\b/],
+    extractedNames: ["BrowserGatewayRepositoryState"],
+    importers: {
+      baseline: ["src/browser-gateway/dataPlane/ownerProjectionAdapter.ts"],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway context-budget compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayContextBudget } from "@agentlink/protocol/browser-gateway-context-budget";',
+    ],
+    sourceNotMatching: [/export\s+interface\s+BrowserGatewayContextBudget\b/],
+    extractedNames: ["BrowserGatewayContextBudget"],
+    importers: {
+      baseline: ["src/browser-gateway/testing/stateEquivalenceOracle.ts"],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway protocol-error compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'from "@agentlink/protocol/browser-gateway-protocol-error";',
+    ],
+    extractedNames: [
+      "BrowserGatewayProtocolError",
+      "BrowserGatewayProtocolErrorCode",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("class|interface|type"),
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.test.ts",
+        "src/browser-gateway/dataPlane/protocol.test.ts",
+        "src/browser-gateway/helper/commandRoutes.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway owner-publication batch compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayOwnerPublicationBatch } from "@agentlink/protocol/browser-gateway-owner-publication-batch";',
+    ],
+    sourceNotMatching: [
+      /export\s+(?:interface|type)\s+BrowserGatewayOwnerPublicationBatch\b(?:\s*=)?/,
+    ],
+    extractedNames: ["BrowserGatewayOwnerPublicationBatch"],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
+        "src/browser-gateway/dataPlane/OwnerTransport.ts",
+        "src/browser-gateway/helper/AskAgentOwnerAdapter.test.ts",
+        "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
+        "src/browser-gateway/helper/OwnerRelayStore.test.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.unit.test.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway owner-checkpoint compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayOwnerCheckpoint } from "@agentlink/protocol/browser-gateway-owner-checkpoint";',
+    ],
+    sourceNotMatching: [
+      /export\s+(?:interface|type)\s+BrowserGatewayOwnerCheckpoint\b(?:\s*=)?/,
+    ],
+    extractedNames: ["BrowserGatewayOwnerCheckpoint"],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
+        "src/browser-gateway/dataPlane/OwnerTransport.ts",
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
+        "src/browser-gateway/helper/OwnerRelayStore.test.ts",
+        "src/browser-gateway/helper/OwnerRelayStore.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.unit.test.ts",
+        "src/browser-gateway/helper/relayRoutes.test.ts",
+        "src/browser-gateway/testing/ownerDataPlaneLoadFixture.ts",
+        "src/browser-gateway/testing/phase3LiveParityGate.ts",
+        "src/browser-gateway/testing/phase3ReliabilityGate.ts",
+        "src/browser-gateway/testing/stateEquivalenceOracle.ts",
+        "src/browser-gateway/webview/relay/RelayConnectionManager.test.ts",
+        "src/browser-gateway/webview/relay/RelayOwnerStore.test.ts",
+        "src/browser-gateway/webview/relay/RelayOwnerStore.ts",
+        "src/browser-gateway/webview/relay/relaySnapshotProjection.test.ts",
+        "src/browser-gateway/webview/relay/relaySnapshotProjection.ts",
+        "src/browser-gateway/webview/relay/useRelayGatewayConnection.test.ts",
+        "src/browser-gateway/webview/relay/useRelayGatewayConnection.ts",
+        "src/browser-gateway/dataPlane/protocol.test.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway owner-event compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: ['from "@agentlink/protocol/browser-gateway-owner-event";'],
+    extractedNames: [
+      "BrowserGatewayOwnerEvent",
+      "BrowserGatewayOwnerEventPayload",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
+        "src/browser-gateway/dataPlane/OwnerTransport.ts",
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/helper/OwnerRelayStore.test.ts",
+        "src/browser-gateway/helper/OwnerRelayStore.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.unit.test.ts",
+        "src/browser-gateway/helper/relayRoutes.test.ts",
+        "src/browser-gateway/testing/phase3LiveParityGate.ts",
+        "src/browser-gateway/testing/phase3MobileBrowserFixture.ts",
+        "src/browser-gateway/testing/phase3ReliabilityGate.ts",
+        "src/browser-gateway/testing/stateEquivalenceOracle.ts",
+        "src/browser-gateway/webview/relay/RelayConnectionManager.test.ts",
+        "src/browser-gateway/webview/relay/RelayConnectionManager.ts",
+        "src/browser-gateway/webview/relay/RelayOwnerStore.test.ts",
+        "src/browser-gateway/webview/relay/RelayOwnerStore.ts",
+        "src/browser-gateway/webview/relay/useRelayGatewayConnection.test.ts",
+        "src/browser-gateway/webview/relay/useRelayGatewayConnection.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway owner-control compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayOwnerControl } from "@agentlink/protocol/browser-gateway-owner-control";',
+    ],
+    sourceNotMatching: [
+      /export\s+(?:interface|type)\s+BrowserGatewayOwnerControl\b(?:\s*=)?/,
+    ],
+    extractedNames: ["BrowserGatewayOwnerControl"],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.test.ts",
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
+        "src/browser-gateway/dataPlane/OwnerTransport.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway owner-command acknowledgement compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayOwnerCommandAck } from "@agentlink/protocol/browser-gateway-owner-command-ack";',
+    ],
+    sourceNotMatching: [
+      /export\s+(?:interface|type)\s+BrowserGatewayOwnerCommandAck\b(?:\s*=)?/,
+    ],
+    extractedNames: ["BrowserGatewayOwnerCommandAck"],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.test.ts",
+        "src/browser-gateway/dataPlane/OwnerTransport.ts",
+        "src/browser-gateway/helper/commandRoutes.test.ts",
+        "src/browser-gateway/helper/commandRoutes.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway owner-command compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayOwnerCommand } from "@agentlink/protocol/browser-gateway-owner-command";',
+    ],
+    sourceNotMatching: [/export\s+interface\s+BrowserGatewayOwnerCommand\b/],
+    extractedNames: ["BrowserGatewayOwnerCommand"],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.test.ts",
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
+        "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
+        "src/browser-gateway/dataPlane/OwnerTransport.ts",
+        "src/browser-gateway/helper/AskAgentOwnerAdapter.test.ts",
+        "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
+        "src/browser-gateway/helper/commandRoutes.test.ts",
+        "src/browser-gateway/helper/commandRoutes.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway owner-command body compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export type { BrowserGatewayOwnerCommandBody } from "@agentlink/protocol/browser-gateway-owner-command-body";',
+    ],
+    sourceNotMatching: [
+      /export\s+type\s+BrowserGatewayOwnerCommandBody\b(?:\s*=)?/,
+    ],
+    extractedNames: ["BrowserGatewayOwnerCommandBody"],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerCommandExecutor.ts",
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
+        "src/browser-gateway/helper/AskAgentOwnerAdapter.test.ts",
+        "src/browser-gateway/helper/commandRoutes.test.ts",
+        "src/browser-gateway/helper/commandRoutes.ts",
+        "src/browser-gateway/webview/relay/RelayConnectionManager.ts",
+        "src/browser-gateway/webview/relay/useRelayGatewayConnection.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway foreground-control compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'from "@agentlink/protocol/browser-gateway-foreground-control-state";',
+    ],
+    extractedNames: [
+      "BrowserGatewayForegroundControlState",
+      "BrowserGatewayRevertRecoveryNotice",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/testing/stateEquivalenceOracle.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway session-catalog compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'from "@agentlink/protocol/browser-gateway-session-catalog";',
+    ],
+    extractedNames: [
+      "BrowserGatewayProjectSummary",
+      "BrowserGatewaySessionSummary",
+      "BrowserGatewaySessionCatalog",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/testing/stateEquivalenceOracle.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway chat-workspace summary compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'from "@agentlink/protocol/browser-gateway-chat-workspace-summary";',
+    ],
+    extractedNames: [
+      "BrowserGatewayChatTabStatus",
+      "BrowserGatewayChatTabSummary",
+      "BrowserGatewayChatWorkspaceSummary",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: {
+      baseline: [
+        "src/browser-gateway/BrowserGatewayService.ts",
+        "src/browser-gateway/webview/BrowserGatewayApp.test.ts",
+        "src/browser-gateway/webview/BrowserGatewayApp.tsx",
+      ],
+    },
+  },
+  {
+    title: PHASE_A2_FACADES_TITLE,
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'from "@agentlink/protocol/browser-gateway-data-plane-transport";',
+    ],
+    extractedNames: [
+      "BrowserGatewayChatTabSelection",
+      "BrowserGatewayOwnerRegistration",
+      "BrowserGatewayRelayReset",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: { baseline: ["src/browser-gateway/dataPlane/protocol.test.ts"] },
+  },
+  {
+    title: PHASE_A2_FACADES_TITLE,
+    compatibilityPath: "src/browser-gateway/dataPlane/interactionPayload.ts",
+    sourceContains: [
+      'from "@agentlink/protocol/browser-gateway-owner-interaction-payload";',
+    ],
+    extractedNames: [
+      "BrowserGatewayOwnerInteractionPayload",
+      "BrowserGatewayOwnerQuestionProgressPayload",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.test.ts",
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/dataPlane/ownerProjectionSources.ts",
+        "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
+        "src/browser-gateway/webview/relay/relaySnapshotProjection.test.ts",
+        "src/browser-gateway/webview/relay/relaySnapshotProjection.ts",
+        "src/browser-gateway/webview/relay/useRelayGatewayConnection.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway data-plane version compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      'export { BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION } from "@agentlink/protocol/browser-gateway-data-plane-version";',
+    ],
+    sourceNotMatching: [
+      /export\s+const\s+BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION\b/,
+    ],
+    extractedNames: ["BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION"],
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.test.ts",
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
+        "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
+        "src/browser-gateway/dataPlane/OwnerTransport.ts",
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/dataPlane/protocol.test.ts",
+        "src/browser-gateway/helper/AskAgentOwnerAdapter.test.ts",
+        "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
+        "src/browser-gateway/helper/OwnerRelayStore.test.ts",
+        "src/browser-gateway/helper/OwnerRelayStore.ts",
+        "src/browser-gateway/helper/browserGatewayHelper.ts",
+        "src/browser-gateway/helper/browserGatewayRelay.integration.test.ts",
+        "src/browser-gateway/helper/commandRoutes.test.ts",
+        "src/browser-gateway/helper/commandRoutes.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.unit.test.ts",
+        "src/browser-gateway/helper/relayRoutes.test.ts",
+        "src/browser-gateway/helper/relayRoutes.ts",
+        "src/browser-gateway/testing/phase3LiveParityGate.ts",
+        "src/browser-gateway/testing/phase3ReliabilityGate.ts",
+        "src/browser-gateway/webview/relay/RelayConnectionManager.test.ts",
+        "src/browser-gateway/webview/relay/RelayConnectionManager.ts",
+        "src/browser-gateway/webview/relay/RelayOwnerStore.test.ts",
+        "src/browser-gateway/webview/relay/relaySnapshotProjection.test.ts",
+        "src/browser-gateway/webview/relay/useRelayGatewayConnection.test.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway data-plane identity compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
+    sourceContains: [
+      [
+        "export type {",
+        "  BrowserGatewayDataPlaneIdentity,",
+        "  BrowserGatewayDetailHandle,",
+        '} from "@agentlink/protocol/browser-gateway-data-plane-identity";',
+      ].join("\n"),
+    ],
+    extractedNames: [
+      "BrowserGatewayDataPlaneIdentity",
+      "BrowserGatewayDetailHandle",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: {
+      baseline: [
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.test.ts",
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
+        "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
+        "src/browser-gateway/dataPlane/OwnerTransport.ts",
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/dataPlane/protocol.test.ts",
+        "src/browser-gateway/helper/AskAgentOwnerAdapter.test.ts",
+        "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
+        "src/browser-gateway/helper/OwnerRelayStore.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.ts",
+        "src/browser-gateway/testing/phase3LiveParityGate.ts",
+        "src/browser-gateway/testing/stateEquivalenceOracle.ts",
+        "src/browser-gateway/webview/relay/RelayConnectionManager.ts",
+        "src/browser-gateway/webview/relay/useRelayGatewayConnection.test.ts",
+        "src/browser-gateway/webview/relay/useRelayGatewayConnection.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway instance-status compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/protocol.ts",
+    sourceContains: [
+      [
+        "export type {",
+        "  BrowserGatewayInstanceStatusKind,",
+        "  BrowserGatewayInstanceStatusSummary,",
+        '} from "@agentlink/protocol/browser-gateway-instance-status";',
+      ].join("\n"),
+    ],
+    extractedNames: [
+      "BrowserGatewayInstanceStatusKind",
+      "BrowserGatewayInstanceStatusSummary",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: {
+      baseline: [
+        "src/browser-gateway/BrowserGatewayServer.ts",
+        "src/browser-gateway/BrowserGatewayService.ts",
+        "src/browser-gateway/helper/browserGatewayHelper.ts",
+        "src/browser-gateway/webview/BrowserGatewayApp.tsx",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway model-provider identity compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/browserGatewayModelProviderIds.ts",
+    sourceIs:
+      'export * from "@agentlink/protocol/browser-gateway-model-provider-identity";\n',
+    importers: {
+      baseline: [
+        "src/browser-gateway/browserGatewayAskAgentSessionStore.ts",
+        "src/browser-gateway/browserGatewayModelAuthLeaseStore.ts",
+        "src/browser-gateway/browserGatewayModelCredentialCache.ts",
+        "src/browser-gateway/helper/askAgentModelClient.ts",
+        "src/browser-gateway/helper/browserGatewayHelper.ts",
+        "src/extension.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway data-plane limits compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/dataPlane/limits.ts",
+    sourceIs:
+      'export * from "@agentlink/protocol/browser-gateway-data-plane-limits";\n',
+    importers: {
+      baseline: [
+        "src/browser-gateway/BrowserGatewayServer.test.ts",
+        "src/browser-gateway/BrowserGatewayServer.ts",
+        "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
+        "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
+        "src/browser-gateway/dataPlane/OwnerTransport.ts",
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.test.ts",
+        "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
+        "src/browser-gateway/dataPlane/protocol.test.ts",
+        "src/browser-gateway/dataPlane/protocol.ts",
+        "src/browser-gateway/helper/OwnerRelayStore.ts",
+        "src/browser-gateway/helper/RelaySseClientQueue.ts",
+        "src/browser-gateway/helper/commandRoutes.test.ts",
+        "src/browser-gateway/helper/commandRoutes.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
+        "src/browser-gateway/helper/dataPlaneRoutes.ts",
+        "src/browser-gateway/helper/relayRoutes.ts",
+        "src/browser-gateway/testing/ownerDataPlaneLoadFixture.test.ts",
+        "src/browser-gateway/testing/ownerDataPlaneLoadFixture.ts",
+        "src/browser-gateway/testing/phase3LiveParityGate.test.ts",
+        "src/browser-gateway/testing/phase3LiveParityGate.ts",
+        "src/browser-gateway/testing/phase3PerformanceGate.test.ts",
+        "src/browser-gateway/testing/phase3PerformanceGate.ts",
+        "src/browser-gateway/testing/stateEquivalenceOracle.ts",
+        "src/browser-gateway/webview/relay/RelayConnectionManager.ts",
+        "src/browser-gateway/webview/relay/RelayOwnerStore.ts",
+        "src/browser-gateway/webview/sessionDetailTransport.test.ts",
+        "src/browser-gateway/webview/sessionDetailTransport.ts",
+      ],
+    },
+  },
+  {
+    title:
+      "keeps browser-gateway data-plane mode compatibility package-owned with bounded importers",
+    compatibilityPath: "src/browser-gateway/browserGatewayDataPlaneMode.ts",
+    sourceIs:
+      'export * from "@agentlink/protocol/browser-gateway-data-plane-mode";\n',
+    importers: {
+      baseline: [
+        "src/browser-gateway/BrowserGatewayServer.ts",
+        "src/browser-gateway/browserGatewayDataPlaneMode.test.ts",
+        "src/browser-gateway/browserGatewayRegistry.ts",
+        "src/browser-gateway/helper/browserGatewayHelper.ts",
+        "src/browser-gateway/protocol.ts",
+        "src/browser-gateway/testing/phase3ShadowParityGate.ts",
+        "src/browser-gateway/webview/BrowserGatewayApp.tsx",
+        "src/browser-gateway/webview/index.tsx",
+        "src/browser-gateway/webview/relay/relayClientSelection.ts",
+        "src/extension.ts",
+      ],
+    },
+  },
+  {
+    title: "keeps surface-model-message compatibility package-owned and unused",
+    compatibilityPath: "src/core/surfaceModelMessages.ts",
+    sourceIs: 'export * from "@agentlink/core/surface-model-messages";\n',
+    packageSource: {
+      path: "packages/core/src/surfaceModelMessages.ts",
+      contains: [
+        [
+          "export type {",
+          "  CoreSurfaceModelMediaItem,",
+          "  CoreSurfaceModelMessage,",
+          "  CoreSurfaceQuestionAnswerItem,",
+          '} from "@agentlink/protocol/surface-model-message";',
+        ].join("\n"),
+      ],
+    },
+    extractedNames: [
+      "CoreSurfaceModelMediaItem",
+      "CoreSurfaceModelMessage",
+      "CoreSurfaceQuestionAnswerItem",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: "unused",
+  },
+  {
+    title: TERMINAL_SECURITY_FACADES_TITLE,
+    compatibilityPath: "src/core/capabilities/terminal.ts",
+    sourceContains: ['} from "@agentlink/protocol/terminal-security";'],
+    extractedNames: [
+      "AgentTerminalExecutionAuthority",
+      "CommandExecutionPolicy",
+      "ManagedNetworkDecision",
+      "ManagedNetworkRequest",
+      "TerminalExecutionApprovalRequirement",
+      "TerminalExecutionAuthorityReason",
+      "TerminalExecutionRouteContext",
+      "TerminalExecutionRouteReason",
+      "TerminalExecutionSecurityFailure",
+      "TerminalExecutionSecuritySummary",
+      "TerminalSandboxAttestationSummary",
+      "TerminalSandboxPermissionIntent",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: "unused",
+  },
+  {
+    title: TERMINAL_SECURITY_FACADES_TITLE,
+    compatibilityPath: "src/core/sandboxPolicy.ts",
+    sourceContains: ['} from "@agentlink/protocol/terminal-security";'],
+    extractedNames: [
+      "SandboxBackendCapabilities",
+      "SandboxCapabilityRequest",
+      "SandboxEnvironmentBudgetMetadata",
+      "SandboxEnvironmentInheritance",
+      "SandboxEnvironmentPolicySummary",
+      "SandboxExecutionMetadata",
+      "SandboxViolation",
+      "SandboxViolationOperation",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: "unused",
+  },
+  {
+    title: TERMINAL_SURFACE_FACADES_TITLE,
+    compatibilityPath: "src/terminal/terminalSurfaceProtocol.ts",
+    sourceIs: 'export * from "@agentlink/protocol/terminal-surface";\n',
+    importers: {
+      baseline: [
+        "src/terminal/HostTerminalSurfaceController.ts",
+        "src/terminal/LiveHostTerminalSurfaceController.ts",
+        "src/terminal/terminalSurfaceProtocol.test.ts",
+        "src/terminal/webview/terminalWebviewController.test.ts",
+        "src/terminal/webview/terminalWebviewController.ts",
+      ],
+    },
+  },
+  {
+    title: TERMINAL_SURFACE_FACADES_TITLE,
+    compatibilityPath: "src/terminal/alternateScreenTracker.ts",
+    sourceContains: [
+      'export type { AlternateScreenTransition } from "@agentlink/protocol/terminal-surface";',
+    ],
+    extractedNames: ["AlternateScreenTransition"],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: "unused",
+  },
+  {
+    title: TERMINAL_SURFACE_FACADES_TITLE,
+    compatibilityPath: "src/terminal/hostTerminalBlocks.ts",
+    sourceContains: ['} from "@agentlink/protocol/terminal-surface";'],
+    extractedNames: [
+      "HostTerminalBlock",
+      "HostTerminalBlockState",
+      "HostTerminalCommandBlock",
+      "HostTerminalPromptBlock",
+      "HostTerminalRawBlock",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: "unused",
+  },
+  {
+    title: TERMINAL_SURFACE_FACADES_TITLE,
+    compatibilityPath: "src/terminal/terminalOutputPolicy.ts",
+    sourceContains: ['} from "@agentlink/protocol/terminal-surface";'],
+    extractedNames: [
+      "TerminalOutputPolicyAction",
+      "TerminalOutputPolicyDecision",
+      "TerminalOutputPolicyReason",
+    ],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: "unused",
+  },
+  {
+    title: TERMINAL_SURFACE_FACADES_TITLE,
+    compatibilityPath: "src/terminal/shellIntegration.ts",
+    sourceContains: [
+      'export type { ShellIntegrationMode } from "@agentlink/protocol/terminal-surface";',
+    ],
+    extractedNames: ["ShellIntegrationMode"],
+    forbiddenLocalDeclaration: exportedDeclaration("interface|type"),
+    importers: "unused",
+  },
+];
+
 describe("protocol package boundary", () => {
   it("keeps production protocol modules browser-safe and independent from root source", async () => {
     const violations: string[] = [];
 
     for (const filePath of walkTypeScriptFiles(PROTOCOL_SOURCE)) {
       if (filePath.endsWith(".test.ts")) continue;
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       for (const rule of FORBIDDEN_PROTOCOL_RULES) {
         if (await rule.matches(source)) {
           violations.push(
@@ -530,3629 +2802,16 @@ describe("protocol package boundary", () => {
     ).toBe(false);
   });
 
-  it("wires the final Phase A2 browser-gateway DTO batch through every public package surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    const modules = [
-      {
-        exportPath: "browser-gateway-data-plane-transport",
-        fileName: "browserGatewayDataPlaneTransport",
-        declarationDependencies: [
-          "browserGatewayCapabilityStatus",
-          "browserGatewayDataPlaneIdentity",
-          "browserGatewayOwnerControlMetadata",
-          "browserGatewayDataPlaneVersion",
-        ],
-      },
-      {
-        exportPath: "browser-gateway-owner-interaction-payload",
-        fileName: "browserGatewayOwnerInteractionPayload",
-        declarationDependencies: [
-          "approvalTransport",
-          "mcpElicitation",
-          "mcpUrlElicitation",
-          "structuredQuestion",
-        ],
-      },
-    ] as const;
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    const buildScripts = ["build-cjs.mjs", "watch.mjs"].map((fileName) => ({
-      fileName,
-      source: fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", fileName),
-        "utf8",
-      ),
-    }));
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-
-    for (const module of modules) {
-      expect(packageManifest.exports?.[`./${module.exportPath}`]).toEqual({
-        browser: {
-          types: `./dist/${module.fileName}.d.ts`,
-          default: `./dist/${module.fileName}.js`,
-        },
-        import: {
-          types: `./dist/${module.fileName}.d.ts`,
-          default: `./dist/${module.fileName}.js`,
-        },
-        require: {
-          types: `./dist/cjs/${module.fileName}.d.cts`,
-          default: `./dist/cjs/${module.fileName}.cjs`,
-        },
-      });
-      expect(indexSource).toContain(`export * from "./${module.fileName}.js";`);
-
-      for (const buildScript of buildScripts) {
-        expect(buildScript.source, buildScript.fileName).toContain(
-          `"src/${module.fileName}.ts"`,
-        );
-        expect(buildScript.source, buildScript.fileName).toContain(
-          `"dist/cjs/${module.fileName}.d.cts"`,
-        );
-        expect(buildScript.source, buildScript.fileName).toContain(
-          `export * from "./${module.fileName}.cjs";\\n`,
-        );
-        for (const dependency of module.declarationDependencies) {
-          expect(
-            buildScript.source,
-            `${buildScript.fileName}:${dependency}`,
-          ).toContain(`'"./${dependency}.cjs"'`);
-        }
-      }
-
-      const declaration = fs.readFileSync(
-        path.join(cjsDirectory, `${module.fileName}.d.cts`),
-        "utf8",
-      );
-      for (const dependency of module.declarationDependencies) {
-        expect(declaration).toContain(`from "./${dependency}.cjs"`);
-      }
-      expect(
-        fs.existsSync(path.join(cjsDirectory, `${module.fileName}.cjs`)),
-      ).toBe(true);
-      expect(() =>
-        requireFromBoundaryTest(`@agentlink/protocol/${module.exportPath}`),
-      ).not.toThrow();
-    }
-  });
-
-  it("wires approval-transport through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./approval-transport"]).toEqual({
-      browser: {
-        types: "./dist/approvalTransport.d.ts",
-        default: "./dist/approvalTransport.js",
-      },
-      import: {
-        types: "./dist/approvalTransport.d.ts",
-        default: "./dist/approvalTransport.js",
-      },
-      require: {
-        types: "./dist/cjs/approvalTransport.d.cts",
-        default: "./dist/cjs/approvalTransport.cjs",
-      },
+  // One test per title in PROTOCOL_MODULE_WIRINGS. Rows that share a title
+  // are modules the same test has always covered together.
+  for (const [title, wirings] of groupRowsByTitle(
+    PROTOCOL_MODULE_WIRINGS,
+    protocolModuleWiringTitle,
+  )) {
+    it(title, () => {
+      for (const wiring of wirings) checkProtocolModuleWiring(wiring);
     });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain("`approvalTransport` is subpath-only");
-    expect(indexSource).not.toContain(
-      'export * from "./approvalTransport.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/approvalTransport.ts"');
-      expect(source, buildScript).toContain(
-        '"dist/cjs/approvalTransport.d.cts"',
-      );
-      expect(source, buildScript).not.toContain(
-        'export * from "./approvalTransport.cjs";',
-      );
-    }
-  });
-
-  it("wires web-access-policy through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./web-access-policy"]).toEqual({
-      browser: {
-        types: "./dist/webAccessPolicy.d.ts",
-        default: "./dist/webAccessPolicy.js",
-      },
-      import: {
-        types: "./dist/webAccessPolicy.d.ts",
-        default: "./dist/webAccessPolicy.js",
-      },
-      require: {
-        types: "./dist/cjs/webAccessPolicy.d.cts",
-        default: "./dist/cjs/webAccessPolicy.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./webAccessPolicy.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/webAccessPolicy.ts"');
-      expect(source, buildScript).toContain(
-        'readFile("dist/webAccessPolicy.d.ts", "utf8")',
-      );
-      expect(source, buildScript).toContain('"dist/cjs/webAccessPolicy.d.cts"');
-      expect(source, buildScript).toContain(
-        'export * from "./webAccessPolicy.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/webAccessPolicy\.d\.ts", "utf8"\)\.then\(\(content\) => writeFile\( "dist\/cjs\/webAccessPolicy\.d\.cts", content\.replaceAll\(\s*'"\.\/webActivity\.js"'\s*,\s*'"\.\/webActivity\.cjs"'\s*,?\s*\), \), \)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./webAccessPolicy.cjs";');
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "webAccessPolicy.d.cts"), "utf8"),
-    ).toContain('from "./webActivity.cjs";');
-    expect(fs.existsSync(path.join(cjsDirectory, "webAccessPolicy.cjs"))).toBe(
-      true,
-    );
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest("@agentlink/protocol/web-access-policy"),
-    ).not.toThrow();
-  });
-
-  it("wires web-activity through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./web-activity"]).toEqual({
-      browser: {
-        types: "./dist/webActivity.d.ts",
-        default: "./dist/webActivity.js",
-      },
-      import: {
-        types: "./dist/webActivity.d.ts",
-        default: "./dist/webActivity.js",
-      },
-      require: {
-        types: "./dist/cjs/webActivity.d.cts",
-        default: "./dist/cjs/webActivity.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./webActivity.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/webActivity.ts"');
-      expect(source, buildScript).toContain('"dist/cjs/webActivity.d.cts"');
-      expect(source, buildScript).toContain(
-        'export * from "./webActivity.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./webActivity.cjs";');
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "webActivity.d.cts"), "utf8"),
-    ).toContain("export interface CoreWebActivity");
-    expect(fs.existsSync(path.join(cjsDirectory, "webActivity.cjs"))).toBe(
-      true,
-    );
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest("@agentlink/protocol/web-activity"),
-    ).not.toThrow();
-  });
-
-  it("wires provider-replay through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./provider-replay"]).toEqual({
-      browser: {
-        types: "./dist/providerReplay.d.ts",
-        default: "./dist/providerReplay.js",
-      },
-      import: {
-        types: "./dist/providerReplay.d.ts",
-        default: "./dist/providerReplay.js",
-      },
-      require: {
-        types: "./dist/cjs/providerReplay.d.cts",
-        default: "./dist/cjs/providerReplay.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./providerReplay.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/providerReplay.ts"');
-      expect(source, buildScript).toContain('"dist/cjs/providerReplay.d.cts"');
-      expect(source, buildScript).toContain(
-        'export * from "./providerReplay.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./providerReplay.cjs";');
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "providerReplay.d.cts"), "utf8"),
-    ).toContain("export interface CoreProviderReplayEnvelope");
-    expect(fs.existsSync(path.join(cjsDirectory, "providerReplay.cjs"))).toBe(
-      true,
-    );
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest("@agentlink/protocol/provider-replay"),
-    ).not.toThrow();
-  });
-
-  it("wires retrieval-deletion through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./retrieval-deletion"]).toEqual({
-      browser: {
-        types: "./dist/retrievalDeletion.d.ts",
-        default: "./dist/retrievalDeletion.js",
-      },
-      import: {
-        types: "./dist/retrievalDeletion.d.ts",
-        default: "./dist/retrievalDeletion.js",
-      },
-      require: {
-        types: "./dist/cjs/retrievalDeletion.d.cts",
-        default: "./dist/cjs/retrievalDeletion.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./retrievalDeletion.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/retrievalDeletion.ts"');
-      expect(source, buildScript).toContain(
-        'readFile("dist/retrievalDeletion.d.ts", "utf8")',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/retrievalDeletion.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./retrievalDeletion.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/retrievalDeletion\.d\.ts", "utf8"\)\.then\(\(content\) => writeFile\( "dist\/cjs\/retrievalDeletion\.d\.cts", content\.replaceAll\(\s*'"\.\/retrievalRecords\.js"'\s*,\s*'"\.\/retrievalRecords\.cjs"'\s*,?\s*\), \), \)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    const cjsRootDeclaration = fs.readFileSync(
-      path.join(cjsDirectory, "index.d.cts"),
-      "utf8",
-    );
-    expect(cjsRootDeclaration).toContain(
-      'export * from "./retrievalDeletion.cjs";',
-    );
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "retrievalDeletion.d.cts"),
-        "utf8",
-      ),
-    ).toContain('from "./retrievalRecords.cjs";');
-    expect(
-      fs.existsSync(path.join(cjsDirectory, "retrievalDeletion.cjs")),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest("@agentlink/protocol/retrieval-deletion"),
-    ).not.toThrow();
-  });
-
-  it("wires retrieval-fingerprint through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./retrieval-fingerprint"]).toEqual({
-      browser: {
-        types: "./dist/retrievalFingerprint.d.ts",
-        default: "./dist/retrievalFingerprint.js",
-      },
-      import: {
-        types: "./dist/retrievalFingerprint.d.ts",
-        default: "./dist/retrievalFingerprint.js",
-      },
-      require: {
-        types: "./dist/cjs/retrievalFingerprint.d.cts",
-        default: "./dist/cjs/retrievalFingerprint.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./retrievalFingerprint.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/retrievalFingerprint.ts"');
-      expect(source, buildScript).toContain(
-        '"dist/cjs/retrievalFingerprint.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./retrievalFingerprint.cjs";\\n',
-      );
-    }
-  });
-
-  it("wires retrieval-maintenance through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./retrieval-maintenance"]).toEqual({
-      browser: {
-        types: "./dist/retrievalMaintenance.d.ts",
-        default: "./dist/retrievalMaintenance.js",
-      },
-      import: {
-        types: "./dist/retrievalMaintenance.d.ts",
-        default: "./dist/retrievalMaintenance.js",
-      },
-      require: {
-        types: "./dist/cjs/retrievalMaintenance.d.cts",
-        default: "./dist/cjs/retrievalMaintenance.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./retrievalMaintenance.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/retrievalMaintenance.ts"');
-      expect(source, buildScript).toContain(
-        '"dist/cjs/retrievalMaintenance.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./retrievalMaintenance.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    const cjsRootDeclaration = fs.readFileSync(
-      path.join(cjsDirectory, "index.d.cts"),
-      "utf8",
-    );
-    expect(cjsRootDeclaration).toContain(
-      'export * from "./retrievalMaintenance.cjs";',
-    );
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "retrievalMaintenance.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export interface RetrievalAggregateMetrics");
-    expect(fs.existsSync(path.join(cjsDirectory, "index.cjs"))).toBe(true);
-    expect(
-      fs.existsSync(path.join(cjsDirectory, "retrievalMaintenance.cjs")),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest("@agentlink/protocol/retrieval-maintenance"),
-    ).not.toThrow();
-  });
-
-  it("wires retrieval-structural-snapshot through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./retrieval-structural-snapshot"],
-    ).toEqual({
-      browser: {
-        types: "./dist/retrievalStructuralSnapshot.d.ts",
-        default: "./dist/retrievalStructuralSnapshot.js",
-      },
-      import: {
-        types: "./dist/retrievalStructuralSnapshot.d.ts",
-        default: "./dist/retrievalStructuralSnapshot.js",
-      },
-      require: {
-        types: "./dist/cjs/retrievalStructuralSnapshot.d.cts",
-        default: "./dist/cjs/retrievalStructuralSnapshot.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./retrievalStructuralSnapshot.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/retrievalStructuralSnapshot.ts"',
-      );
-      expect(source, buildScript).toContain(
-        'readFile("dist/retrievalStructuralSnapshot.d.ts", "utf8")',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/retrievalStructuralSnapshot.d.cts"',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /content \.replaceAll\(\s*'"\.\/retrievalFingerprint\.js"'\s*,\s*'"\.\/retrievalFingerprint\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/retrievalQuery\.js"'\s*,\s*'"\.\/retrievalQuery\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/retrievalRecords\.js"'\s*,\s*'"\.\/retrievalRecords\.cjs"'\s*,?\s*\)/,
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./retrievalStructuralSnapshot.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    const cjsRootDeclaration = fs.readFileSync(
-      path.join(cjsDirectory, "index.d.cts"),
-      "utf8",
-    );
-    expect(cjsRootDeclaration).toContain(
-      'export * from "./retrievalStructuralSnapshot.cjs";',
-    );
-    const cjsDeclaration = fs.readFileSync(
-      path.join(cjsDirectory, "retrievalStructuralSnapshot.d.cts"),
-      "utf8",
-    );
-    expect(cjsDeclaration).toContain('from "./retrievalFingerprint.cjs";');
-    expect(cjsDeclaration).toContain('from "./retrievalQuery.cjs";');
-    expect(cjsDeclaration).toContain('from "./retrievalRecords.cjs";');
-    expect(
-      fs.existsSync(path.join(cjsDirectory, "retrievalStructuralSnapshot.cjs")),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/retrieval-structural-snapshot",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires retrieval-health through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./retrieval-health"]).toEqual({
-      browser: {
-        types: "./dist/retrievalHealth.d.ts",
-        default: "./dist/retrievalHealth.js",
-      },
-      import: {
-        types: "./dist/retrievalHealth.d.ts",
-        default: "./dist/retrievalHealth.js",
-      },
-      require: {
-        types: "./dist/cjs/retrievalHealth.d.cts",
-        default: "./dist/cjs/retrievalHealth.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./retrievalHealth.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/retrievalHealth.ts"');
-      expect(source, buildScript).toContain(
-        'readFile("dist/retrievalHealth.d.ts", "utf8")',
-      );
-      expect(source, buildScript).toContain('"dist/cjs/retrievalHealth.d.cts"');
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /content\.replaceAll\(\s*'"\.\/retrievalFingerprint\.js"'\s*,\s*'"\.\/retrievalFingerprint\.cjs"'\s*,?\s*\)/,
-      );
-      expect(normalizedSource, buildScript).toMatch(
-        /content\.replaceAll\(\s*'"\.\/retrievalHealth\.js"'\s*,\s*'"\.\/retrievalHealth\.cjs"'\s*,?\s*\)/,
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./retrievalHealth.cjs";\\n',
-      );
-    }
-  });
-
-  it("wires retrieval-publication through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./retrieval-publication"]).toEqual({
-      browser: {
-        types: "./dist/retrievalPublication.d.ts",
-        default: "./dist/retrievalPublication.js",
-      },
-      import: {
-        types: "./dist/retrievalPublication.d.ts",
-        default: "./dist/retrievalPublication.js",
-      },
-      require: {
-        types: "./dist/cjs/retrievalPublication.d.cts",
-        default: "./dist/cjs/retrievalPublication.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./retrievalPublication.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/retrievalPublication.ts"');
-      expect(source, buildScript).toContain(
-        'readFile("dist/retrievalPublication.d.ts", "utf8")',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/retrievalPublication.d.cts"',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/retrievalPublication\.d\.ts", "utf8"\)\.then\(\(content\) => writeFile\( "dist\/cjs\/retrievalPublication\.d\.cts", content\.replaceAll\(\s*'"\.\/retrievalRecords\.js"'\s*,\s*'"\.\/retrievalRecords\.cjs"'\s*,?\s*\), \), \)/,
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./retrievalPublication.cjs";\\n',
-      );
-    }
-  });
-
-  it("wires retrieval-query through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./retrieval-query"]).toEqual({
-      browser: {
-        types: "./dist/retrievalQuery.d.ts",
-        default: "./dist/retrievalQuery.js",
-      },
-      import: {
-        types: "./dist/retrievalQuery.d.ts",
-        default: "./dist/retrievalQuery.js",
-      },
-      require: {
-        types: "./dist/cjs/retrievalQuery.d.cts",
-        default: "./dist/cjs/retrievalQuery.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./retrievalQuery.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/retrievalQuery.ts"');
-      expect(source, buildScript).toContain(
-        'readFile("dist/retrievalQuery.d.ts", "utf8")',
-      );
-      expect(source, buildScript).toContain('"dist/cjs/retrievalQuery.d.cts"');
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/retrievalQuery\.d\.ts", "utf8"\)\.then\(\(content\) => writeFile\( "dist\/cjs\/retrievalQuery\.d\.cts", content \.replaceAll\(\s*'"\.\/retrievalHealth\.js"'\s*,\s*'"\.\/retrievalHealth\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/retrievalRecords\.js"'\s*,\s*'"\.\/retrievalRecords\.cjs"'\s*,?\s*\), \), \)/,
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./retrievalQuery.cjs";\\n',
-      );
-    }
-  });
-
-  it("wires retrieval-records through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./retrieval-records"]).toEqual({
-      browser: {
-        types: "./dist/retrievalRecords.d.ts",
-        default: "./dist/retrievalRecords.js",
-      },
-      import: {
-        types: "./dist/retrievalRecords.d.ts",
-        default: "./dist/retrievalRecords.js",
-      },
-      require: {
-        types: "./dist/cjs/retrievalRecords.d.cts",
-        default: "./dist/cjs/retrievalRecords.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./retrievalRecords.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/retrievalRecords.ts"');
-      expect(source, buildScript).toContain(
-        '"dist/cjs/retrievalRecords.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./retrievalRecords.cjs";\\n',
-      );
-    }
-  });
-
-  it("wires session-handoff-draft through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./session-handoff-draft"]).toEqual({
-      browser: {
-        types: "./dist/sessionHandoffDraft.d.ts",
-        default: "./dist/sessionHandoffDraft.js",
-      },
-      import: {
-        types: "./dist/sessionHandoffDraft.d.ts",
-        default: "./dist/sessionHandoffDraft.js",
-      },
-      require: {
-        types: "./dist/cjs/sessionHandoffDraft.d.cts",
-        default: "./dist/cjs/sessionHandoffDraft.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./sessionHandoffDraft.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/sessionHandoffDraft.ts"');
-      expect(source, buildScript).toContain(
-        '"dist/cjs/sessionHandoffDraft.d.cts"',
-      );
-      expect(source, buildScript).toContain('"./sessionHandoffDraft.cjs"');
-    }
-  });
-
-  it("wires sidebar-transport through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./sidebar-transport"]).toEqual({
-      browser: {
-        types: "./dist/sidebarTransport.d.ts",
-        default: "./dist/sidebarTransport.js",
-      },
-      import: {
-        types: "./dist/sidebarTransport.d.ts",
-        default: "./dist/sidebarTransport.js",
-      },
-      require: {
-        types: "./dist/cjs/sidebarTransport.d.cts",
-        default: "./dist/cjs/sidebarTransport.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain("`sidebarTransport` is subpath-only");
-    expect(indexSource).not.toContain('export * from "./sidebarTransport.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/sidebarTransport.ts"');
-      expect(source, buildScript).toContain(
-        '"dist/cjs/sidebarTransport.d.cts"',
-      );
-      expect(source, buildScript).not.toContain('"./sidebarTransport.cjs"');
-    }
-  });
-
-  it("wires browser-gateway-ask-agent-identity through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-ask-agent-identity"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayAskAgentIdentity.d.ts",
-        default: "./dist/browserGatewayAskAgentIdentity.js",
-      },
-      import: {
-        types: "./dist/browserGatewayAskAgentIdentity.d.ts",
-        default: "./dist/browserGatewayAskAgentIdentity.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayAskAgentIdentity.d.cts",
-        default: "./dist/cjs/browserGatewayAskAgentIdentity.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayAskAgentIdentity.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayAskAgentIdentity.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayAskAgentIdentity.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayAskAgentIdentity.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayAskAgentIdentity.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayAskAgentIdentity.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export declare function isBrowserGatewayAskAgentSessionId");
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayAskAgentIdentity.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-ask-agent-identity",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-core-owner-registration through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-core-owner-registration"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayCoreOwnerRegistration.d.ts",
-        default: "./dist/browserGatewayCoreOwnerRegistration.js",
-      },
-      import: {
-        types: "./dist/browserGatewayCoreOwnerRegistration.d.ts",
-        default: "./dist/browserGatewayCoreOwnerRegistration.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayCoreOwnerRegistration.d.cts",
-        default: "./dist/cjs/browserGatewayCoreOwnerRegistration.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayCoreOwnerRegistration.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayCoreOwnerRegistration.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayCoreOwnerRegistration.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayCoreOwnerRegistration.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /\.replaceAll\('"\.\/session\.js"', '"\.\/session\.cjs"'\)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayCoreOwnerRegistration.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayCoreOwnerRegistration.d.cts"),
-        "utf8",
-      ),
-    ).toContain('from "./session.cjs";');
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayCoreOwnerRegistration.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-core-owner-registration",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-helper-lifecycle through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-helper-lifecycle"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayHelperLifecycle.d.ts",
-        default: "./dist/browserGatewayHelperLifecycle.js",
-      },
-      import: {
-        types: "./dist/browserGatewayHelperLifecycle.d.ts",
-        default: "./dist/browserGatewayHelperLifecycle.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayHelperLifecycle.d.cts",
-        default: "./dist/cjs/browserGatewayHelperLifecycle.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayHelperLifecycle.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayHelperLifecycle.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayHelperLifecycle.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayHelperLifecycle.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /\.replaceAll\( '"\.\/browserGatewayDataPlaneMode\.js"', '"\.\/browserGatewayDataPlaneMode\.cjs"', \)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayHelperLifecycle.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayHelperLifecycle.d.cts"),
-        "utf8",
-      ),
-    ).toContain('from "./browserGatewayDataPlaneMode.cjs";');
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayHelperLifecycle.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-helper-lifecycle",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway relay theme state through the existing public package surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./browser-gateway-theme"]).toEqual({
-      browser: {
-        types: "./dist/browserGatewayTheme.d.ts",
-        default: "./dist/browserGatewayTheme.js",
-      },
-      import: {
-        types: "./dist/browserGatewayTheme.d.ts",
-        default: "./dist/browserGatewayTheme.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayTheme.d.cts",
-        default: "./dist/cjs/browserGatewayTheme.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./browserGatewayTheme.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/browserGatewayTheme.ts"');
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayTheme.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayTheme.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayTheme.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayTheme.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export interface BrowserGatewayThemeState");
-    const themeModule = requireFromBoundaryTest(
-      "@agentlink/protocol/browser-gateway-theme",
-    ) as { BROWSER_GATEWAY_COLOR_SCHEMES?: readonly string[] };
-    expect(themeModule.BROWSER_GATEWAY_COLOR_SCHEMES).toEqual([
-      "light",
-      "dark",
-      "hc",
-      "hc-light",
-    ]);
-    expect(Object.isFrozen(themeModule.BROWSER_GATEWAY_COLOR_SCHEMES)).toBe(
-      true,
-    );
-    expect(() =>
-      (themeModule.BROWSER_GATEWAY_COLOR_SCHEMES as unknown as string[]).push(
-        "other",
-      ),
-    ).toThrow(TypeError);
-  });
-
-  it("wires browser-gateway-background-summary through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-background-summary"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayBackgroundSummary.d.ts",
-        default: "./dist/browserGatewayBackgroundSummary.js",
-      },
-      import: {
-        types: "./dist/browserGatewayBackgroundSummary.d.ts",
-        default: "./dist/browserGatewayBackgroundSummary.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayBackgroundSummary.d.cts",
-        default: "./dist/cjs/browserGatewayBackgroundSummary.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayBackgroundSummary.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayBackgroundSummary.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayBackgroundSummary.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayBackgroundSummary.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayBackgroundSummary.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayBackgroundSummary.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export interface BrowserGatewayBackgroundSummary");
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayBackgroundSummary.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-background-summary",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-transcript-window through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-transcript-window"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayTranscriptWindow.d.ts",
-        default: "./dist/browserGatewayTranscriptWindow.js",
-      },
-      import: {
-        types: "./dist/browserGatewayTranscriptWindow.d.ts",
-        default: "./dist/browserGatewayTranscriptWindow.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayTranscriptWindow.d.cts",
-        default: "./dist/cjs/browserGatewayTranscriptWindow.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayTranscriptWindow.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayTranscriptWindow.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayTranscriptWindow.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayTranscriptWindow.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/browserGatewayTranscriptWindow\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayTranscriptWindow\.d\.cts", content\.replaceAll\(\s*'"\.\/browserGatewayTranscriptMessage\.js"'\s*,\s*'"\.\/browserGatewayTranscriptMessage\.cjs"'\s*,?\s*\), \), \)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayTranscriptWindow.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayTranscriptWindow.d.cts"),
-        "utf8",
-      ),
-    ).toContain(
-      'import type { BrowserGatewayTranscriptMessage } from "./browserGatewayTranscriptMessage.cjs";',
-    );
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayTranscriptWindow.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-transcript-window",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-transcript-message through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-transcript-message"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayTranscriptMessage.d.ts",
-        default: "./dist/browserGatewayTranscriptMessage.js",
-      },
-      import: {
-        types: "./dist/browserGatewayTranscriptMessage.d.ts",
-        default: "./dist/browserGatewayTranscriptMessage.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayTranscriptMessage.d.cts",
-        default: "./dist/cjs/browserGatewayTranscriptMessage.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayTranscriptMessage.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayTranscriptMessage.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayTranscriptMessage.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayTranscriptMessage.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/browserGatewayTranscriptMessage\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayTranscriptMessage\.d\.cts", content \.replaceAll\(\s*'"\.\/chatTranscript\.js"'\s*,\s*'"\.\/chatTranscript\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayTranscriptBlock\.js"'\s*,\s*'"\.\/browserGatewayTranscriptBlock\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayTranscriptText\.js"'\s*,\s*'"\.\/browserGatewayTranscriptText\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/toolResult\.js"'\s*,\s*'"\.\/toolResult\.cjs"'\s*,?\s*\), \), \)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayTranscriptMessage.cjs";');
-    const declaration = fs.readFileSync(
-      path.join(cjsDirectory, "browserGatewayTranscriptMessage.d.cts"),
-      "utf8",
-    );
-    for (const dependency of [
-      "chatTranscript",
-      "browserGatewayTranscriptBlock",
-      "browserGatewayTranscriptText",
-      "toolResult",
-    ]) {
-      expect(declaration).toContain(`from "./${dependency}.cjs";`);
-    }
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayTranscriptMessage.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-transcript-message",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-transcript-block through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-transcript-block"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayTranscriptBlock.d.ts",
-        default: "./dist/browserGatewayTranscriptBlock.js",
-      },
-      import: {
-        types: "./dist/browserGatewayTranscriptBlock.d.ts",
-        default: "./dist/browserGatewayTranscriptBlock.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayTranscriptBlock.d.cts",
-        default: "./dist/cjs/browserGatewayTranscriptBlock.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayTranscriptBlock.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayTranscriptBlock.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayTranscriptBlock.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayTranscriptBlock.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/browserGatewayTranscriptBlock\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayTranscriptBlock\.d\.cts", content \.replaceAll\(\s*'"\.\/backgroundResult\.js"'\s*,\s*'"\.\/backgroundResult\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayTranscriptText\.js"'\s*,\s*'"\.\/browserGatewayTranscriptText\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/chatTranscript\.js"'\s*,\s*'"\.\/chatTranscript\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/modelCatalog\.js"'\s*,\s*'"\.\/modelCatalog\.cjs"'\s*,?\s*\), \), \)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayTranscriptBlock.cjs";');
-    const declaration = fs.readFileSync(
-      path.join(cjsDirectory, "browserGatewayTranscriptBlock.d.cts"),
-      "utf8",
-    );
-    for (const dependency of [
-      "backgroundResult",
-      "browserGatewayTranscriptText",
-      "chatTranscript",
-      "modelCatalog",
-    ]) {
-      expect(declaration).toContain(`from "./${dependency}.cjs";`);
-    }
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayTranscriptBlock.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-transcript-block",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-transcript-text through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-transcript-text"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayTranscriptText.d.ts",
-        default: "./dist/browserGatewayTranscriptText.js",
-      },
-      import: {
-        types: "./dist/browserGatewayTranscriptText.d.ts",
-        default: "./dist/browserGatewayTranscriptText.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayTranscriptText.d.cts",
-        default: "./dist/cjs/browserGatewayTranscriptText.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayTranscriptText.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayTranscriptText.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayTranscriptText.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayTranscriptText.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/browserGatewayTranscriptText\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayTranscriptText\.d\.cts", content\.replaceAll\(\s*'"\.\/browserGatewayDataPlaneIdentity\.js"'\s*,\s*'"\.\/browserGatewayDataPlaneIdentity\.cjs"'\s*,?\s*\), \), \)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayTranscriptText.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayTranscriptText.d.cts"),
-        "utf8",
-      ),
-    ).toContain(
-      'import type { BrowserGatewayDetailHandle } from "./browserGatewayDataPlaneIdentity.cjs";',
-    );
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayTranscriptText.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-transcript-text",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-detached-session-selection through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-detached-session-selection"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayDetachedSessionSelection.d.ts",
-        default: "./dist/browserGatewayDetachedSessionSelection.js",
-      },
-      import: {
-        types: "./dist/browserGatewayDetachedSessionSelection.d.ts",
-        default: "./dist/browserGatewayDetachedSessionSelection.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayDetachedSessionSelection.d.cts",
-        default: "./dist/cjs/browserGatewayDetachedSessionSelection.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayDetachedSessionSelection.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayDetachedSessionSelection.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayDetachedSessionSelection.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayDetachedSessionSelection.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain(
-      'export * from "./browserGatewayDetachedSessionSelection.cjs";',
-    );
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayDetachedSessionSelection.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export interface BrowserGatewayDetachedSessionSelection");
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-detached-session-selection",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-diff-preview through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./browser-gateway-diff-preview"]).toEqual(
-      {
-        browser: {
-          types: "./dist/browserGatewayDiffPreview.d.ts",
-          default: "./dist/browserGatewayDiffPreview.js",
-        },
-        import: {
-          types: "./dist/browserGatewayDiffPreview.d.ts",
-          default: "./dist/browserGatewayDiffPreview.js",
-        },
-        require: {
-          types: "./dist/cjs/browserGatewayDiffPreview.d.cts",
-          default: "./dist/cjs/browserGatewayDiffPreview.cjs",
-        },
-      },
-    );
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayDiffPreview.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayDiffPreview.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayDiffPreview.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayDiffPreview.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/browserGatewayDiffPreview\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayDiffPreview\.d\.cts", content\.replaceAll\(\s*'"\.\/browserGatewayDataPlaneIdentity\.js"'\s*,\s*'"\.\/browserGatewayDataPlaneIdentity\.cjs"'\s*,?\s*\), \), \)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayDiffPreview.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayDiffPreview.d.cts"),
-        "utf8",
-      ),
-    ).toContain(
-      'import type { BrowserGatewayDetailHandle } from "./browserGatewayDataPlaneIdentity.cjs";',
-    );
-    expect(
-      fs.existsSync(path.join(cjsDirectory, "browserGatewayDiffPreview.cjs")),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-diff-preview",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-interaction-state through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-interaction-state"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayInteractionState.d.ts",
-        default: "./dist/browserGatewayInteractionState.js",
-      },
-      import: {
-        types: "./dist/browserGatewayInteractionState.d.ts",
-        default: "./dist/browserGatewayInteractionState.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayInteractionState.d.cts",
-        default: "./dist/cjs/browserGatewayInteractionState.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayInteractionState.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayInteractionState.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayInteractionState.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayInteractionState.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/browserGatewayInteractionState\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayInteractionState\.d\.cts", content \.replaceAll\(\s*'"\.\/browserGatewayInteractionSummary\.js"'\s*,\s*'"\.\/browserGatewayInteractionSummary\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayOperationState\.js"'\s*,\s*'"\.\/browserGatewayOperationState\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayQueueItem\.js"'\s*,\s*'"\.\/browserGatewayQueueItem\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayTodoItem\.js"'\s*,\s*'"\.\/browserGatewayTodoItem\.cjs"'\s*,?\s*\), \), \)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayInteractionState.cjs";');
-    const declaration = fs.readFileSync(
-      path.join(cjsDirectory, "browserGatewayInteractionState.d.cts"),
-      "utf8",
-    );
-    for (const dependency of [
-      "browserGatewayInteractionSummary",
-      "browserGatewayOperationState",
-      "browserGatewayQueueItem",
-      "browserGatewayTodoItem",
-    ]) {
-      expect(declaration).toContain(`from "./${dependency}.cjs";`);
-    }
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayInteractionState.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-interaction-state",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-interaction-summary through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-interaction-summary"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayInteractionSummary.d.ts",
-        default: "./dist/browserGatewayInteractionSummary.js",
-      },
-      import: {
-        types: "./dist/browserGatewayInteractionSummary.d.ts",
-        default: "./dist/browserGatewayInteractionSummary.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayInteractionSummary.d.cts",
-        default: "./dist/cjs/browserGatewayInteractionSummary.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayInteractionSummary.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayInteractionSummary.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayInteractionSummary.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayInteractionSummary.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/browserGatewayInteractionSummary\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayInteractionSummary\.d\.cts", content\.replaceAll\(\s*'"\.\/browserGatewayDataPlaneIdentity\.js"'\s*,\s*'"\.\/browserGatewayDataPlaneIdentity\.cjs"'\s*,?\s*\), \), \)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayInteractionSummary.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayInteractionSummary.d.cts"),
-        "utf8",
-      ),
-    ).toContain(
-      'import type { BrowserGatewayDetailHandle } from "./browserGatewayDataPlaneIdentity.cjs";',
-    );
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayInteractionSummary.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-interaction-summary",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway owner-control metadata through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-owner-control-metadata"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayOwnerControlMetadata.d.ts",
-        default: "./dist/browserGatewayOwnerControlMetadata.js",
-      },
-      import: {
-        types: "./dist/browserGatewayOwnerControlMetadata.d.ts",
-        default: "./dist/browserGatewayOwnerControlMetadata.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayOwnerControlMetadata.d.cts",
-        default: "./dist/cjs/browserGatewayOwnerControlMetadata.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayOwnerControlMetadata.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayOwnerControlMetadata.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayOwnerControlMetadata.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayOwnerControlMetadata.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayOwnerControlMetadata.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayOwnerControlMetadata.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export declare const BROWSER_GATEWAY_OWNER_CONTROL_KINDS");
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayOwnerControlMetadata.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    const ownerControlMetadataModule = requireFromBoundaryTest(
-      "@agentlink/protocol/browser-gateway-owner-control-metadata",
-    ) as {
-      BROWSER_GATEWAY_OWNER_CONTROL_KINDS?: readonly string[];
-      BROWSER_GATEWAY_RELAY_RESET_REASONS?: readonly string[];
-    };
-    expect(
-      ownerControlMetadataModule.BROWSER_GATEWAY_OWNER_CONTROL_KINDS,
-    ).toEqual([
-      "hello",
-      "demand.changed",
-      "checkpoint.requested",
-      "command.cancelled",
-      "drain",
-    ]);
-    expect(
-      ownerControlMetadataModule.BROWSER_GATEWAY_RELAY_RESET_REASONS,
-    ).toEqual([
-      "helper_generation_changed",
-      "owner_generation_changed",
-      "sequence_gap",
-      "stale_replay_cursor",
-      "subscription_changed",
-      "checkpoint_required",
-    ]);
-    expect(
-      Object.isFrozen(
-        ownerControlMetadataModule.BROWSER_GATEWAY_OWNER_CONTROL_KINDS,
-      ),
-    ).toBe(false);
-    expect(
-      Object.isFrozen(
-        ownerControlMetadataModule.BROWSER_GATEWAY_RELAY_RESET_REASONS,
-      ),
-    ).toBe(true);
-    expect(() =>
-      (
-        ownerControlMetadataModule.BROWSER_GATEWAY_RELAY_RESET_REASONS as unknown as string[]
-      ).push("other"),
-    ).toThrow(TypeError);
-  });
-
-  it("wires browser-gateway owner-event metadata through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-owner-event-metadata"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayOwnerEventMetadata.d.ts",
-        default: "./dist/browserGatewayOwnerEventMetadata.js",
-      },
-      import: {
-        types: "./dist/browserGatewayOwnerEventMetadata.d.ts",
-        default: "./dist/browserGatewayOwnerEventMetadata.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayOwnerEventMetadata.d.cts",
-        default: "./dist/cjs/browserGatewayOwnerEventMetadata.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayOwnerEventMetadata.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayOwnerEventMetadata.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayOwnerEventMetadata.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayOwnerEventMetadata.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayOwnerEventMetadata.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayOwnerEventMetadata.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export declare const BROWSER_GATEWAY_OWNER_EVENT_KINDS");
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayOwnerEventMetadata.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    const ownerEventMetadataModule = requireFromBoundaryTest(
-      "@agentlink/protocol/browser-gateway-owner-event-metadata",
-    ) as { BROWSER_GATEWAY_OWNER_EVENT_KINDS?: readonly string[] };
-    expect(ownerEventMetadataModule.BROWSER_GATEWAY_OWNER_EVENT_KINDS).toEqual([
-      "foreground.control.updated",
-      "session.catalog.updated",
-      "transcript.message.appended",
-      "transcript.message.upserted",
-      "transcript.block.delta",
-      "transcript.history.prepended",
-      "interaction.updated",
-      "queue.updated",
-      "todo.updated",
-      "background.updated",
-      "fleet.updated",
-      "diff.preview.updated",
-      "repository.updated",
-      "theme.updated",
-      "model_catalog.revision.updated",
-      "plugin_catalog.revision.updated",
-      "owner.capabilities.updated",
-      "operation.updated",
-    ]);
-    expect(
-      Object.isFrozen(
-        ownerEventMetadataModule.BROWSER_GATEWAY_OWNER_EVENT_KINDS,
-      ),
-    ).toBe(true);
-    expect(() =>
-      (
-        ownerEventMetadataModule.BROWSER_GATEWAY_OWNER_EVENT_KINDS as unknown as string[]
-      ).push("other"),
-    ).toThrow(TypeError);
-  });
-
-  it("wires browser-gateway command metadata and operation state through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-owner-command-metadata"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayOwnerCommandMetadata.d.ts",
-        default: "./dist/browserGatewayOwnerCommandMetadata.js",
-      },
-      import: {
-        types: "./dist/browserGatewayOwnerCommandMetadata.d.ts",
-        default: "./dist/browserGatewayOwnerCommandMetadata.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayOwnerCommandMetadata.d.cts",
-        default: "./dist/cjs/browserGatewayOwnerCommandMetadata.cjs",
-      },
-    });
-    expect(
-      packageManifest.exports?.["./browser-gateway-operation-state"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayOperationState.d.ts",
-        default: "./dist/browserGatewayOperationState.js",
-      },
-      import: {
-        types: "./dist/browserGatewayOperationState.d.ts",
-        default: "./dist/browserGatewayOperationState.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayOperationState.d.cts",
-        default: "./dist/cjs/browserGatewayOperationState.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayOwnerCommandMetadata.js";',
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayOperationState.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      for (const moduleName of [
-        "browserGatewayOperationState",
-        "browserGatewayOwnerCommandMetadata",
-      ]) {
-        expect(source, buildScript).toContain(`"src/${moduleName}.ts"`);
-        expect(source, buildScript).toContain(`"dist/cjs/${moduleName}.d.cts"`);
-        expect(source, buildScript).toContain(
-          `export * from "./${moduleName}.cjs";\\n`,
-        );
-      }
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/browserGatewayOperationState\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayOperationState\.d\.cts", content \.replaceAll\(\s*'"\.\/browserGatewayDataPlaneIdentity\.js"'\s*,\s*'"\.\/browserGatewayDataPlaneIdentity\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayOwnerCommandMetadata\.js"'\s*,\s*'"\.\/browserGatewayOwnerCommandMetadata\.cjs"'\s*,?\s*\), \), \)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    const cjsIndex = fs.readFileSync(
-      path.join(cjsDirectory, "index.d.cts"),
-      "utf8",
-    );
-    expect(cjsIndex).toContain(
-      'export * from "./browserGatewayOwnerCommandMetadata.cjs";',
-    );
-    expect(cjsIndex).toContain(
-      'export * from "./browserGatewayOperationState.cjs";',
-    );
-    const operationDeclaration = fs.readFileSync(
-      path.join(cjsDirectory, "browserGatewayOperationState.d.cts"),
-      "utf8",
-    );
-    expect(operationDeclaration).toContain(
-      'from "./browserGatewayDataPlaneIdentity.cjs";',
-    );
-    expect(operationDeclaration).toContain(
-      'from "./browserGatewayOwnerCommandMetadata.cjs";',
-    );
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayOwnerCommandMetadata.cjs"),
-      ),
-    ).toBe(true);
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayOperationState.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-owner-command-metadata",
-      ),
-    ).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-operation-state",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-todo-item through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./browser-gateway-todo-item"]).toEqual({
-      browser: {
-        types: "./dist/browserGatewayTodoItem.d.ts",
-        default: "./dist/browserGatewayTodoItem.js",
-      },
-      import: {
-        types: "./dist/browserGatewayTodoItem.d.ts",
-        default: "./dist/browserGatewayTodoItem.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayTodoItem.d.cts",
-        default: "./dist/cjs/browserGatewayTodoItem.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayTodoItem.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/browserGatewayTodoItem.ts"');
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayTodoItem.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayTodoItem.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayTodoItem.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayTodoItem.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export interface BrowserGatewayTodoItem");
-    const todoModule = requireFromBoundaryTest(
-      "@agentlink/protocol/browser-gateway-todo-item",
-    ) as { BROWSER_GATEWAY_TODO_ITEM_STATES?: readonly string[] };
-    expect(todoModule.BROWSER_GATEWAY_TODO_ITEM_STATES).toEqual([
-      "pending",
-      "in_progress",
-      "completed",
-    ]);
-    expect(Object.isFrozen(todoModule.BROWSER_GATEWAY_TODO_ITEM_STATES)).toBe(
-      true,
-    );
-    expect(() =>
-      (todoModule.BROWSER_GATEWAY_TODO_ITEM_STATES as unknown as string[]).push(
-        "other",
-      ),
-    ).toThrow(TypeError);
-  });
-
-  it("wires browser-gateway-queue-item through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./browser-gateway-queue-item"]).toEqual({
-      browser: {
-        types: "./dist/browserGatewayQueueItem.d.ts",
-        default: "./dist/browserGatewayQueueItem.js",
-      },
-      import: {
-        types: "./dist/browserGatewayQueueItem.d.ts",
-        default: "./dist/browserGatewayQueueItem.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayQueueItem.d.cts",
-        default: "./dist/cjs/browserGatewayQueueItem.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayQueueItem.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/browserGatewayQueueItem.ts"');
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayQueueItem.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayQueueItem.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayQueueItem.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayQueueItem.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export interface BrowserGatewayQueueItem");
-    const queueModule = requireFromBoundaryTest(
-      "@agentlink/protocol/browser-gateway-queue-item",
-    ) as { BROWSER_GATEWAY_QUEUE_ITEM_STATES?: readonly string[] };
-    expect(queueModule.BROWSER_GATEWAY_QUEUE_ITEM_STATES).toEqual([
-      "queued",
-      "running",
-      "completed",
-      "failed",
-    ]);
-    expect(Object.isFrozen(queueModule.BROWSER_GATEWAY_QUEUE_ITEM_STATES)).toBe(
-      true,
-    );
-    expect(() =>
-      (
-        queueModule.BROWSER_GATEWAY_QUEUE_ITEM_STATES as unknown as string[]
-      ).push("other"),
-    ).toThrow(TypeError);
-  });
-
-  it("wires browser-gateway-repository-state through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-repository-state"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayRepositoryState.d.ts",
-        default: "./dist/browserGatewayRepositoryState.js",
-      },
-      import: {
-        types: "./dist/browserGatewayRepositoryState.d.ts",
-        default: "./dist/browserGatewayRepositoryState.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayRepositoryState.d.cts",
-        default: "./dist/cjs/browserGatewayRepositoryState.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayRepositoryState.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayRepositoryState.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayRepositoryState.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayRepositoryState.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayRepositoryState.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayRepositoryState.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export interface BrowserGatewayRepositoryState");
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayRepositoryState.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-repository-state",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-context-budget through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-context-budget"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayContextBudget.d.ts",
-        default: "./dist/browserGatewayContextBudget.js",
-      },
-      import: {
-        types: "./dist/browserGatewayContextBudget.d.ts",
-        default: "./dist/browserGatewayContextBudget.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayContextBudget.d.cts",
-        default: "./dist/cjs/browserGatewayContextBudget.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayContextBudget.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayContextBudget.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayContextBudget.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayContextBudget.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayContextBudget.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayContextBudget.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export interface BrowserGatewayContextBudget");
-    expect(
-      fs.existsSync(path.join(cjsDirectory, "browserGatewayContextBudget.cjs")),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-context-budget",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-capability-status through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-capability-status"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayCapabilityStatus.d.ts",
-        default: "./dist/browserGatewayCapabilityStatus.js",
-      },
-      import: {
-        types: "./dist/browserGatewayCapabilityStatus.d.ts",
-        default: "./dist/browserGatewayCapabilityStatus.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayCapabilityStatus.d.cts",
-        default: "./dist/cjs/browserGatewayCapabilityStatus.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayCapabilityStatus.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayCapabilityStatus.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayCapabilityStatus.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayCapabilityStatus.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayCapabilityStatus.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayCapabilityStatus.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export interface BrowserGatewayCapabilityStatus");
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayCapabilityStatus.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    const capabilityModule = requireFromBoundaryTest(
-      "@agentlink/protocol/browser-gateway-capability-status",
-    ) as { BROWSER_GATEWAY_CAPABILITY_STATES?: readonly string[] };
-    expect(capabilityModule.BROWSER_GATEWAY_CAPABILITY_STATES).toEqual([
-      "enabled",
-      "disabled",
-      "requires_approval",
-      "unavailable",
-    ]);
-    expect(
-      Object.isFrozen(capabilityModule.BROWSER_GATEWAY_CAPABILITY_STATES),
-    ).toBe(true);
-    expect(() =>
-      (
-        capabilityModule.BROWSER_GATEWAY_CAPABILITY_STATES as unknown as string[]
-      ).push("other"),
-    ).toThrow(TypeError);
-  });
-
-  it("wires browser-gateway-protocol-error through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-protocol-error"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayProtocolError.d.ts",
-        default: "./dist/browserGatewayProtocolError.js",
-      },
-      import: {
-        types: "./dist/browserGatewayProtocolError.d.ts",
-        default: "./dist/browserGatewayProtocolError.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayProtocolError.d.cts",
-        default: "./dist/cjs/browserGatewayProtocolError.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayProtocolError.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayProtocolError.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayProtocolError.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayProtocolError.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayProtocolError.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayProtocolError.d.cts"),
-        "utf8",
-      ),
-    ).toContain(
-      "export declare class BrowserGatewayProtocolError extends Error",
-    );
-    type ProtocolErrorConstructor = new (
-      code: "invalid_value",
-      path: string,
-      message: string,
-    ) => Error & { code: string; path: string };
-    const protocolErrorModule = requireFromBoundaryTest(
-      "@agentlink/protocol/browser-gateway-protocol-error",
-    ) as { BrowserGatewayProtocolError: ProtocolErrorConstructor };
-    const rootProtocolModule = requireFromBoundaryTest(
-      "@agentlink/protocol",
-    ) as { BrowserGatewayProtocolError: ProtocolErrorConstructor };
-    for (const constructor of [
-      protocolErrorModule.BrowserGatewayProtocolError,
-      rootProtocolModule.BrowserGatewayProtocolError,
-    ]) {
-      const error = new constructor(
-        "invalid_value",
-        "$.field",
-        "must be valid",
-      );
-      expect(error).toBeInstanceOf(constructor);
-      expect(error).toMatchObject({
-        name: "BrowserGatewayProtocolError",
-        code: "invalid_value",
-        path: "$.field",
-        message: "$.field: must be valid",
-      });
-    }
-  });
-
-  it("wires browser-gateway-owner-publication-batch through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-owner-publication-batch"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayOwnerPublicationBatch.d.ts",
-        default: "./dist/browserGatewayOwnerPublicationBatch.js",
-      },
-      import: {
-        types: "./dist/browserGatewayOwnerPublicationBatch.d.ts",
-        default: "./dist/browserGatewayOwnerPublicationBatch.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayOwnerPublicationBatch.d.cts",
-        default: "./dist/cjs/browserGatewayOwnerPublicationBatch.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayOwnerPublicationBatch.js";',
-    );
-
-    const dependencies = [
-      "browserGatewayDataPlaneIdentity",
-      "browserGatewayDataPlaneVersion",
-      "browserGatewayOwnerCheckpoint",
-      "browserGatewayOwnerEvent",
-    ] as const;
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayOwnerPublicationBatch.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayOwnerPublicationBatch.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayOwnerPublicationBatch.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      for (const dependency of dependencies) {
-        expect(normalizedSource, `${buildScript}:${dependency}`).toMatch(
-          new RegExp(
-            `\\.replaceAll\\(\\s*'"\\.\\/${dependency}\\.js"'\\s*,\\s*'"\\.\\/${dependency}\\.cjs"'\\s*,?\\s*\\)`,
-          ),
-        );
-      }
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayOwnerPublicationBatch.cjs";');
-    const declaration = fs.readFileSync(
-      path.join(cjsDirectory, "browserGatewayOwnerPublicationBatch.d.cts"),
-      "utf8",
-    );
-    for (const dependency of dependencies) {
-      expect(declaration).toContain(`from "./${dependency}.cjs";`);
-    }
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayOwnerPublicationBatch.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-owner-publication-batch",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-owner-checkpoint through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-owner-checkpoint"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayOwnerCheckpoint.d.ts",
-        default: "./dist/browserGatewayOwnerCheckpoint.js",
-      },
-      import: {
-        types: "./dist/browserGatewayOwnerCheckpoint.d.ts",
-        default: "./dist/browserGatewayOwnerCheckpoint.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayOwnerCheckpoint.d.cts",
-        default: "./dist/cjs/browserGatewayOwnerCheckpoint.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayOwnerCheckpoint.js";',
-    );
-
-    const dependencies = [
-      "browserGatewayBackgroundSummary",
-      "browserGatewayCapabilityStatus",
-      "browserGatewayDataPlaneIdentity",
-      "browserGatewayDataPlaneVersion",
-      "browserGatewayDiffPreview",
-      "browserGatewayForegroundControlState",
-      "browserGatewayInteractionState",
-      "browserGatewayRepositoryState",
-      "browserGatewaySessionCatalog",
-      "browserGatewayTheme",
-      "browserGatewayTranscriptWindow",
-    ] as const;
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayOwnerCheckpoint.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayOwnerCheckpoint.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayOwnerCheckpoint.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      for (const dependency of dependencies) {
-        expect(normalizedSource, `${buildScript}:${dependency}`).toMatch(
-          new RegExp(
-            `\\.replaceAll\\(\\s*'"\\.\\/${dependency}\\.js"'\\s*,\\s*'"\\.\\/${dependency}\\.cjs"'\\s*,?\\s*\\)`,
-          ),
-        );
-      }
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayOwnerCheckpoint.cjs";');
-    const declaration = fs.readFileSync(
-      path.join(cjsDirectory, "browserGatewayOwnerCheckpoint.d.cts"),
-      "utf8",
-    );
-    for (const dependency of dependencies) {
-      expect(declaration).toContain(`from "./${dependency}.cjs";`);
-    }
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayOwnerCheckpoint.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-owner-checkpoint",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-owner-event through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./browser-gateway-owner-event"]).toEqual({
-      browser: {
-        types: "./dist/browserGatewayOwnerEvent.d.ts",
-        default: "./dist/browserGatewayOwnerEvent.js",
-      },
-      import: {
-        types: "./dist/browserGatewayOwnerEvent.d.ts",
-        default: "./dist/browserGatewayOwnerEvent.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayOwnerEvent.d.cts",
-        default: "./dist/cjs/browserGatewayOwnerEvent.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayOwnerEvent.js";',
-    );
-
-    const dependencies = [
-      "browserGatewayBackgroundSummary",
-      "browserGatewayCapabilityStatus",
-      "browserGatewayDataPlaneIdentity",
-      "browserGatewayDataPlaneVersion",
-      "browserGatewayDiffPreview",
-      "browserGatewayForegroundControlState",
-      "browserGatewayInteractionSummary",
-      "browserGatewayOperationState",
-      "browserGatewayOwnerEventMetadata",
-      "browserGatewayQueueItem",
-      "browserGatewayRepositoryState",
-      "browserGatewaySessionCatalog",
-      "browserGatewayTheme",
-      "browserGatewayTodoItem",
-      "browserGatewayTranscriptMessage",
-      "browserGatewayTranscriptWindow",
-    ] as const;
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayOwnerEvent.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayOwnerEvent.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayOwnerEvent.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      for (const dependency of dependencies) {
-        expect(normalizedSource, `${buildScript}:${dependency}`).toMatch(
-          new RegExp(
-            `\\.replaceAll\\(\\s*'"\\.\\/${dependency}\\.js"'\\s*,\\s*'"\\.\\/${dependency}\\.cjs"'\\s*,?\\s*\\)`,
-          ),
-        );
-      }
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayOwnerEvent.cjs";');
-    const declaration = fs.readFileSync(
-      path.join(cjsDirectory, "browserGatewayOwnerEvent.d.cts"),
-      "utf8",
-    );
-    for (const dependency of dependencies) {
-      expect(declaration).toContain(`from "./${dependency}.cjs";`);
-    }
-    expect(
-      fs.existsSync(path.join(cjsDirectory, "browserGatewayOwnerEvent.cjs")),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-owner-event",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-owner-control through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-owner-control"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayOwnerControl.d.ts",
-        default: "./dist/browserGatewayOwnerControl.js",
-      },
-      import: {
-        types: "./dist/browserGatewayOwnerControl.d.ts",
-        default: "./dist/browserGatewayOwnerControl.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayOwnerControl.d.cts",
-        default: "./dist/cjs/browserGatewayOwnerControl.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayOwnerControl.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayOwnerControl.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayOwnerControl.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayOwnerControl.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      for (const dependency of [
-        "browserGatewayDataPlaneIdentity",
-        "browserGatewayDataPlaneVersion",
-        "browserGatewayOwnerControlMetadata",
-      ]) {
-        expect(normalizedSource, `${buildScript}:${dependency}`).toMatch(
-          new RegExp(
-            `\\.replaceAll\\(\\s*'"\\.\\/${dependency}\\.js"'\\s*,\\s*'"\\.\\/${dependency}\\.cjs"'\\s*,?\\s*\\)`,
-          ),
-        );
-      }
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayOwnerControl.cjs";');
-    const declaration = fs.readFileSync(
-      path.join(cjsDirectory, "browserGatewayOwnerControl.d.cts"),
-      "utf8",
-    );
-    for (const dependency of [
-      "browserGatewayDataPlaneIdentity",
-      "browserGatewayDataPlaneVersion",
-      "browserGatewayOwnerControlMetadata",
-    ]) {
-      expect(declaration).toContain(`from "./${dependency}.cjs";`);
-    }
-    expect(
-      fs.existsSync(path.join(cjsDirectory, "browserGatewayOwnerControl.cjs")),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-owner-control",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-owner-command-ack through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-owner-command-ack"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayOwnerCommandAck.d.ts",
-        default: "./dist/browserGatewayOwnerCommandAck.js",
-      },
-      import: {
-        types: "./dist/browserGatewayOwnerCommandAck.d.ts",
-        default: "./dist/browserGatewayOwnerCommandAck.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayOwnerCommandAck.d.cts",
-        default: "./dist/cjs/browserGatewayOwnerCommandAck.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayOwnerCommandAck.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayOwnerCommandAck.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayOwnerCommandAck.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayOwnerCommandAck.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      for (const dependency of [
-        "browserGatewayDataPlaneIdentity",
-        "browserGatewayDataPlaneVersion",
-        "browserGatewayOperationState",
-      ]) {
-        expect(normalizedSource, `${buildScript}:${dependency}`).toMatch(
-          new RegExp(
-            `\\.replaceAll\\(\\s*'"\\.\\/${dependency}\\.js"'\\s*,\\s*'"\\.\\/${dependency}\\.cjs"'\\s*,?\\s*\\)`,
-          ),
-        );
-      }
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayOwnerCommandAck.cjs";');
-    const declaration = fs.readFileSync(
-      path.join(cjsDirectory, "browserGatewayOwnerCommandAck.d.cts"),
-      "utf8",
-    );
-    for (const dependency of [
-      "browserGatewayDataPlaneIdentity",
-      "browserGatewayDataPlaneVersion",
-      "browserGatewayOperationState",
-    ]) {
-      expect(declaration).toContain(`from "./${dependency}.cjs";`);
-    }
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayOwnerCommandAck.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-owner-command-ack",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-owner-command through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-owner-command"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayOwnerCommand.d.ts",
-        default: "./dist/browserGatewayOwnerCommand.js",
-      },
-      import: {
-        types: "./dist/browserGatewayOwnerCommand.d.ts",
-        default: "./dist/browserGatewayOwnerCommand.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayOwnerCommand.d.cts",
-        default: "./dist/cjs/browserGatewayOwnerCommand.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayOwnerCommand.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayOwnerCommand.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayOwnerCommand.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayOwnerCommand.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      for (const dependency of [
-        "browserGatewayDataPlaneIdentity",
-        "browserGatewayDataPlaneVersion",
-        "browserGatewayOwnerCommandBody",
-        "browserGatewayOwnerCommandMetadata",
-      ]) {
-        expect(normalizedSource, `${buildScript}:${dependency}`).toMatch(
-          new RegExp(
-            `\\.replaceAll\\(\\s*'"\\.\\/${dependency}\\.js"'\\s*,\\s*'"\\.\\/${dependency}\\.cjs"'\\s*,?\\s*\\)`,
-          ),
-        );
-      }
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayOwnerCommand.cjs";');
-    const declaration = fs.readFileSync(
-      path.join(cjsDirectory, "browserGatewayOwnerCommand.d.cts"),
-      "utf8",
-    );
-    for (const dependency of [
-      "browserGatewayDataPlaneIdentity",
-      "browserGatewayDataPlaneVersion",
-      "browserGatewayOwnerCommandBody",
-      "browserGatewayOwnerCommandMetadata",
-    ]) {
-      expect(declaration).toContain(`from "./${dependency}.cjs";`);
-    }
-    expect(
-      fs.existsSync(path.join(cjsDirectory, "browserGatewayOwnerCommand.cjs")),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-owner-command",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-owner-command-body through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-owner-command-body"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayOwnerCommandBody.d.ts",
-        default: "./dist/browserGatewayOwnerCommandBody.js",
-      },
-      import: {
-        types: "./dist/browserGatewayOwnerCommandBody.d.ts",
-        default: "./dist/browserGatewayOwnerCommandBody.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayOwnerCommandBody.d.cts",
-        default: "./dist/cjs/browserGatewayOwnerCommandBody.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayOwnerCommandBody.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayOwnerCommandBody.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayOwnerCommandBody.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayOwnerCommandBody.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/browserGatewayOwnerCommandBody\.d\.ts", "utf8"\)\.then\(\s*(?:\(content\)|content) =>\s*writeFile\( "dist\/cjs\/browserGatewayOwnerCommandBody\.d\.cts", content\.replaceAll\(\s*'"\.\/browserGatewayDataPlaneIdentity\.js"'\s*,\s*'"\.\/browserGatewayDataPlaneIdentity\.cjs"'\s*,?\s*\), \), \)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayOwnerCommandBody.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayOwnerCommandBody.d.cts"),
-        "utf8",
-      ),
-    ).toContain(
-      'import type { BrowserGatewayDetailHandle } from "./browserGatewayDataPlaneIdentity.cjs";',
-    );
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayOwnerCommandBody.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-owner-command-body",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-foreground-control-state through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-foreground-control-state"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayForegroundControlState.d.ts",
-        default: "./dist/browserGatewayForegroundControlState.js",
-      },
-      import: {
-        types: "./dist/browserGatewayForegroundControlState.d.ts",
-        default: "./dist/browserGatewayForegroundControlState.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayForegroundControlState.d.cts",
-        default: "./dist/cjs/browserGatewayForegroundControlState.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayForegroundControlState.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayForegroundControlState.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayForegroundControlState.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayForegroundControlState.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      for (const dependency of [
-        "terminal",
-        "browserGatewayContextBudget",
-        "chatWorkspace",
-        "commandApprovalPolicy",
-        "contextHealth",
-        "modelCatalog",
-        "sessionHydration",
-      ]) {
-        expect(normalizedSource, `${buildScript}:${dependency}`).toMatch(
-          new RegExp(
-            `\\.replaceAll\\(\\s*'"\\.\\/${dependency}\\.js"'\\s*,\\s*'"\\.\\/${dependency}\\.cjs"'\\s*,?\\s*\\)`,
-          ),
-        );
-      }
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayForegroundControlState.cjs";');
-    const declaration = fs.readFileSync(
-      path.join(cjsDirectory, "browserGatewayForegroundControlState.d.cts"),
-      "utf8",
-    );
-    for (const dependency of [
-      "terminal",
-      "browserGatewayContextBudget",
-      "chatWorkspace",
-      "commandApprovalPolicy",
-      "contextHealth",
-      "modelCatalog",
-      "sessionHydration",
-    ]) {
-      expect(declaration).toContain(`from "./${dependency}.cjs";`);
-    }
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayForegroundControlState.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-foreground-control-state",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-session-catalog through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-session-catalog"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewaySessionCatalog.d.ts",
-        default: "./dist/browserGatewaySessionCatalog.js",
-      },
-      import: {
-        types: "./dist/browserGatewaySessionCatalog.d.ts",
-        default: "./dist/browserGatewaySessionCatalog.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewaySessionCatalog.d.cts",
-        default: "./dist/cjs/browserGatewaySessionCatalog.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewaySessionCatalog.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewaySessionCatalog.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewaySessionCatalog.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewaySessionCatalog.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/browserGatewaySessionCatalog\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewaySessionCatalog\.d\.cts", content\.replaceAll\(\s*'"\.\/browserGatewayChatWorkspaceSummary\.js"'\s*,\s*'"\.\/browserGatewayChatWorkspaceSummary\.cjs"'\s*,?\s*\), \), \)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewaySessionCatalog.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewaySessionCatalog.d.cts"),
-        "utf8",
-      ),
-    ).toContain(
-      'import type { BrowserGatewayChatWorkspaceSummary } from "./browserGatewayChatWorkspaceSummary.cjs";',
-    );
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewaySessionCatalog.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-session-catalog",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-chat-workspace-summary through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-chat-workspace-summary"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayChatWorkspaceSummary.d.ts",
-        default: "./dist/browserGatewayChatWorkspaceSummary.js",
-      },
-      import: {
-        types: "./dist/browserGatewayChatWorkspaceSummary.d.ts",
-        default: "./dist/browserGatewayChatWorkspaceSummary.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayChatWorkspaceSummary.d.cts",
-        default: "./dist/cjs/browserGatewayChatWorkspaceSummary.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayChatWorkspaceSummary.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayChatWorkspaceSummary.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayChatWorkspaceSummary.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayChatWorkspaceSummary.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\(\s*"dist\/browserGatewayChatWorkspaceSummary\.d\.ts",\s*"utf8",?\s*\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayChatWorkspaceSummary\.d\.cts", content\.replaceAll\(\s*'"\.\/chatWorkspace\.js"'\s*,\s*'"\.\/chatWorkspace\.cjs"'\s*,?\s*\), \), \)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayChatWorkspaceSummary.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayChatWorkspaceSummary.d.cts"),
-        "utf8",
-      ),
-    ).toContain(
-      'import type { ChatWorkspaceInteractiveExecutionPhase } from "./chatWorkspace.cjs";',
-    );
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayChatWorkspaceSummary.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-chat-workspace-summary",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-data-plane-version through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-data-plane-version"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayDataPlaneVersion.d.ts",
-        default: "./dist/browserGatewayDataPlaneVersion.js",
-      },
-      import: {
-        types: "./dist/browserGatewayDataPlaneVersion.d.ts",
-        default: "./dist/browserGatewayDataPlaneVersion.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayDataPlaneVersion.d.cts",
-        default: "./dist/cjs/browserGatewayDataPlaneVersion.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayDataPlaneVersion.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayDataPlaneVersion.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayDataPlaneVersion.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayDataPlaneVersion.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayDataPlaneVersion.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayDataPlaneVersion.d.cts"),
-        "utf8",
-      ),
-    ).toContain(
-      'export declare const BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION = "1";',
-    );
-    const versionModule = requireFromBoundaryTest(
-      "@agentlink/protocol/browser-gateway-data-plane-version",
-    ) as { BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION?: string };
-    expect(versionModule.BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION).toBe("1");
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-  });
-
-  it("wires browser-gateway-data-plane-identity through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-data-plane-identity"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayDataPlaneIdentity.d.ts",
-        default: "./dist/browserGatewayDataPlaneIdentity.js",
-      },
-      import: {
-        types: "./dist/browserGatewayDataPlaneIdentity.d.ts",
-        default: "./dist/browserGatewayDataPlaneIdentity.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayDataPlaneIdentity.d.cts",
-        default: "./dist/cjs/browserGatewayDataPlaneIdentity.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayDataPlaneIdentity.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayDataPlaneIdentity.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayDataPlaneIdentity.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayDataPlaneIdentity.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayDataPlaneIdentity.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayDataPlaneIdentity.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export interface BrowserGatewayDetailHandle");
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayDataPlaneIdentity.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    const identityModule = requireFromBoundaryTest(
-      "@agentlink/protocol/browser-gateway-data-plane-identity",
-    ) as { BROWSER_GATEWAY_DETAIL_HANDLE_KINDS?: readonly string[] };
-    expect(identityModule.BROWSER_GATEWAY_DETAIL_HANDLE_KINDS).toEqual([
-      "message",
-      "tool",
-      "diff",
-      "media",
-      "interaction",
-      "session",
-    ]);
-    expect(
-      Object.isFrozen(identityModule.BROWSER_GATEWAY_DETAIL_HANDLE_KINDS),
-    ).toBe(true);
-    expect(() =>
-      (
-        identityModule.BROWSER_GATEWAY_DETAIL_HANDLE_KINDS as unknown as string[]
-      ).push("other"),
-    ).toThrow(TypeError);
-  });
+  }
 
   it("keeps every generated CJS declaration free of relative ESM specifiers", () => {
     const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
@@ -4171,705 +2830,6 @@ describe("protocol package boundary", () => {
     expect(staleSpecifiers).toEqual([]);
   });
 
-  it("wires browser-gateway-instance-status through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-instance-status"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayInstanceStatus.d.ts",
-        default: "./dist/browserGatewayInstanceStatus.js",
-      },
-      import: {
-        types: "./dist/browserGatewayInstanceStatus.d.ts",
-        default: "./dist/browserGatewayInstanceStatus.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayInstanceStatus.d.cts",
-        default: "./dist/cjs/browserGatewayInstanceStatus.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayInstanceStatus.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayInstanceStatus.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayInstanceStatus.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayInstanceStatus.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayInstanceStatus.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayInstanceStatus.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export interface BrowserGatewayInstanceStatusSummary");
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayInstanceStatus.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-instance-status",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-model-provider-identity through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-model-provider-identity"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayModelProviderIdentity.d.ts",
-        default: "./dist/browserGatewayModelProviderIdentity.js",
-      },
-      import: {
-        types: "./dist/browserGatewayModelProviderIdentity.d.ts",
-        default: "./dist/browserGatewayModelProviderIdentity.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayModelProviderIdentity.d.cts",
-        default: "./dist/cjs/browserGatewayModelProviderIdentity.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayModelProviderIdentity.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayModelProviderIdentity.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayModelProviderIdentity.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayModelProviderIdentity.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayModelProviderIdentity.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayModelProviderIdentity.d.cts"),
-        "utf8",
-      ),
-    ).toContain(
-      "export declare function normalizeBrowserGatewayModelCredentialProviderId",
-    );
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayModelProviderIdentity.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-model-provider-identity",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-data-plane-limits through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-data-plane-limits"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayDataPlaneLimits.d.ts",
-        default: "./dist/browserGatewayDataPlaneLimits.js",
-      },
-      import: {
-        types: "./dist/browserGatewayDataPlaneLimits.d.ts",
-        default: "./dist/browserGatewayDataPlaneLimits.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayDataPlaneLimits.d.cts",
-        default: "./dist/cjs/browserGatewayDataPlaneLimits.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayDataPlaneLimits.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayDataPlaneLimits.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayDataPlaneLimits.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayDataPlaneLimits.cjs";\\n',
-      );
-      const normalizedSource = source.replace(/\s+/g, " ");
-      expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/browserGatewayDataPlaneLimits\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayDataPlaneLimits\.d\.cts", content \.replaceAll\(\s*'"\.\/browserGatewayDataPlaneIdentity\.js"'\s*,\s*'"\.\/browserGatewayDataPlaneIdentity\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayOwnerCommandMetadata\.js"'\s*,\s*'"\.\/browserGatewayOwnerCommandMetadata\.cjs"'\s*,?\s*\), \), \)/,
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayDataPlaneLimits.cjs";');
-    const limitsDeclaration = fs.readFileSync(
-      path.join(cjsDirectory, "browserGatewayDataPlaneLimits.d.cts"),
-      "utf8",
-    );
-    expect(limitsDeclaration).toContain(
-      'from "./browserGatewayDataPlaneIdentity.cjs";',
-    );
-    expect(limitsDeclaration).toContain(
-      "export type BrowserGatewayDataPlaneLimitName",
-    );
-    expect(
-      fs.existsSync(
-        path.join(cjsDirectory, "browserGatewayDataPlaneLimits.cjs"),
-      ),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-data-plane-limits",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires browser-gateway-data-plane-mode through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(
-      packageManifest.exports?.["./browser-gateway-data-plane-mode"],
-    ).toEqual({
-      browser: {
-        types: "./dist/browserGatewayDataPlaneMode.d.ts",
-        default: "./dist/browserGatewayDataPlaneMode.js",
-      },
-      import: {
-        types: "./dist/browserGatewayDataPlaneMode.d.ts",
-        default: "./dist/browserGatewayDataPlaneMode.js",
-      },
-      require: {
-        types: "./dist/cjs/browserGatewayDataPlaneMode.d.cts",
-        default: "./dist/cjs/browserGatewayDataPlaneMode.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./browserGatewayDataPlaneMode.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/browserGatewayDataPlaneMode.ts"',
-      );
-      expect(source, buildScript).toContain(
-        '"dist/cjs/browserGatewayDataPlaneMode.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./browserGatewayDataPlaneMode.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./browserGatewayDataPlaneMode.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "browserGatewayDataPlaneMode.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export type BrowserGatewayDataPlaneMode");
-    expect(
-      fs.existsSync(path.join(cjsDirectory, "browserGatewayDataPlaneMode.cjs")),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest(
-        "@agentlink/protocol/browser-gateway-data-plane-mode",
-      ),
-    ).not.toThrow();
-  });
-
-  it("wires surface-model-message through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./surface-model-message"]).toEqual({
-      browser: {
-        types: "./dist/surfaceModelMessage.d.ts",
-        default: "./dist/surfaceModelMessage.js",
-      },
-      import: {
-        types: "./dist/surfaceModelMessage.d.ts",
-        default: "./dist/surfaceModelMessage.js",
-      },
-      require: {
-        types: "./dist/cjs/surfaceModelMessage.d.cts",
-        default: "./dist/cjs/surfaceModelMessage.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./surfaceModelMessage.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/surfaceModelMessage.ts"');
-      expect(source, buildScript).toContain(
-        '"dist/cjs/surfaceModelMessage.d.cts"',
-      );
-      expect(source, buildScript).toContain(
-        'export * from "./surfaceModelMessage.cjs";\\n',
-      );
-    }
-
-    const cjsDirectory = path.join(ROOT, "packages", "protocol", "dist", "cjs");
-    expect(
-      fs.readFileSync(path.join(cjsDirectory, "index.d.cts"), "utf8"),
-    ).toContain('export * from "./surfaceModelMessage.cjs";');
-    expect(
-      fs.readFileSync(
-        path.join(cjsDirectory, "surfaceModelMessage.d.cts"),
-        "utf8",
-      ),
-    ).toContain("export interface CoreSurfaceModelMessage");
-    expect(
-      fs.existsSync(path.join(cjsDirectory, "surfaceModelMessage.cjs")),
-    ).toBe(true);
-    expect(() => requireFromBoundaryTest("@agentlink/protocol")).not.toThrow();
-    expect(() =>
-      requireFromBoundaryTest("@agentlink/protocol/surface-model-message"),
-    ).not.toThrow();
-  });
-
-  it("wires terminal-security through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./terminal-security"]).toEqual({
-      browser: {
-        types: "./dist/terminalSecurity.d.ts",
-        default: "./dist/terminalSecurity.js",
-      },
-      import: {
-        types: "./dist/terminalSecurity.d.ts",
-        default: "./dist/terminalSecurity.js",
-      },
-      require: {
-        types: "./dist/cjs/terminalSecurity.d.cts",
-        default: "./dist/cjs/terminalSecurity.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./terminalSecurity.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/terminalSecurity.ts"');
-      expect(source, buildScript).toContain(
-        '"dist/cjs/terminalSecurity.d.cts"',
-      );
-      expect(source, buildScript).toContain('"./terminalSecurity.cjs"');
-    }
-  });
-
-  it("wires terminal-surface through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./terminal-surface"]).toEqual({
-      browser: {
-        types: "./dist/terminalSurface.d.ts",
-        default: "./dist/terminalSurface.js",
-      },
-      import: {
-        types: "./dist/terminalSurface.d.ts",
-        default: "./dist/terminalSurface.js",
-      },
-      require: {
-        types: "./dist/cjs/terminalSurface.d.cts",
-        default: "./dist/cjs/terminalSurface.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./terminalSurface.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/terminalSurface.ts"');
-      expect(source, buildScript).toContain('"dist/cjs/terminalSurface.d.cts"');
-      expect(source, buildScript).toContain('"./terminalSurface.cjs"');
-    }
-  });
-
-  it("wires diff-snapshot through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./diff-snapshot"]).toEqual({
-      browser: {
-        types: "./dist/diffSnapshot.d.ts",
-        default: "./dist/diffSnapshot.js",
-      },
-      import: {
-        types: "./dist/diffSnapshot.d.ts",
-        default: "./dist/diffSnapshot.js",
-      },
-      require: {
-        types: "./dist/cjs/diffSnapshot.d.cts",
-        default: "./dist/cjs/diffSnapshot.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./diffSnapshot.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/diffSnapshot.ts"');
-      expect(source, buildScript).toContain('"dist/cjs/diffSnapshot.d.cts"');
-      expect(source, buildScript).toContain('"./diffSnapshot.cjs"');
-    }
-  });
-
-  it("wires embedded-agent transport through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./embedded-agent-presentation"]).toEqual({
-      browser: {
-        types: "./dist/embeddedAgentPresentation.d.ts",
-        default: "./dist/embeddedAgentPresentation.js",
-      },
-      import: {
-        types: "./dist/embeddedAgentPresentation.d.ts",
-        default: "./dist/embeddedAgentPresentation.js",
-      },
-      require: {
-        types: "./dist/cjs/embeddedAgentPresentation.d.cts",
-        default: "./dist/cjs/embeddedAgentPresentation.cjs",
-      },
-    });
-    expect(packageManifest.exports?.["./embedded-agent-transport"]).toEqual({
-      browser: {
-        types: "./dist/embeddedAgentTransport.d.ts",
-        default: "./dist/embeddedAgentTransport.js",
-      },
-      import: {
-        types: "./dist/embeddedAgentTransport.d.ts",
-        default: "./dist/embeddedAgentTransport.js",
-      },
-      require: {
-        types: "./dist/cjs/embeddedAgentTransport.d.cts",
-        default: "./dist/cjs/embeddedAgentTransport.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain(
-      'export * from "./embeddedAgentPresentation.js";',
-    );
-    expect(indexSource).toContain(
-      'export * from "./embeddedAgentTransport.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain(
-        '"src/embeddedAgentPresentation.ts"',
-      );
-      expect(source, buildScript).toContain('"src/embeddedAgentTransport.ts"');
-      expect(source, buildScript).toContain(
-        '"dist/cjs/embeddedAgentTransport.d.cts"',
-      );
-      expect(source, buildScript).toContain('"./embeddedAgentTransport.cjs"');
-    }
-  });
-
-  it("wires chat-pane-transport through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./chat-pane-transport"]).toEqual({
-      browser: {
-        types: "./dist/chatPaneTransport.d.ts",
-        default: "./dist/chatPaneTransport.js",
-      },
-      import: {
-        types: "./dist/chatPaneTransport.d.ts",
-        default: "./dist/chatPaneTransport.js",
-      },
-      require: {
-        types: "./dist/cjs/chatPaneTransport.d.cts",
-        default: "./dist/cjs/chatPaneTransport.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./chatPaneTransport.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/chatPaneTransport.ts"');
-      expect(source, buildScript).toContain(
-        '"dist/cjs/chatPaneTransport.d.cts"',
-      );
-      expect(source, buildScript).toContain('"./chatPaneTransport.cjs"');
-    }
-  });
-
-  it("wires find-replace-preview through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports?.["./find-replace-preview"]).toEqual({
-      browser: {
-        types: "./dist/findReplacePreview.d.ts",
-        default: "./dist/findReplacePreview.js",
-      },
-      import: {
-        types: "./dist/findReplacePreview.d.ts",
-        default: "./dist/findReplacePreview.js",
-      },
-      require: {
-        types: "./dist/cjs/findReplacePreview.d.cts",
-        default: "./dist/cjs/findReplacePreview.cjs",
-      },
-    });
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain("`findReplacePreview` is subpath-only");
-    expect(indexSource).not.toContain(
-      'export * from "./findReplacePreview.js";',
-    );
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/findReplacePreview.ts"');
-      expect(source, buildScript).toContain(
-        '"dist/cjs/findReplacePreview.d.cts"',
-      );
-    }
-  });
-
-  it("wires chat-state through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports).toHaveProperty("./chat-state");
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./chatState.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/chatState.ts"');
-      expect(source, buildScript).toContain('"dist/cjs/chatState.d.cts"');
-      expect(source, buildScript).toContain('"./chatState.cjs"');
-    }
-  });
-
-  it("wires chat-session-history through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports).toHaveProperty("./chat-session-history");
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./chatSessionHistory.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/chatSessionHistory.ts"');
-      expect(source, buildScript).toContain(
-        '"dist/cjs/chatSessionHistory.d.cts"',
-      );
-      expect(source, buildScript).toContain('"./chatSessionHistory.cjs"');
-    }
-  });
-
-  it("wires chat-transcript through every public package build surface", () => {
-    const packageManifest = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", "package.json"),
-        "utf8",
-      ),
-    ) as { exports?: Record<string, unknown> };
-    expect(packageManifest.exports).toHaveProperty("./chat-transcript");
-
-    const indexSource = fs.readFileSync(
-      path.join(PROTOCOL_SOURCE, "index.ts"),
-      "utf8",
-    );
-    expect(indexSource).toContain('export * from "./chatTranscript.js";');
-
-    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
-      const source = fs.readFileSync(
-        path.join(ROOT, "packages", "protocol", buildScript),
-        "utf8",
-      );
-      expect(source, buildScript).toContain('"src/chatTranscript.ts"');
-      expect(source, buildScript).toContain('"dist/cjs/chatTranscript.d.cts"');
-      expect(source, buildScript).toContain('"./chatTranscript.cjs"');
-    }
-  });
-
   it("keeps autonomous-memory subpath-only to avoid the root MemoryScope collision", () => {
     const source = fs.readFileSync(
       path.join(PROTOCOL_SOURCE, "index.ts"),
@@ -4886,7 +2846,7 @@ describe("protocol package boundary", () => {
     for (const packageDirectory of listPackageDirectories()) {
       const sourceDirectory = path.join(packageDirectory, "src");
       for (const filePath of walkTypeScriptFiles(sourceDirectory)) {
-        const source = fs.readFileSync(filePath, "utf8");
+        const source = readSourceText(filePath);
         if (/from\s+["'][^"']*(?:\/|^)src\//.test(source)) {
           violations.push(path.relative(ROOT, filePath));
         }
@@ -4948,7 +2908,7 @@ describe("protocol package boundary", () => {
     for (const filePath of walkTypeScriptFiles(path.join(ROOT, "src"))) {
       const relativePath = path.relative(ROOT, filePath);
       if (relativePath === "src/core/workspaceProjects.ts") continue;
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       const importsExtractedType = [...source.matchAll(importPattern)].some(
         (match) => {
           const specifier = match[2] ?? "";
@@ -5026,7 +2986,7 @@ describe("protocol package boundary", () => {
     for (const filePath of walkTypeScriptFiles(path.join(ROOT, "src"))) {
       const relativePath = path.relative(ROOT, filePath);
       if (relativePath === "src/agent/ChatTabController.ts") continue;
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       const isControllerCompatibilitySpecifier = (specifier: string): boolean =>
         /(?:^|\/)agent\/ChatTabController(?:\.js)?$/.test(specifier) ||
         (path.dirname(relativePath) === "src/agent" &&
@@ -5142,7 +3102,7 @@ describe("protocol package boundary", () => {
       ) {
         continue;
       }
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       const isCompatibilitySpecifier = (specifier: string): boolean =>
         /(?:^|\/)(?:core\/memory\/contracts|core\/capabilities\/memory)(?:\.js)?$/.test(
           specifier,
@@ -5197,7 +3157,7 @@ describe("protocol package boundary", () => {
     for (const filePath of walkTypeScriptFiles(path.join(ROOT, "src"))) {
       const relativePath = path.relative(ROOT, filePath);
       if (relativePath === "src/agent/webview/types.ts") continue;
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       const isCompatibilitySpecifier = (specifier: string): boolean => {
         if (!specifier.startsWith(".")) {
           return /(?:^|\/)agent\/webview\/types(?:\.js)?$/.test(specifier);
@@ -5256,7 +3216,7 @@ describe("protocol package boundary", () => {
     for (const filePath of walkTypeScriptFiles(path.join(ROOT, "src"))) {
       if (filePath === compatibilityPath) continue;
       const relativePath = path.relative(ROOT, filePath);
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       const isCompatibilitySpecifier = (specifier: string): boolean =>
         /(?:^|\/)agent\/sessionHandoff(?:\.js)?$/.test(specifier) ||
         (path.dirname(relativePath) === "src/agent" &&
@@ -5328,7 +3288,7 @@ describe("protocol package boundary", () => {
     for (const filePath of walkTypeScriptFiles(path.join(ROOT, "src"))) {
       if (filePath === compatibilityPath) continue;
       const relativePath = path.relative(ROOT, filePath);
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       const isCompatibilitySpecifier = (specifier: string): boolean =>
         /(?:^|\/)browser-gateway\/DiffSnapshotHub(?:\.js)?$/.test(specifier) ||
         (path.dirname(relativePath) === "src/browser-gateway" &&
@@ -5437,7 +3397,7 @@ describe("protocol package boundary", () => {
         continue;
       }
       const relativePath = path.relative(ROOT, filePath);
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       const imports = [...source.matchAll(importPattern)];
       const importsProtocolType = imports.some((match) => {
         const importedNames = match[1] ?? "";
@@ -5500,7 +3460,7 @@ describe("protocol package boundary", () => {
     const importPattern = /from\s+["']([^"']+)["']/g;
     for (const filePath of walkTypeScriptFiles(path.join(ROOT, "src"))) {
       if (filePath === compatibilityPath) continue;
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       const importsCompatibilityPath = [...source.matchAll(importPattern)].some(
         (match) => {
           const specifier = match[1] ?? "";
@@ -5519,2468 +3479,16 @@ describe("protocol package boundary", () => {
     expect(importers).toEqual([]);
   });
 
-  it("keeps approval-transport compatibility package-owned and unused", () => {
-    const compatibilityPath = path.join(ROOT, "src/approvals/webview/types.ts");
-    expect(fs.readFileSync(compatibilityPath, "utf8")).toBe(
-      [
-        "export type {",
-        "  ApprovalKind,",
-        "  ApprovalProjectContext,",
-        "  ApprovalRequest,",
-        "  CommandRecoveryAttempt,",
-        "  CommandReviewSummary,",
-        "  CommandTierLevel,",
-        "  DecisionMessage,",
-        "  ExtensionMessage,",
-        "  InlineCommandFilePreview,",
-        "  MemoryOperation,",
-        "  MemoryScope,",
-        "  MemoryTier,",
-        "  NetworkReviewSummary,",
-        "  RuleEntry,",
-        "  SubCommandEntry,",
-        "  SuggestRegexMessage,",
-        '} from "@agentlink/protocol/approval-transport";',
-        "",
-      ].join("\n"),
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    expect(
-      findCompatibilityImporters({ compatibilityPath, sourceFiles }),
-    ).toEqual([]);
-  });
-
-  it("keeps web-access-policy compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(ROOT, "src/core/webAccess.ts");
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const packageSource = fs.readFileSync(
-      path.join(ROOT, "packages/core/src/webAccess.ts"),
-      "utf8",
-    );
-    expect(compatibilitySource).toBe(
-      'export * from "@agentlink/core/web-access";\n',
-    );
-    const extractedNames = [
-      "CoreHostedToolDefinition",
-      "CoreHostedWebCapabilities",
-      "CoreHostedWebFetchDefinition",
-      "CoreHostedWebSearchDefinition",
-      "CoreHostedWebToolCapability",
-      "CoreResolveWebAccessPolicyInput",
-      "CoreResolvedWebAccessPolicy",
-      "CoreResolvedWebAccessRoute",
-      "CoreWebAccessResolutionReason",
-      "CoreWebAccessSelection",
-      "CoreWebAccessSettings",
-      "CoreWebAccessSettingsInput",
-      "CoreWebSearchMode",
-    ] as const;
-
-    expect(packageSource).toContain(
-      [
-        "export type {",
-        ...extractedNames.map((name) => `  ${name},`),
-        '} from "@agentlink/protocol/web-access-policy";',
-      ].join("\n"),
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
+  // One test per title in COMPATIBILITY_FACADES. Rows that share a title are
+  // facades the same test has always covered together.
+  for (const [title, facades] of groupRowsByTitle(
+    COMPATIBILITY_FACADES,
+    (facade) => facade.title,
+  )) {
+    it(title, () => {
+      for (const facade of facades) checkCompatibilityFacade(facade);
     });
-    const dirtyImporterBaseline = new Set([
-      "src/agent/AgentSessionManager.ts",
-      "src/agent/ChatViewProvider.ts",
-      "src/browser-gateway/helper/browserGatewayHelper.ts",
-    ]);
-    expect(
-      importers.every((importer) => dirtyImporterBaseline.has(importer)),
-    ).toBe(true);
-    expect(importers.length).toBeLessThanOrEqual(dirtyImporterBaseline.size);
-  });
-
-  it("keeps web-activity compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(ROOT, "src/core/webAccess.ts");
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const packageSource = fs.readFileSync(
-      path.join(ROOT, "packages/core/src/webAccess.ts"),
-      "utf8",
-    );
-    expect(compatibilitySource).toBe(
-      'export * from "@agentlink/core/web-access";\n',
-    );
-    const extractedNames = [
-      "CoreWebAccessBackend",
-      "CoreWebActivity",
-      "CoreWebActivityStatus",
-      "CoreWebCitation",
-      "CoreWebToolKind",
-    ] as const;
-
-    expect(packageSource).toContain(
-      '} from "@agentlink/protocol/web-activity";',
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const dirtyImporterBaseline = new Set([
-      "src/agent/toolAdapter.ts",
-      "src/browser-gateway/helper/browserGatewayHelper.ts",
-      "src/core/tools/types.ts",
-      "src/shared/chatProjection.ts",
-    ]);
-    expect(
-      importers.every((importer) => dirtyImporterBaseline.has(importer)),
-    ).toBe(true);
-    expect(importers.length).toBeLessThanOrEqual(dirtyImporterBaseline.size);
-  });
-
-  it("keeps provider-replay compatibility package-owned and unused", () => {
-    const compatibilityPath = path.join(ROOT, "src/core/webAccess.ts");
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const packageSource = fs.readFileSync(
-      path.join(ROOT, "packages/core/src/webAccess.ts"),
-      "utf8",
-    );
-    expect(compatibilitySource).toBe(
-      'export * from "@agentlink/core/web-access";\n',
-    );
-    const extractedNames = [
-      "CoreJsonValue",
-      "CoreProviderReplayEnvelope",
-    ] as const;
-
-    expect(packageSource).toContain(
-      [
-        "export type {",
-        ...extractedNames.map((name) => `  ${name},`),
-        '} from "@agentlink/protocol/provider-replay";',
-      ].join("\n"),
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    expect(
-      findCompatibilityImporters({
-        compatibilityPath,
-        sourceFiles,
-        extractedNames,
-      }),
-    ).toEqual([]);
-  });
-
-  it("keeps retrieval-deletion compatibility package-owned and unused", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/core/retrieval/contracts.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "RetrievalDeleteScopeOutcome",
-      "RetrievalDeleteScopeRequest",
-      "RetrievalDeleteSourceOutcome",
-      "RetrievalDeleteSourceRequest",
-    ] as const;
-
-    expect(compatibilitySource).toContain(
-      '} from "@agentlink/protocol/retrieval-deletion";',
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    expect(
-      findCompatibilityImporters({
-        compatibilityPath,
-        sourceFiles,
-        extractedNames,
-      }),
-    ).toEqual([]);
-  });
-
-  it("keeps retrieval-fingerprint compatibility package-owned and unused", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/core/retrieval/contracts.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "RetrievalEmbeddingFingerprint",
-      "RetrievalFingerprint",
-      "RetrievalFingerprintDisposition",
-    ] as const;
-
-    expect(compatibilitySource).toContain(
-      '} from "@agentlink/protocol/retrieval-fingerprint";',
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    expect(
-      findCompatibilityImporters({
-        compatibilityPath,
-        sourceFiles,
-        extractedNames,
-      }),
-    ).toEqual([]);
-  });
-
-  it("keeps retrieval-publication compatibility package-owned and unused", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/core/retrieval/contracts.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "RetrievalAbortPublicationOutcome",
-      "RetrievalPublicationBatchOutcome",
-      "RetrievalPublicationOutcome",
-      "RetrievalPublicationPreparation",
-      "RetrievalPublicationRequest",
-      "RetrievalStagedChunkBatch",
-      "RetrievalStagedPublicationBundle",
-      "RetrievalStagedPublicationInspection",
-      "RetrievalStagedPublicationManifest",
-      "RetrievalStagedRelationBatch",
-    ] as const;
-
-    expect(compatibilitySource).toContain(
-      '} from "@agentlink/protocol/retrieval-publication";',
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    expect(
-      findCompatibilityImporters({
-        compatibilityPath,
-        sourceFiles,
-        extractedNames,
-      }),
-    ).toEqual([]);
-  });
-
-  it("keeps retrieval-query compatibility package-owned and unused", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/core/retrieval/contracts.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "RetrievalCandidateScores",
-      "RetrievalDiversityPolicy",
-      "RetrievalQuery",
-      "RetrievalQueryCandidate",
-      "RetrievalQueryFilter",
-      "RetrievalQueryFreshnessSummary",
-      "RetrievalQueryResult",
-      "RetrievalRankingInput",
-      "RetrievalSourceFreshness",
-      "RetrievalStaleSource",
-    ] as const;
-
-    expect(compatibilitySource).toContain(
-      '} from "@agentlink/protocol/retrieval-query";',
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    expect(
-      findCompatibilityImporters({
-        compatibilityPath,
-        sourceFiles,
-        extractedNames,
-      }),
-    ).toEqual([]);
-  });
-
-  it("keeps retrieval-records compatibility package-owned and unused", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/core/retrieval/contracts.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "RetrievalChunkLocation",
-      "RetrievalChunkRecord",
-      "RetrievalNamespace",
-      "RetrievalRelationRecord",
-      "RetrievalSourceDocument",
-      "RetrievalSourceKind",
-      "RetrievalSourceRevision",
-    ] as const;
-
-    expect(compatibilitySource).toContain(
-      '} from "@agentlink/protocol/retrieval-records";',
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    expect(
-      findCompatibilityImporters({
-        compatibilityPath,
-        sourceFiles,
-        extractedNames,
-      }),
-    ).toEqual([]);
-  });
-
-  it("keeps retrieval-maintenance compatibility package-owned and unused", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/core/retrieval/contracts.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "RetrievalAggregateMetrics",
-      "RetrievalMigrationOutcome",
-      "RetrievalOptimizeOutcome",
-      "RetrievalRepairOutcome",
-      "RetrievalSnapshot",
-      "RetrievalSnapshotOutcome",
-    ] as const;
-
-    expect(compatibilitySource).toContain(
-      '} from "@agentlink/protocol/retrieval-maintenance";',
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    expect(
-      findCompatibilityImporters({
-        compatibilityPath,
-        sourceFiles,
-        extractedNames,
-      }),
-    ).toEqual([]);
-  });
-
-  it("keeps retrieval-structural-snapshot compatibility package-owned and unused", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/core/retrieval/contracts.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "RetrievalActiveSource",
-      "RetrievalStructuralSnapshot",
-      "RetrievalStructuralSnapshotRequest",
-    ] as const;
-
-    expect(compatibilitySource).toContain(
-      '} from "@agentlink/protocol/retrieval-structural-snapshot";',
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    expect(
-      findCompatibilityImporters({
-        compatibilityPath,
-        sourceFiles,
-        extractedNames,
-      }),
-    ).toEqual([]);
-  });
-
-  it("keeps retrieval-health compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/core/retrieval/contracts.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "RetrievalHealthReason",
-      "RetrievalHealthSnapshot",
-      "RetrievalLexicalReadiness",
-    ] as const;
-
-    expect(compatibilitySource).toContain(
-      '} from "@agentlink/protocol/retrieval-health";',
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const dirtyImporterBaseline = new Set(["src/agent/ChatViewProvider.ts"]);
-    expect(
-      importers.every((importer) => dirtyImporterBaseline.has(importer)),
-    ).toBe(true);
-    expect(importers.length).toBeLessThanOrEqual(dirtyImporterBaseline.size);
-  });
-
-  it("keeps sidebar-transport compatibility package-owned and unused", () => {
-    const compatibilityPath = path.join(ROOT, "src/sidebar/webview/types.ts");
-    expect(fs.readFileSync(compatibilityPath, "utf8")).toBe(
-      [
-        "export type {",
-        "  CommandRule,",
-        "  ExtensionMessage,",
-        "  FeedbackEntry,",
-        "  FeedbackPriority,",
-        "  IndexStatusInfo,",
-        "  PathRule,",
-        "  PostCommand,",
-        "  RuleEditCommand,",
-        "  RuleRemoveCommand,",
-        "  SessionInfo,",
-        "  SidebarState,",
-        "  TrackedCallInfo,",
-        "  WebviewCommand,",
-        "  WriteApprovalMode,",
-        '} from "@agentlink/protocol/sidebar-transport";',
-        "",
-      ].join("\n"),
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    expect(
-      findCompatibilityImporters({ compatibilityPath, sourceFiles }),
-    ).toEqual([]);
-  });
-
-  it("keeps browser Ask Agent identity compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/browserGatewayAskAgentIdentity.ts",
-    );
-    expect(fs.readFileSync(compatibilityPath, "utf8")).toBe(
-      'export * from "@agentlink/protocol/browser-gateway-ask-agent-identity";\n',
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/browserGatewayAskAgentSessionStore.ts",
-      "src/browser-gateway/helper/browserGatewayHelper.ts",
-      "src/browser-gateway/webview/BrowserGatewayApp.test.ts",
-      "src/browser-gateway/webview/BrowserGatewayApp.tsx",
-      "src/browser-gateway/webview/relay/relayClientSelection.test.ts",
-      "src/browser-gateway/webview/relay/useRelayGatewayConnection.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway core-owner registration compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/coreOwnerRegistry.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "BrowserGatewayCoreOwnerHeartbeat",
-      "BrowserGatewayCoreOwnerRegistration",
-      "BrowserGatewayCoreOwnerRegistrationResolution",
-      "BrowserGatewayCoreOwnerRegistrationResult",
-      "BrowserGatewayCoreOwnerStatus",
-    ] as const;
-    expect(compatibilitySource).toContain(
-      '} from "@agentlink/protocol/browser-gateway-core-owner-registration";',
-    );
-    expect(compatibilitySource).toContain(
-      "export class BrowserGatewayCoreOwnerRegistry",
-    );
-    expect(compatibilitySource).toContain(
-      "export interface BrowserGatewayCoreOwnerRegistryOptions",
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/OwnerTransport.ts",
-      "src/browser-gateway/protocol.ts",
-      "src/browser-gateway/testing/GatewayGenerationFaultHarness.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway helper lifecycle compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "BROWSER_GATEWAY_DATA_PLANE_FEATURES",
-      "BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION",
-      "BrowserGatewayDataPlaneFeature",
-      "BrowserGatewayHelperDiscoveryRecord",
-      "BrowserGatewayHelperHealthResponse",
-    ] as const;
-    expect(compatibilitySource).toContain(
-      [
-        "export {",
-        "  BROWSER_GATEWAY_DATA_PLANE_FEATURES,",
-        "  BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,",
-        '} from "@agentlink/protocol/browser-gateway-helper-lifecycle";',
-      ].join("\n"),
-    );
-    expect(compatibilitySource).toContain(
-      [
-        "export type {",
-        "  BrowserGatewayDataPlaneFeature,",
-        "  BrowserGatewayHelperDiscoveryRecord,",
-        "  BrowserGatewayHelperHealthResponse,",
-        '} from "@agentlink/protocol/browser-gateway-helper-lifecycle";',
-      ].join("\n"),
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type|const)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/browserGatewayCommands.test.ts",
-      "src/browser-gateway/browserGatewayCommands.ts",
-      "src/browser-gateway/browserGatewayHelperDiscovery.test.ts",
-      "src/browser-gateway/browserGatewayHelperDiscovery.ts",
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/dataPlane/OwnerTransport.ts",
-      "src/browser-gateway/helper/bootstrapHelper.test.ts",
-      "src/browser-gateway/helper/bootstrapHelper.ts",
-      "src/browser-gateway/helper/browserGatewayGenerationFaults.test.ts",
-      "src/browser-gateway/helper/browserGatewayHelper.lifecycle.integration.test.ts",
-      "src/browser-gateway/helper/browserGatewayHelper.ts",
-      "src/extension.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway capability-status compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayCapabilityStatus"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayCapabilityStatus } from "@agentlink/protocol/browser-gateway-capability-status";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+interface\s+BrowserGatewayCapabilityStatus\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway relay theme-state compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "BrowserGatewayThemeState",
-      "BrowserGatewayThemeVariable",
-    ] as const;
-    expect(compatibilitySource).toContain(
-      [
-        "export type {",
-        "  BrowserGatewayThemeState,",
-        "  BrowserGatewayThemeVariable,",
-        '} from "@agentlink/protocol/browser-gateway-theme";',
-      ].join("\n"),
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(`export\\s+interface\\s+${extractedName}\\b`),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/testing/stateEquivalenceOracle.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway background-summary compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayBackgroundSummary"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayBackgroundSummary } from "@agentlink/protocol/browser-gateway-background-summary";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+interface\s+BrowserGatewayBackgroundSummary\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/webview/relay/relaySnapshotProjection.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway transcript-window compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayTranscriptWindow"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayTranscriptWindow } from "@agentlink/protocol/browser-gateway-transcript-window";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+interface\s+BrowserGatewayTranscriptWindow\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/testing/stateEquivalenceOracle.ts",
-      "src/browser-gateway/webview/relay/RelayOwnerStore.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway transcript-message compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayTranscriptMessage"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayTranscriptMessage } from "@agentlink/protocol/browser-gateway-transcript-message";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+interface\s+BrowserGatewayTranscriptMessage\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/OwnerTransport.ts",
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/testing/phase3LiveParityGate.ts",
-      "src/browser-gateway/testing/phase3ReliabilityGate.ts",
-      "src/browser-gateway/testing/stateEquivalenceOracle.ts",
-      "src/browser-gateway/webview/relay/RelayOwnerStore.ts",
-      "src/browser-gateway/webview/relay/relaySnapshotProjection.test.ts",
-      "src/browser-gateway/webview/relay/relaySnapshotProjection.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway transcript-block compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayTranscriptBlock"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayTranscriptBlock } from "@agentlink/protocol/browser-gateway-transcript-block";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+type\s+BrowserGatewayTranscriptBlock\b\s*=/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway transcript-text compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayTranscriptText"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayTranscriptText } from "@agentlink/protocol/browser-gateway-transcript-text";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+type\s+BrowserGatewayTranscriptText\b\s*=/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/testing/stateEquivalenceOracle.ts",
-      "src/browser-gateway/webview/relay/relaySnapshotProjection.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway detached-session selection compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/BrowserGatewayService.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayDetachedSessionSelection"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayDetachedSessionSelection } from "@agentlink/protocol/browser-gateway-detached-session-selection";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+(?:interface|type)\s+BrowserGatewayDetachedSessionSelection\b(?:\s*=)?/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerCommandExecutor.ts",
-      "src/browser-gateway/webview/sessionDetailTransport.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway diff-preview compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayDiffPreview"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayDiffPreview } from "@agentlink/protocol/browser-gateway-diff-preview";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+interface\s+BrowserGatewayDiffPreview\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway interaction-state compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayInteractionState"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayInteractionState } from "@agentlink/protocol/browser-gateway-interaction-state";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+interface\s+BrowserGatewayInteractionState\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway interaction-summary compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayInteractionSummary"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayInteractionSummary } from "@agentlink/protocol/browser-gateway-interaction-summary";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+interface\s+BrowserGatewayInteractionSummary\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/testing/stateEquivalenceOracle.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway owner-control metadata compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "BROWSER_GATEWAY_OWNER_CONTROL_KINDS",
-      "BROWSER_GATEWAY_RELAY_RESET_REASONS",
-      "BrowserGatewayOwnerControlKind",
-      "BrowserGatewayRelayResetReason",
-    ] as const;
-    expect(compatibilitySource).toContain(
-      'from "@agentlink/protocol/browser-gateway-owner-control-metadata";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+const\s+BROWSER_GATEWAY_OWNER_CONTROL_KINDS\b/,
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+type\s+BrowserGateway(?:OwnerControlKind|RelayResetReason)\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/protocol.test.ts",
-      "src/browser-gateway/helper/OwnerRelayStore.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway owner-event metadata compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "BROWSER_GATEWAY_OWNER_EVENT_KINDS",
-      "BrowserGatewayOwnerEventKind",
-    ] as const;
-    expect(compatibilitySource).toContain(
-      'from "@agentlink/protocol/browser-gateway-owner-event-metadata";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+const\s+BROWSER_GATEWAY_OWNER_EVENT_KINDS\b/,
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+type\s+BrowserGatewayOwnerEventKind\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/OwnerTransport.ts",
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/dataPlane/protocol.test.ts",
-      "src/browser-gateway/testing/ownerDataPlaneLoadFixture.ts",
-      "src/browser-gateway/testing/phase3MobileBrowserFixture.ts",
-      "src/browser-gateway/webview/relay/useRelayGatewayConnection.test.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway operation-state compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "BROWSER_GATEWAY_OPERATION_STATUSES",
-      "BrowserGatewayOperationState",
-      "BrowserGatewayOperationStatus",
-    ] as const;
-    expect(compatibilitySource).toContain("type BrowserGatewayOperationState,");
-    expect(compatibilitySource).toContain(
-      'from "@agentlink/protocol/browser-gateway-operation-state";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+interface\s+BrowserGatewayOperationState\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
-      "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
-      "src/browser-gateway/helper/commandRoutes.test.ts",
-      "src/browser-gateway/helper/commandRoutes.ts",
-      "src/browser-gateway/helper/relayRoutes.ts",
-      "src/browser-gateway/testing/stateEquivalenceOracle.ts",
-      "src/browser-gateway/webview/relay/RelayConnectionManager.ts",
-      "src/browser-gateway/webview/relay/RelayOwnerStore.ts",
-      "src/browser-gateway/webview/relay/useRelayGatewayConnection.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway command-metadata compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "BROWSER_GATEWAY_COMMAND_DEADLINE_CLASSES",
-      "BROWSER_GATEWAY_COMMAND_IDEMPOTENCIES",
-      "BROWSER_GATEWAY_COMMAND_IDEMPOTENCY",
-      "BROWSER_GATEWAY_OWNER_COMMAND_KINDS",
-      "BrowserGatewayCommandDeadlineClass",
-      "BrowserGatewayCommandIdempotency",
-      "BrowserGatewayOwnerCommandKind",
-    ] as const;
-    expect(compatibilitySource).toContain(
-      'from "@agentlink/protocol/browser-gateway-owner-command-metadata";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+const\s+BROWSER_GATEWAY_OWNER_COMMAND_KINDS\b/,
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+const\s+BROWSER_GATEWAY_COMMAND_(?:DEADLINE_CLASSES|IDEMPOTENCIES|IDEMPOTENCY)\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerCommandExecutor.ts",
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.test.ts",
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
-      "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/helper/AskAgentOwnerAdapter.test.ts",
-      "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
-      "src/browser-gateway/helper/commandRoutes.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.unit.test.ts",
-      "src/browser-gateway/migration/actionSurfaceInventory.test.ts",
-      "src/browser-gateway/migration/actionSurfaceInventory.ts",
-      "src/browser-gateway/webview/relay/RelayConnectionManager.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway todo-item compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayTodoItem"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayTodoItem } from "@agentlink/protocol/browser-gateway-todo-item";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+interface\s+BrowserGatewayTodoItem\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/testing/stateEquivalenceOracle.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway queue-item compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayQueueItem"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayQueueItem } from "@agentlink/protocol/browser-gateway-queue-item";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+interface\s+BrowserGatewayQueueItem\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/testing/stateEquivalenceOracle.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway repository-state compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayRepositoryState"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayRepositoryState } from "@agentlink/protocol/browser-gateway-repository-state";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+interface\s+BrowserGatewayRepositoryState\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway context-budget compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayContextBudget"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayContextBudget } from "@agentlink/protocol/browser-gateway-context-budget";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+interface\s+BrowserGatewayContextBudget\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/testing/stateEquivalenceOracle.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway protocol-error compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "BrowserGatewayProtocolError",
-      "BrowserGatewayProtocolErrorCode",
-    ] as const;
-    expect(compatibilitySource).toContain(
-      'from "@agentlink/protocol/browser-gateway-protocol-error";',
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:class|interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.test.ts",
-      "src/browser-gateway/dataPlane/protocol.test.ts",
-      "src/browser-gateway/helper/commandRoutes.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway owner-publication batch compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayOwnerPublicationBatch"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayOwnerPublicationBatch } from "@agentlink/protocol/browser-gateway-owner-publication-batch";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+(?:interface|type)\s+BrowserGatewayOwnerPublicationBatch\b(?:\s*=)?/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
-      "src/browser-gateway/dataPlane/OwnerTransport.ts",
-      "src/browser-gateway/helper/AskAgentOwnerAdapter.test.ts",
-      "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
-      "src/browser-gateway/helper/OwnerRelayStore.test.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.unit.test.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway owner-checkpoint compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayOwnerCheckpoint"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayOwnerCheckpoint } from "@agentlink/protocol/browser-gateway-owner-checkpoint";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+(?:interface|type)\s+BrowserGatewayOwnerCheckpoint\b(?:\s*=)?/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
-      "src/browser-gateway/dataPlane/OwnerTransport.ts",
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
-      "src/browser-gateway/helper/OwnerRelayStore.test.ts",
-      "src/browser-gateway/helper/OwnerRelayStore.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.unit.test.ts",
-      "src/browser-gateway/helper/relayRoutes.test.ts",
-      "src/browser-gateway/testing/ownerDataPlaneLoadFixture.ts",
-      "src/browser-gateway/testing/phase3LiveParityGate.ts",
-      "src/browser-gateway/testing/phase3ReliabilityGate.ts",
-      "src/browser-gateway/testing/stateEquivalenceOracle.ts",
-      "src/browser-gateway/webview/relay/RelayConnectionManager.test.ts",
-      "src/browser-gateway/webview/relay/RelayOwnerStore.test.ts",
-      "src/browser-gateway/webview/relay/RelayOwnerStore.ts",
-      "src/browser-gateway/webview/relay/relaySnapshotProjection.test.ts",
-      "src/browser-gateway/webview/relay/relaySnapshotProjection.ts",
-      "src/browser-gateway/webview/relay/useRelayGatewayConnection.test.ts",
-      "src/browser-gateway/webview/relay/useRelayGatewayConnection.ts",
-      "src/browser-gateway/dataPlane/protocol.test.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway owner-event compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "BrowserGatewayOwnerEvent",
-      "BrowserGatewayOwnerEventPayload",
-    ] as const;
-    expect(compatibilitySource).toContain(
-      'from "@agentlink/protocol/browser-gateway-owner-event";',
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
-      "src/browser-gateway/dataPlane/OwnerTransport.ts",
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/helper/OwnerRelayStore.test.ts",
-      "src/browser-gateway/helper/OwnerRelayStore.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.unit.test.ts",
-      "src/browser-gateway/helper/relayRoutes.test.ts",
-      "src/browser-gateway/testing/phase3LiveParityGate.ts",
-      "src/browser-gateway/testing/phase3MobileBrowserFixture.ts",
-      "src/browser-gateway/testing/phase3ReliabilityGate.ts",
-      "src/browser-gateway/testing/stateEquivalenceOracle.ts",
-      "src/browser-gateway/webview/relay/RelayConnectionManager.test.ts",
-      "src/browser-gateway/webview/relay/RelayConnectionManager.ts",
-      "src/browser-gateway/webview/relay/RelayOwnerStore.test.ts",
-      "src/browser-gateway/webview/relay/RelayOwnerStore.ts",
-      "src/browser-gateway/webview/relay/useRelayGatewayConnection.test.ts",
-      "src/browser-gateway/webview/relay/useRelayGatewayConnection.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway owner-control compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayOwnerControl"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayOwnerControl } from "@agentlink/protocol/browser-gateway-owner-control";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+(?:interface|type)\s+BrowserGatewayOwnerControl\b(?:\s*=)?/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.test.ts",
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
-      "src/browser-gateway/dataPlane/OwnerTransport.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway owner-command acknowledgement compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayOwnerCommandAck"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayOwnerCommandAck } from "@agentlink/protocol/browser-gateway-owner-command-ack";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+(?:interface|type)\s+BrowserGatewayOwnerCommandAck\b(?:\s*=)?/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.test.ts",
-      "src/browser-gateway/dataPlane/OwnerTransport.ts",
-      "src/browser-gateway/helper/commandRoutes.test.ts",
-      "src/browser-gateway/helper/commandRoutes.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway owner-command compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayOwnerCommand"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayOwnerCommand } from "@agentlink/protocol/browser-gateway-owner-command";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+interface\s+BrowserGatewayOwnerCommand\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.test.ts",
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
-      "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
-      "src/browser-gateway/dataPlane/OwnerTransport.ts",
-      "src/browser-gateway/helper/AskAgentOwnerAdapter.test.ts",
-      "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
-      "src/browser-gateway/helper/commandRoutes.test.ts",
-      "src/browser-gateway/helper/commandRoutes.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway owner-command body compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = ["BrowserGatewayOwnerCommandBody"] as const;
-    expect(compatibilitySource).toContain(
-      'export type { BrowserGatewayOwnerCommandBody } from "@agentlink/protocol/browser-gateway-owner-command-body";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+type\s+BrowserGatewayOwnerCommandBody\b(?:\s*=)?/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerCommandExecutor.ts",
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
-      "src/browser-gateway/helper/AskAgentOwnerAdapter.test.ts",
-      "src/browser-gateway/helper/commandRoutes.test.ts",
-      "src/browser-gateway/helper/commandRoutes.ts",
-      "src/browser-gateway/webview/relay/RelayConnectionManager.ts",
-      "src/browser-gateway/webview/relay/useRelayGatewayConnection.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway foreground-control compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "BrowserGatewayForegroundControlState",
-      "BrowserGatewayRevertRecoveryNotice",
-    ] as const;
-    expect(compatibilitySource).toContain(
-      'from "@agentlink/protocol/browser-gateway-foreground-control-state";',
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/testing/stateEquivalenceOracle.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway session-catalog compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "BrowserGatewayProjectSummary",
-      "BrowserGatewaySessionSummary",
-      "BrowserGatewaySessionCatalog",
-    ] as const;
-    expect(compatibilitySource).toContain(
-      'from "@agentlink/protocol/browser-gateway-session-catalog";',
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/testing/stateEquivalenceOracle.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway chat-workspace summary compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "BrowserGatewayChatTabStatus",
-      "BrowserGatewayChatTabSummary",
-      "BrowserGatewayChatWorkspaceSummary",
-    ] as const;
-    expect(compatibilitySource).toContain(
-      'from "@agentlink/protocol/browser-gateway-chat-workspace-summary";',
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/BrowserGatewayService.ts",
-      "src/browser-gateway/webview/BrowserGatewayApp.test.ts",
-      "src/browser-gateway/webview/BrowserGatewayApp.tsx",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps the final Phase A2 DTO compatibility facades package-owned with bounded importers", () => {
-    const closures = [
-      {
-        compatibilityPath: "src/browser-gateway/dataPlane/protocol.ts",
-        exportPath: "@agentlink/protocol/browser-gateway-data-plane-transport",
-        extractedNames: [
-          "BrowserGatewayChatTabSelection",
-          "BrowserGatewayOwnerRegistration",
-          "BrowserGatewayRelayReset",
-        ],
-        importerBaseline: ["src/browser-gateway/dataPlane/protocol.test.ts"],
-      },
-      {
-        compatibilityPath:
-          "src/browser-gateway/dataPlane/interactionPayload.ts",
-        exportPath:
-          "@agentlink/protocol/browser-gateway-owner-interaction-payload",
-        extractedNames: [
-          "BrowserGatewayOwnerInteractionPayload",
-          "BrowserGatewayOwnerQuestionProgressPayload",
-        ],
-        importerBaseline: [
-          "src/browser-gateway/dataPlane/ownerProjectionAdapter.test.ts",
-          "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-          "src/browser-gateway/dataPlane/ownerProjectionSources.ts",
-          "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
-          "src/browser-gateway/webview/relay/relaySnapshotProjection.test.ts",
-          "src/browser-gateway/webview/relay/relaySnapshotProjection.ts",
-          "src/browser-gateway/webview/relay/useRelayGatewayConnection.ts",
-        ],
-      },
-    ] as const;
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-
-    for (const closure of closures) {
-      const compatibilityPath = path.join(ROOT, closure.compatibilityPath);
-      const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-      expect(compatibilitySource).toContain(`from "${closure.exportPath}";`);
-      for (const extractedName of closure.extractedNames) {
-        expect(compatibilitySource, extractedName).not.toMatch(
-          new RegExp(
-            `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-          ),
-        );
-      }
-
-      const importers = findCompatibilityImporters({
-        compatibilityPath,
-        sourceFiles,
-        extractedNames: closure.extractedNames,
-      });
-      const importerBaseline = new Set<string>(closure.importerBaseline);
-      // Compatibility imports may decrease during A4, but new importers are forbidden.
-      expect(
-        importers.every((importer) => importerBaseline.has(importer)),
-      ).toBe(true);
-      expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-    }
-  });
-
-  it("keeps browser-gateway data-plane version compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION",
-    ] as const;
-    expect(compatibilitySource).toContain(
-      'export { BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION } from "@agentlink/protocol/browser-gateway-data-plane-version";',
-    );
-    expect(compatibilitySource).not.toMatch(
-      /export\s+const\s+BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION\b/,
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({ filePath, source: fs.readFileSync(filePath, "utf8") }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.test.ts",
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
-      "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
-      "src/browser-gateway/dataPlane/OwnerTransport.ts",
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/dataPlane/protocol.test.ts",
-      "src/browser-gateway/helper/AskAgentOwnerAdapter.test.ts",
-      "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
-      "src/browser-gateway/helper/OwnerRelayStore.test.ts",
-      "src/browser-gateway/helper/OwnerRelayStore.ts",
-      "src/browser-gateway/helper/browserGatewayHelper.ts",
-      "src/browser-gateway/helper/browserGatewayRelay.integration.test.ts",
-      "src/browser-gateway/helper/commandRoutes.test.ts",
-      "src/browser-gateway/helper/commandRoutes.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.unit.test.ts",
-      "src/browser-gateway/helper/relayRoutes.test.ts",
-      "src/browser-gateway/helper/relayRoutes.ts",
-      "src/browser-gateway/testing/phase3LiveParityGate.ts",
-      "src/browser-gateway/testing/phase3ReliabilityGate.ts",
-      "src/browser-gateway/webview/relay/RelayConnectionManager.test.ts",
-      "src/browser-gateway/webview/relay/RelayConnectionManager.ts",
-      "src/browser-gateway/webview/relay/RelayOwnerStore.test.ts",
-      "src/browser-gateway/webview/relay/relaySnapshotProjection.test.ts",
-      "src/browser-gateway/webview/relay/useRelayGatewayConnection.test.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway data-plane identity compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "BrowserGatewayDataPlaneIdentity",
-      "BrowserGatewayDetailHandle",
-    ] as const;
-    expect(compatibilitySource).toContain(
-      [
-        "export type {",
-        "  BrowserGatewayDataPlaneIdentity,",
-        "  BrowserGatewayDetailHandle,",
-        '} from "@agentlink/protocol/browser-gateway-data-plane-identity";',
-      ].join("\n"),
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.test.ts",
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
-      "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
-      "src/browser-gateway/dataPlane/OwnerTransport.ts",
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/dataPlane/protocol.test.ts",
-      "src/browser-gateway/helper/AskAgentOwnerAdapter.test.ts",
-      "src/browser-gateway/helper/AskAgentOwnerAdapter.ts",
-      "src/browser-gateway/helper/OwnerRelayStore.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.ts",
-      "src/browser-gateway/testing/phase3LiveParityGate.ts",
-      "src/browser-gateway/testing/stateEquivalenceOracle.ts",
-      "src/browser-gateway/webview/relay/RelayConnectionManager.ts",
-      "src/browser-gateway/webview/relay/useRelayGatewayConnection.test.ts",
-      "src/browser-gateway/webview/relay/useRelayGatewayConnection.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway instance-status compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/protocol.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const extractedNames = [
-      "BrowserGatewayInstanceStatusKind",
-      "BrowserGatewayInstanceStatusSummary",
-    ] as const;
-    expect(compatibilitySource).toContain(
-      [
-        "export type {",
-        "  BrowserGatewayInstanceStatusKind,",
-        "  BrowserGatewayInstanceStatusSummary,",
-        '} from "@agentlink/protocol/browser-gateway-instance-status";',
-      ].join("\n"),
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-      extractedNames,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/BrowserGatewayServer.ts",
-      "src/browser-gateway/BrowserGatewayService.ts",
-      "src/browser-gateway/helper/browserGatewayHelper.ts",
-      "src/browser-gateway/webview/BrowserGatewayApp.tsx",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway model-provider identity compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/browserGatewayModelProviderIds.ts",
-    );
-    expect(fs.readFileSync(compatibilityPath, "utf8")).toBe(
-      'export * from "@agentlink/protocol/browser-gateway-model-provider-identity";\n',
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/browserGatewayAskAgentSessionStore.ts",
-      "src/browser-gateway/browserGatewayModelAuthLeaseStore.ts",
-      "src/browser-gateway/browserGatewayModelCredentialCache.ts",
-      "src/browser-gateway/helper/askAgentModelClient.ts",
-      "src/browser-gateway/helper/browserGatewayHelper.ts",
-      "src/extension.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway data-plane limits compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/dataPlane/limits.ts",
-    );
-    expect(fs.readFileSync(compatibilityPath, "utf8")).toBe(
-      'export * from "@agentlink/protocol/browser-gateway-data-plane-limits";\n',
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/BrowserGatewayServer.test.ts",
-      "src/browser-gateway/BrowserGatewayServer.ts",
-      "src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts",
-      "src/browser-gateway/dataPlane/OwnerTransport.test.ts",
-      "src/browser-gateway/dataPlane/OwnerTransport.ts",
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.test.ts",
-      "src/browser-gateway/dataPlane/ownerProjectionAdapter.ts",
-      "src/browser-gateway/dataPlane/protocol.test.ts",
-      "src/browser-gateway/dataPlane/protocol.ts",
-      "src/browser-gateway/helper/OwnerRelayStore.ts",
-      "src/browser-gateway/helper/RelaySseClientQueue.ts",
-      "src/browser-gateway/helper/commandRoutes.test.ts",
-      "src/browser-gateway/helper/commandRoutes.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.test.ts",
-      "src/browser-gateway/helper/dataPlaneRoutes.ts",
-      "src/browser-gateway/helper/relayRoutes.ts",
-      "src/browser-gateway/testing/ownerDataPlaneLoadFixture.test.ts",
-      "src/browser-gateway/testing/ownerDataPlaneLoadFixture.ts",
-      "src/browser-gateway/testing/phase3LiveParityGate.test.ts",
-      "src/browser-gateway/testing/phase3LiveParityGate.ts",
-      "src/browser-gateway/testing/phase3PerformanceGate.test.ts",
-      "src/browser-gateway/testing/phase3PerformanceGate.ts",
-      "src/browser-gateway/testing/stateEquivalenceOracle.ts",
-      "src/browser-gateway/webview/relay/RelayConnectionManager.ts",
-      "src/browser-gateway/webview/relay/RelayOwnerStore.ts",
-      "src/browser-gateway/webview/sessionDetailTransport.test.ts",
-      "src/browser-gateway/webview/sessionDetailTransport.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps browser-gateway data-plane mode compatibility package-owned with bounded importers", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/browser-gateway/browserGatewayDataPlaneMode.ts",
-    );
-    expect(fs.readFileSync(compatibilityPath, "utf8")).toBe(
-      'export * from "@agentlink/protocol/browser-gateway-data-plane-mode";\n',
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const importers = findCompatibilityImporters({
-      compatibilityPath,
-      sourceFiles,
-    });
-    const importerBaseline = new Set([
-      "src/browser-gateway/BrowserGatewayServer.ts",
-      "src/browser-gateway/browserGatewayDataPlaneMode.test.ts",
-      "src/browser-gateway/browserGatewayRegistry.ts",
-      "src/browser-gateway/helper/browserGatewayHelper.ts",
-      "src/browser-gateway/protocol.ts",
-      "src/browser-gateway/testing/phase3ShadowParityGate.ts",
-      "src/browser-gateway/webview/BrowserGatewayApp.tsx",
-      "src/browser-gateway/webview/index.tsx",
-      "src/browser-gateway/webview/relay/relayClientSelection.ts",
-      "src/extension.ts",
-    ]);
-    // Compatibility imports may decrease during A4, but new importers are forbidden.
-    expect(importers.every((importer) => importerBaseline.has(importer))).toBe(
-      true,
-    );
-    expect(importers.length).toBeLessThanOrEqual(importerBaseline.size);
-  });
-
-  it("keeps surface-model-message compatibility package-owned and unused", () => {
-    const compatibilityPath = path.join(
-      ROOT,
-      "src/core/surfaceModelMessages.ts",
-    );
-    const compatibilitySource = fs.readFileSync(compatibilityPath, "utf8");
-    const packageSource = fs.readFileSync(
-      path.join(ROOT, "packages/core/src/surfaceModelMessages.ts"),
-      "utf8",
-    );
-    expect(compatibilitySource).toBe(
-      'export * from "@agentlink/core/surface-model-messages";\n',
-    );
-    const extractedNames = [
-      "CoreSurfaceModelMediaItem",
-      "CoreSurfaceModelMessage",
-      "CoreSurfaceQuestionAnswerItem",
-    ] as const;
-
-    expect(packageSource).toContain(
-      [
-        "export type {",
-        ...extractedNames.map((name) => `  ${name},`),
-        '} from "@agentlink/protocol/surface-model-message";',
-      ].join("\n"),
-    );
-    for (const extractedName of extractedNames) {
-      expect(compatibilitySource, extractedName).not.toMatch(
-        new RegExp(
-          `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-        ),
-      );
-    }
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    expect(
-      findCompatibilityImporters({
-        compatibilityPath,
-        sourceFiles,
-        extractedNames,
-      }),
-    ).toEqual([]);
-  });
-
-  it("keeps terminal-security compatibility package-owned and unused", () => {
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const facades = [
-      {
-        path: "src/core/capabilities/terminal.ts",
-        extractedNames: [
-          "AgentTerminalExecutionAuthority",
-          "CommandExecutionPolicy",
-          "ManagedNetworkDecision",
-          "ManagedNetworkRequest",
-          "TerminalExecutionApprovalRequirement",
-          "TerminalExecutionAuthorityReason",
-          "TerminalExecutionRouteContext",
-          "TerminalExecutionRouteReason",
-          "TerminalExecutionSecurityFailure",
-          "TerminalExecutionSecuritySummary",
-          "TerminalSandboxAttestationSummary",
-          "TerminalSandboxPermissionIntent",
-        ],
-      },
-      {
-        path: "src/core/sandboxPolicy.ts",
-        extractedNames: [
-          "SandboxBackendCapabilities",
-          "SandboxCapabilityRequest",
-          "SandboxEnvironmentBudgetMetadata",
-          "SandboxEnvironmentInheritance",
-          "SandboxEnvironmentPolicySummary",
-          "SandboxExecutionMetadata",
-          "SandboxViolation",
-          "SandboxViolationOperation",
-        ],
-      },
-    ] as const;
-
-    for (const facade of facades) {
-      const compatibilityPath = path.join(ROOT, facade.path);
-      const source = fs.readFileSync(compatibilityPath, "utf8");
-      expect(source, facade.path).toContain(
-        '} from "@agentlink/protocol/terminal-security";',
-      );
-      for (const extractedName of facade.extractedNames) {
-        expect(source, `${facade.path}:${extractedName}`).not.toMatch(
-          new RegExp(
-            `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-          ),
-        );
-      }
-      expect(
-        findCompatibilityImporters({
-          compatibilityPath,
-          sourceFiles,
-          extractedNames: facade.extractedNames,
-        }),
-        facade.path,
-      ).toEqual([]);
-    }
-  });
-
-  it("keeps terminal-surface compatibility package-owned with bounded importers", () => {
-    const transportCompatibilityPath = path.join(
-      ROOT,
-      "src/terminal/terminalSurfaceProtocol.ts",
-    );
-    expect(fs.readFileSync(transportCompatibilityPath, "utf8")).toBe(
-      'export * from "@agentlink/protocol/terminal-surface";\n',
-    );
-
-    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
-      (filePath) => ({
-        filePath,
-        source: fs.readFileSync(filePath, "utf8"),
-      }),
-    );
-    const transportImporters = findCompatibilityImporters({
-      compatibilityPath: transportCompatibilityPath,
-      sourceFiles,
-    });
-    const dirtyTransportImporterBaseline = new Set([
-      "src/terminal/HostTerminalSurfaceController.ts",
-      "src/terminal/LiveHostTerminalSurfaceController.ts",
-      "src/terminal/terminalSurfaceProtocol.test.ts",
-      "src/terminal/webview/terminalWebviewController.test.ts",
-      "src/terminal/webview/terminalWebviewController.ts",
-    ]);
-    expect(
-      transportImporters.every((importer) =>
-        dirtyTransportImporterBaseline.has(importer),
-      ),
-    ).toBe(true);
-    expect(transportImporters.length).toBeLessThanOrEqual(
-      dirtyTransportImporterBaseline.size,
-    );
-
-    const supportingFacades = [
-      {
-        path: "src/terminal/alternateScreenTracker.ts",
-        extractedNames: ["AlternateScreenTransition"],
-        expectedExport:
-          'export type { AlternateScreenTransition } from "@agentlink/protocol/terminal-surface";',
-      },
-      {
-        path: "src/terminal/hostTerminalBlocks.ts",
-        extractedNames: [
-          "HostTerminalBlock",
-          "HostTerminalBlockState",
-          "HostTerminalCommandBlock",
-          "HostTerminalPromptBlock",
-          "HostTerminalRawBlock",
-        ],
-        expectedExport: '} from "@agentlink/protocol/terminal-surface";',
-      },
-      {
-        path: "src/terminal/terminalOutputPolicy.ts",
-        extractedNames: [
-          "TerminalOutputPolicyAction",
-          "TerminalOutputPolicyDecision",
-          "TerminalOutputPolicyReason",
-        ],
-        expectedExport: '} from "@agentlink/protocol/terminal-surface";',
-      },
-      {
-        path: "src/terminal/shellIntegration.ts",
-        extractedNames: ["ShellIntegrationMode"],
-        expectedExport:
-          'export type { ShellIntegrationMode } from "@agentlink/protocol/terminal-surface";',
-      },
-    ] as const;
-
-    for (const facade of supportingFacades) {
-      const compatibilityPath = path.join(ROOT, facade.path);
-      const source = fs.readFileSync(compatibilityPath, "utf8");
-      expect(source, facade.path).toContain(facade.expectedExport);
-      for (const extractedName of facade.extractedNames) {
-        expect(source, `${facade.path}:${extractedName}`).not.toMatch(
-          new RegExp(
-            `export\\s+(?:interface|type)\\s+${extractedName}\\b(?:\\s*=)?`,
-          ),
-        );
-      }
-      expect(
-        findCompatibilityImporters({
-          compatibilityPath,
-          sourceFiles,
-          extractedNames: facade.extractedNames,
-        }),
-        facade.path,
-      ).toEqual([]);
-    }
-  });
+  }
 
   it("keeps terminal approval-mode compatibility package-owned", () => {
     const compatibilitySource = fs.readFileSync(
@@ -8012,7 +3520,7 @@ describe("protocol package boundary", () => {
     for (const filePath of walkTypeScriptFiles(path.join(ROOT, "src"))) {
       const relativePath = path.relative(ROOT, filePath);
       if (relativePath === "src/core/capabilities/terminal.ts") continue;
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       const isCompatibilitySpecifier = (specifier: string): boolean =>
         /(?:^|\/)core\/capabilities\/terminal(?:\.js)?$/.test(specifier) ||
         (path.dirname(relativePath) === "src/core/capabilities" &&
@@ -8064,7 +3572,7 @@ describe("protocol package boundary", () => {
       ) {
         continue;
       }
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       const isCompatibilitySpecifier = (specifier: string): boolean => {
         if (!specifier.startsWith(".")) {
           return /(?:^|\/)(?:agent\/webview\/types|agent\/ChatViewProvider)(?:\.js)?$/.test(
@@ -8112,7 +3620,7 @@ describe("protocol package boundary", () => {
     for (const filePath of walkTypeScriptFiles(path.join(ROOT, "src"))) {
       const relativePath = path.relative(ROOT, filePath);
       if (relativePath === "src/agent/webview/types.ts") continue;
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       const isCompatibilitySpecifier = (specifier: string): boolean => {
         if (!specifier.startsWith(".")) {
           return /(?:^|\/)agent\/webview\/types(?:\.js)?$/.test(specifier);
@@ -8168,7 +3676,7 @@ describe("protocol package boundary", () => {
       ) {
         continue;
       }
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       const isCompatibilitySpecifier = (specifier: string): boolean => {
         if (!specifier.startsWith(".")) {
           return /(?:^|\/)agent\/webview\/types(?:\.js)?$/.test(specifier);
@@ -8204,7 +3712,7 @@ describe("protocol package boundary", () => {
       ) {
         continue;
       }
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       if (
         /(?:export\s+)?interface\s+(?:TodoItem|ChatMessage)\b/.test(source) ||
         /(?:export\s+)?type\s+ContentBlock\s*=/.test(source)
@@ -8261,7 +3769,7 @@ describe("protocol package boundary", () => {
       ) {
         continue;
       }
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       const isCompatibilitySpecifier = (specifier: string): boolean =>
         /(?:^|\/)(?:core\/capabilities\/sessionControl|agent\/webview\/types)(?:\.js)?$/.test(
           specifier,
@@ -8324,7 +3832,7 @@ describe("protocol package boundary", () => {
       ) {
         continue;
       }
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       const importsExtractedType = [...source.matchAll(importPattern)].some(
         (match) => {
           const specifier = match[2] ?? "";
@@ -8366,7 +3874,7 @@ describe("protocol package boundary", () => {
     for (const filePath of walkTypeScriptFiles(path.join(ROOT, "src"))) {
       const relativePath = path.relative(ROOT, filePath);
       if (relativePath === "src/shared/types.ts") continue;
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = readSourceText(filePath);
       const importsExtractedType = [...source.matchAll(importPattern)].some(
         (match) =>
           isMixedCompatibilityImportPath(relativePath, match[2] ?? "") &&
@@ -8390,7 +3898,7 @@ describe("protocol package boundary", () => {
     const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
       (filePath) => ({
         filePath,
-        source: fs.readFileSync(filePath, "utf8"),
+        source: readSourceText(filePath),
       }),
     );
     for (const shim of LEGACY_SHIMS) {
@@ -8426,11 +3934,16 @@ function findCompatibilityImporters(options: {
   const bareExportPattern =
     /export\s+(?:type\s+)?\*(?:\s+as\s+[A-Za-z0-9_$]+)?\s+from\s+["']([^"']+)["']/g;
   const importers: string[] = [];
+  // Every specifier that resolves to the module ends with its file name, so a
+  // file that never mentions the name cannot import it. Skipping those files
+  // avoids running five regular expressions over the whole source tree.
+  const compatibilityModuleName = path.basename(compatibilityModule);
 
   for (const { filePath, source } of options.sourceFiles) {
     if (
       filePath === options.compatibilityPath ||
-      filePath === path.join(ROOT, "src/protocolPackageBoundary.test.ts")
+      filePath === path.join(ROOT, "src/protocolPackageBoundary.test.ts") ||
+      !source.includes(compatibilityModuleName)
     ) {
       continue;
     }
@@ -8498,6 +4011,270 @@ function findCompatibilityImporters(options: {
   return importers.sort();
 }
 
+function groupRowsByTitle<Row>(
+  rows: readonly Row[],
+  titleOf: (row: Row) => string,
+): Map<string, Row[]> {
+  const groups = new Map<string, Row[]>();
+  for (const row of rows) {
+    const title = titleOf(row);
+    const group = groups.get(title);
+    if (group) group.push(row);
+    else groups.set(title, [row]);
+  }
+  return groups;
+}
+
+function protocolModuleWiringTitle(wiring: ProtocolModuleWiring): string {
+  return (
+    wiring.title ??
+    `wires ${wiring.exportPath} through every public package build surface`
+  );
+}
+
+function checkProtocolModuleWiring(wiring: ProtocolModuleWiring): void {
+  const { exportPath, fileName } = wiring;
+  const packageDirectory = path.join(ROOT, "packages", "protocol");
+  const requireSubpath = (): unknown =>
+    requireFromBoundaryTest(`@agentlink/protocol/${exportPath}`);
+  const requireRoot = (): unknown =>
+    requireFromBoundaryTest("@agentlink/protocol");
+
+  const packageManifest = JSON.parse(
+    readSourceText(path.join(packageDirectory, "package.json")),
+  ) as { exports?: Record<string, unknown> };
+  if (wiring.manifest === "present") {
+    expect(packageManifest.exports).toHaveProperty(`./${exportPath}`);
+  } else {
+    expect(packageManifest.exports?.[`./${exportPath}`]).toEqual({
+      browser: {
+        types: `./dist/${fileName}.d.ts`,
+        default: `./dist/${fileName}.js`,
+      },
+      import: {
+        types: `./dist/${fileName}.d.ts`,
+        default: `./dist/${fileName}.js`,
+      },
+      require: {
+        types: `./dist/cjs/${fileName}.d.cts`,
+        default: `./dist/cjs/${fileName}.cjs`,
+      },
+    });
+  }
+
+  const indexSource = readSourceText(path.join(PROTOCOL_SOURCE, "index.ts"));
+  if (wiring.index === "root") {
+    expect(indexSource).toContain(`export * from "./${fileName}.js";`);
+  } else {
+    expect(indexSource).toContain(`\`${fileName}\` is subpath-only`);
+    expect(indexSource).not.toContain(`export * from "./${fileName}.js";`);
+  }
+
+  for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
+    const source = readSourceText(path.join(packageDirectory, buildScript));
+    expect(source, buildScript).toContain(`"src/${fileName}.ts"`);
+    if (wiring.readsEsmDeclaration) {
+      expect(source, buildScript).toContain(
+        `readFile("dist/${fileName}.d.ts", "utf8")`,
+      );
+    }
+    if (wiring.declarationOutput !== false) {
+      expect(source, buildScript).toContain(`"dist/cjs/${fileName}.d.cts"`);
+    }
+    switch (wiring.cjsRootReexport) {
+      case "export-star":
+        // The scripts write the CJS index from a string literal, so the
+        // expected text ends in a backslash followed by "n", not a newline.
+        expect(source, buildScript).toContain(
+          `export * from "./${fileName}.cjs";\\n`,
+        );
+        break;
+      case "quoted-specifier":
+        expect(source, buildScript).toContain(`"./${fileName}.cjs"`);
+        break;
+      case "no-export-star":
+        expect(source, buildScript).not.toContain(
+          `export * from "./${fileName}.cjs";`,
+        );
+        break;
+      case "no-quoted-specifier":
+        expect(source, buildScript).not.toContain(`"./${fileName}.cjs"`);
+        break;
+      case "unchecked":
+        break;
+    }
+    for (const text of wiring.buildScriptContains ?? []) {
+      expect(source, `${buildScript}:${text}`).toContain(text);
+    }
+    const normalizedSource = source.replace(/\s+/g, " ");
+    for (const dependency of wiring.rewrittenDependencies ?? []) {
+      expect(normalizedSource, `${buildScript}:${dependency}`).toMatch(
+        new RegExp(
+          `\\.replaceAll\\(\\s*'"\\.\\/${dependency}\\.js"'\\s*,\\s*'"\\.\\/${dependency}\\.cjs"'\\s*,?\\s*\\)`,
+        ),
+      );
+    }
+    for (const pattern of wiring.normalizedBuildScriptMatches ?? []) {
+      expect(normalizedSource, buildScript).toMatch(pattern);
+    }
+  }
+
+  const cjsDirectory = path.join(packageDirectory, "dist", "cjs");
+  for (const check of wiring.dist ?? []) {
+    switch (check) {
+      case "rootDeclaration":
+        expect(
+          readSourceText(path.join(cjsDirectory, "index.d.cts")),
+        ).toContain(`export * from "./${fileName}.cjs";`);
+        break;
+      case "cjsFile":
+        expect(fs.existsSync(path.join(cjsDirectory, `${fileName}.cjs`))).toBe(
+          true,
+        );
+        break;
+      case "rootCjsFile":
+        expect(fs.existsSync(path.join(cjsDirectory, "index.cjs"))).toBe(true);
+        break;
+      case "requireRoot":
+        expect(() => requireRoot()).not.toThrow();
+        break;
+      case "requireSubpath":
+        expect(() => requireSubpath()).not.toThrow();
+        break;
+    }
+  }
+
+  const declarationTexts = [
+    ...(wiring.rewrittenDependencies ?? []).map(
+      (dependency) => `from "./${dependency}.cjs";`,
+    ),
+    ...(wiring.declarationContains ?? []),
+  ];
+  if (declarationTexts.length > 0) {
+    const declaration = readSourceText(
+      path.join(cjsDirectory, `${fileName}.d.cts`),
+    );
+    for (const text of declarationTexts) {
+      expect(declaration, `${fileName}.d.cts`).toContain(text);
+    }
+  }
+
+  if (wiring.runtimeLists) {
+    const runtimeModule = requireSubpath() as Record<string, unknown>;
+    for (const list of wiring.runtimeLists) {
+      const actual = runtimeModule[list.name];
+      expect(actual, list.name).toEqual(list.values);
+      expect(Object.isFrozen(actual), list.name).toBe(list.frozen);
+      if (list.frozen) {
+        expect(() => (actual as string[]).push("other"), list.name).toThrow(
+          TypeError,
+        );
+      }
+    }
+  }
+
+  wiring.extra?.({ wiring, requireSubpath, requireRoot });
+}
+
+function checkBrowserGatewayProtocolErrorRuntime(
+  context: ProtocolModuleWiringContext,
+): void {
+  type ProtocolErrorConstructor = new (
+    code: "invalid_value",
+    path: string,
+    message: string,
+  ) => Error & { code: string; path: string };
+  const protocolErrorModule = context.requireSubpath() as {
+    BrowserGatewayProtocolError: ProtocolErrorConstructor;
+  };
+  const rootProtocolModule = context.requireRoot() as {
+    BrowserGatewayProtocolError: ProtocolErrorConstructor;
+  };
+  for (const constructor of [
+    protocolErrorModule.BrowserGatewayProtocolError,
+    rootProtocolModule.BrowserGatewayProtocolError,
+  ]) {
+    const error = new constructor("invalid_value", "$.field", "must be valid");
+    expect(error).toBeInstanceOf(constructor);
+    expect(error).toMatchObject({
+      name: "BrowserGatewayProtocolError",
+      code: "invalid_value",
+      path: "$.field",
+      message: "$.field: must be valid",
+    });
+  }
+}
+
+function checkBrowserGatewayDataPlaneVersionRuntime(
+  context: ProtocolModuleWiringContext,
+): void {
+  const versionModule = context.requireSubpath() as {
+    BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION?: string;
+  };
+  expect(versionModule.BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION).toBe("1");
+}
+
+function exportedDeclaration(kinds: string): (extractedName: string) => RegExp {
+  return (extractedName) =>
+    new RegExp(`export\\s+(?:${kinds})\\s+${extractedName}\\b(?:\\s*=)?`);
+}
+
+function exportedInterfaceDeclaration(extractedName: string): RegExp {
+  return new RegExp(`export\\s+interface\\s+${extractedName}\\b`);
+}
+
+function checkCompatibilityFacade(facade: CompatibilityFacade): void {
+  const compatibilityPath = path.join(ROOT, facade.compatibilityPath);
+  const compatibilitySource = readSourceText(compatibilityPath);
+  if (facade.sourceIs !== undefined) {
+    expect(compatibilitySource, facade.compatibilityPath).toBe(facade.sourceIs);
+  }
+  for (const text of facade.sourceContains ?? []) {
+    expect(compatibilitySource, facade.compatibilityPath).toContain(text);
+  }
+  if (facade.packageSource) {
+    const packageSource = readSourceText(
+      path.join(ROOT, facade.packageSource.path),
+    );
+    for (const text of facade.packageSource.contains) {
+      expect(packageSource, facade.packageSource.path).toContain(text);
+    }
+  }
+  for (const pattern of facade.sourceNotMatching ?? []) {
+    expect(compatibilitySource, facade.compatibilityPath).not.toMatch(pattern);
+  }
+  if (facade.forbiddenLocalDeclaration) {
+    for (const extractedName of facade.extractedNames ?? []) {
+      expect(
+        compatibilitySource,
+        `${facade.compatibilityPath}:${extractedName}`,
+      ).not.toMatch(facade.forbiddenLocalDeclaration(extractedName));
+    }
+  }
+
+  const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
+    (filePath) => ({ filePath, source: readSourceText(filePath) }),
+  );
+  const importers = findCompatibilityImporters({
+    compatibilityPath,
+    sourceFiles,
+    extractedNames: facade.extractedNames,
+  });
+  if (facade.importers === "unused") {
+    expect(importers, facade.compatibilityPath).toEqual([]);
+    return;
+  }
+  const importerBaseline = new Set<string>(facade.importers.baseline);
+  // Compatibility imports may decrease during A4, but new importers are forbidden.
+  expect(
+    importers.every((importer) => importerBaseline.has(importer)),
+    `${facade.compatibilityPath} importers: ${importers.join(", ")}`,
+  ).toBe(true);
+  expect(importers.length, facade.compatibilityPath).toBeLessThanOrEqual(
+    importerBaseline.size,
+  );
+}
+
 async function containsNodeGlobalIdentifier(source: string): Promise<boolean> {
   const { createScanner, SyntaxKind } = await typescriptAst;
   const scanner = createScanner(true, undefined, source);
@@ -8547,12 +4324,35 @@ function listPackageDirectories(): string[] {
     .sort();
 }
 
+// Many tests scan the same source trees. Nothing here writes to them, so each
+// directory is listed and each file read once per run instead of once per test.
+const walkedDirectories = new Map<string, readonly string[]>();
+const sourceTexts = new Map<string, string>();
+
+function readSourceText(filePath: string): string {
+  let text = sourceTexts.get(filePath);
+  if (text === undefined) {
+    text = fs.readFileSync(filePath, "utf8");
+    sourceTexts.set(filePath, text);
+  }
+  return text;
+}
+
 function walkTypeScriptFiles(directory: string): string[] {
+  let files = walkedDirectories.get(directory);
+  if (!files) {
+    files = listTypeScriptFiles(directory);
+    walkedDirectories.set(directory, files);
+  }
+  return [...files];
+}
+
+function listTypeScriptFiles(directory: string): string[] {
   const files: string[] = [];
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     if (entry.name === "dist" || entry.name === "node_modules") continue;
     const candidate = path.join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...walkTypeScriptFiles(candidate));
+    if (entry.isDirectory()) files.push(...listTypeScriptFiles(candidate));
     else if (entry.isFile() && /\.tsx?$/.test(candidate)) files.push(candidate);
   }
   return files.sort();

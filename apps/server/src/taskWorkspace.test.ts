@@ -4,7 +4,7 @@ import {
   createTaskWorkspaces,
   setWritable,
 } from "./taskWorkspace.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createGitCommand, createProcessRunner } from "./gitCommand.js";
 
 import type { TaskRun } from "./taskStore.js";
@@ -38,6 +38,47 @@ const IDENTITY = {
   GIT_COMMITTER_EMAIL: "t@example.com",
 };
 
+const gitEnvironment = (home: string, identity: boolean) => ({
+  PATH: process.env.PATH ?? "/usr/bin:/bin",
+  HOME: home,
+  // No global config (an fsmonitor daemon would outlive the test).
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  // Upstream commits name their author; a task's use its own config.
+  ...(identity ? IDENTITY : {}),
+});
+
+/**
+ * The upstream repository every test clones from, built once: seven git
+ * processes. Each test gets its own copy, so it may still change it.
+ */
+let upstreamTemplate: Promise<string> | undefined;
+
+async function buildUpstreamTemplate(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "task-upstream-"));
+  const run = (...args: string[]) =>
+    execFileSync(git!, args, {
+      cwd: dir,
+      env: gitEnvironment(dir, true),
+      encoding: "utf8",
+    });
+  run("init", "-q", "-b", "main");
+  await fs.writeFile(path.join(dir, "README.md"), "hello\n");
+  run("add", "README.md");
+  run("commit", "-q", "-m", "init");
+  run("checkout", "-q", "-b", "develop");
+  await fs.writeFile(path.join(dir, "dev.txt"), "dev\n");
+  run("add", "dev.txt");
+  run("commit", "-q", "-m", "dev");
+  run("checkout", "-q", "main");
+  return dir;
+}
+
+afterAll(async () => {
+  const dir = await upstreamTemplate?.catch(() => undefined);
+  if (dir) await fs.rm(dir, { recursive: true, force: true });
+});
+
 // Real git processes: slow when the whole suite runs in parallel.
 describe.skipIf(!git)("task workspaces", { timeout: 30_000 }, () => {
   const setup = async () => {
@@ -53,30 +94,15 @@ describe.skipIf(!git)("task workspaces", { timeout: 30_000 }, () => {
       }),
     );
     const source = path.join(dir, "upstream", "demo");
-    await fs.mkdir(source, { recursive: true });
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    upstreamTemplate ??= buildUpstreamTemplate();
+    await fs.cp(await upstreamTemplate, source, { recursive: true });
     const run = (cwd: string, ...args: string[]) =>
       execFileSync(git!, args, {
         cwd,
-        // No global config (an fsmonitor daemon would outlive the test).
-        // Upstream commits name their author; a task's use its own config.
-        env: {
-          PATH: process.env.PATH ?? "/usr/bin:/bin",
-          HOME: dir,
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_CONFIG_GLOBAL: "/dev/null",
-          ...(cwd === source ? IDENTITY : {}),
-        },
+        env: gitEnvironment(dir, cwd === source),
         encoding: "utf8",
       }).trim();
-    run(source, "init", "-q", "-b", "main");
-    await fs.writeFile(path.join(source, "README.md"), "hello\n");
-    run(source, "add", "README.md");
-    run(source, "commit", "-q", "-m", "init");
-    run(source, "checkout", "-q", "-b", "develop");
-    await fs.writeFile(path.join(source, "dev.txt"), "dev\n");
-    run(source, "add", "dev.txt");
-    run(source, "commit", "-q", "-m", "dev");
-    run(source, "checkout", "-q", "main");
     // A main project next to the tasks, which no task may reach.
     const projects = path.join(dir, "projects");
     await fs.mkdir(path.join(projects, "home"), { recursive: true });

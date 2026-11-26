@@ -173,6 +173,35 @@ describe("HelperLifecycleCoordinator", () => {
     expect(cleanup).toHaveBeenCalledOnce();
   });
 
+  it("keeps closing connections that go idle while the drain is running", async () => {
+    vi.useFakeTimers();
+    const server = new FakeServer();
+    const coordinator = new HelperLifecycleCoordinator({
+      server: server.asServer(),
+      shutdownTimeoutMs: 10_000,
+    });
+    let finishDrain!: () => void;
+
+    const shutdown = coordinator.shutdown({
+      drain: () =>
+        new Promise<void>((resolve) => {
+          finishDrain = resolve;
+        }),
+      cleanup: async () => undefined,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const sweepsAtStart = server.closeIdleConnectionsCount;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(server.closeIdleConnectionsCount).toBeGreaterThan(sweepsAtStart);
+
+    finishDrain();
+    server.finishClose();
+    await expect(shutdown).resolves.toMatchObject({ timedOut: false });
+    const sweepsAtEnd = server.closeIdleConnectionsCount;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(server.closeIdleConnectionsCount).toBe(sweepsAtEnd);
+  });
+
   it("forces streams and sockets closed when the shared deadline expires", async () => {
     vi.useFakeTimers();
     const server = new FakeServer();

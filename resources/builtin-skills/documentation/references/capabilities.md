@@ -191,6 +191,10 @@ Read-only execution recognizes conservative local Git inspection commands includ
 
 ## Browser remote control
 
+When you reload or reopen the gateway at the same address in the same browser, it remembers whether you were in **Ask AgentLink** or **VS Code** and the last VS Code workspace and chat tab you viewed. If that chat tab is no longer available, the gateway falls back to an available tab. The separate **Assistant** link opens its own browser tab.
+
+On iPhone, the chat transcript and composer use the full viewport width with their usual margins. The gateway header and the VS Code History and New Chat controls stay clear of display cutouts. The active view paints behind the home indicator, with its composer kept above it. In the browser’s VS Code view, **Check for updates** sits in the chat toolbar so it does not take up a separate row.
+
 VS Code windows share a browser gateway helper. A newer local `+dev` build can replace an idle helper from the same release version, but an active older helper is kept running to avoid interrupting browser work. **AgentLink: Restart Browser Gateway** from a window with the current build can replace it explicitly. An older window that has this safeguard refuses to restart a newer helper. Reload windows still running an extension built before this safeguard, then refresh the browser tab after restarting the helper.
 
 Browser Ask Agent treats the absence of an update service as an empty update status, without repeated console 404 errors. Ordinary authenticated product-update polling returns `204 No Content` while no owner is available; explicitly targeted owners/generations and manual checks still report missing targets as errors.

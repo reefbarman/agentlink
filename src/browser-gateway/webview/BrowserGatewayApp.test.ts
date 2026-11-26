@@ -22,8 +22,9 @@ import {
   screen,
   waitFor,
 } from "@testing-library/preact";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 
+import { partitionTests } from "../../testing/testParts";
 import type { AppState } from "../../shared/chatProjection";
 import type { WorkspaceTabGroup } from "./workspaceTabsBridge";
 import type {
@@ -46,6 +47,9 @@ import {
   type TranscriptDisplayBlock,
   type TranscriptBlockDetailRequest,
 } from "../dataPlane/transcriptBlockDetail";
+
+// Runs as three parallel files: this one and the .part2 and .part3 files.
+const { it, describeTogether } = partitionTests(3);
 
 vi.mock("../../agent/webview/components/InputArea", () => ({
   InputArea: ({
@@ -889,7 +893,7 @@ async function selectWorkspaceTab(): Promise<HTMLElement> {
   return selectedWorkspaceTab!;
 }
 
-describe("reconcileAskAgentSessionTarget", () => {
+describeTogether("reconcileAskAgentSessionTarget", () => {
   const target = "browser-gateway:ask-agent:new-chat";
   const helperSnapshot = () => {
     const { snapshot } = createAskAgentSessionResponse();
@@ -951,7 +955,7 @@ describe("reconcileAskAgentSessionTarget", () => {
   });
 });
 
-describe("carryAskAgentAccessState", () => {
+describeTogether("carryAskAgentAccessState", () => {
   it("keeps grants and rules a relay snapshot leaves out, with Approve for Me from the relay policy", () => {
     const previous = createSnapshot() as unknown as GatewaySnapshot;
     previous.ui.readGrants = [
@@ -994,7 +998,7 @@ describe("carryAskAgentAccessState", () => {
   });
 });
 
-describe("detached session detail cache", () => {
+describeTogether("detached session detail cache", () => {
   it("does not borrow the focused session's approval for another tab", () => {
     const ownerSnapshot = createGroupedSnapshot();
     ownerSnapshot.ui.approval = {

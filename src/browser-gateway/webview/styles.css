@@ -1899,7 +1899,8 @@ textarea {
   position: relative;
   z-index: 15;
   width: min(860px, calc(100% - 32px));
-  margin: 0 auto max(14px, env(safe-area-inset-bottom));
+  margin: 0 auto
+    max(14px, var(--composer-safe-area-bottom, env(safe-area-inset-bottom)));
   padding: 0;
 }
 
@@ -2179,7 +2180,10 @@ textarea {
   }
 
   .browser-shell-consumer .browser-chat-composer {
-    margin-bottom: max(8px, env(safe-area-inset-bottom));
+    margin-bottom: max(
+      8px,
+      var(--composer-safe-area-bottom, env(safe-area-inset-bottom))
+    );
   }
 
   .consumer-welcome {

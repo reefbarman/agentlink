@@ -12,7 +12,30 @@ import {
 } from "./systemPrompt.js";
 
 import type { ModelProvider } from "./providers/types.js";
+import { exec } from "child_process";
 import { providerRegistry } from "./providers/index.js";
+
+// Building a prompt asks git for the branch and status. Launching real git for
+// every test took most of this file's run time, so git is faked: unavailable
+// by default, with canned answers in the test that covers the git lines.
+vi.mock("child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("child_process")>()),
+  exec: vi.fn(),
+}));
+
+type ExecCallback = (error: Error | null, stdout: string) => void;
+
+function fakeGit(answers: Record<string, string> = {}): void {
+  vi.mocked(exec).mockImplementation(((
+    command: string,
+    _options: unknown,
+    callback: ExecCallback,
+  ) => {
+    const answer = answers[command];
+    if (answer === undefined) callback(new Error("not a git repository"), "");
+    else callback(null, answer);
+  }) as unknown as typeof exec);
+}
 
 let tmpDir: string;
 let tmpHome: string;
@@ -20,6 +43,7 @@ let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
 
 beforeEach(() => {
+  fakeGit();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-test-"));
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-home-"));
   originalHome = process.env.HOME;
@@ -192,6 +216,32 @@ describe("conversation mode placement", () => {
 });
 
 describe("buildSystemPrompt", () => {
+  it("reports the git branch and a count of changed files", async () => {
+    fakeGit({
+      "git rev-parse --abbrev-ref HEAD": "feature/prompt\n",
+      "git status --short": " M src/a.ts\n?? src/b.ts\n",
+    });
+    const dirty = await buildSystemPrompt("code", tmpDir);
+    expect(dirty).toContain("- Git branch: feature/prompt");
+    expect(dirty).toContain("- Git status: 2 changed files");
+    expect(exec).toHaveBeenCalledWith(
+      "git status --short",
+      expect.objectContaining({ cwd: tmpDir }),
+      expect.any(Function),
+    );
+
+    fakeGit({
+      "git rev-parse --abbrev-ref HEAD": "main\n",
+      "git status --short": "",
+    });
+    expect(await buildSystemPrompt("code", tmpDir)).toContain(
+      "- Git status: clean",
+    );
+
+    fakeGit();
+    expect(await buildSystemPrompt("code", tmpDir)).not.toContain("Git branch");
+  });
+
   it.each(["system", "conversation"] as const)(
     "retains discovery diagnostics outside the prompt (%s placement)",
     async (modeInstructionPlacement) => {

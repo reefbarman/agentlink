@@ -246,6 +246,7 @@ const DELETE_SESSION_ERRORS: Readonly<Record<string, string>> = {
 const THEME_CACHE_KEY = "agentlink.browserGateway.themeSnapshot.v1";
 const SIDE_PANE_WIDTH_KEY = "agentlink.browserGateway.sidePaneWidth.v1";
 const SELECTION_CACHE_KEY = "agentlink.browserGateway.selection.v1";
+const WORKSPACE_SELECTION_KEY = "agentlink.browserGateway.lastWorkspace.v1";
 const TAB_FLASH_INTERVAL_MS = 1_000;
 const TAB_FLASH_TITLE = "⚠ Action needed — AgentLink";
 const DEFAULT_SIDE_PANE_PERCENT = 36;
@@ -706,9 +707,13 @@ function logicalTabSelectionKey(selection: BrowserLogicalTabSelection): string {
   ].join("\u0000");
 }
 
-function readStoredBrowserSelection(): StoredBrowserSelection {
+function readStoredBrowserSelection(
+  browserWorkspace: boolean,
+): StoredBrowserSelection {
   try {
-    const raw = window.sessionStorage.getItem(SELECTION_CACHE_KEY);
+    const raw = browserWorkspace
+      ? window.localStorage.getItem(WORKSPACE_SELECTION_KEY)
+      : window.sessionStorage.getItem(SELECTION_CACHE_KEY);
     if (!raw) return { kind: "ask-agent" };
     const parsed = JSON.parse(raw) as Partial<StoredBrowserSelection>;
     if (parsed.kind === "ask-agent") return { kind: "ask-agent" };
@@ -745,14 +750,24 @@ function readStoredBrowserSelection(): StoredBrowserSelection {
   }
 }
 
-function writeStoredBrowserSelection(selection: StoredBrowserSelection): void {
+function writeStoredBrowserSelection(
+  selection: StoredBrowserSelection,
+  browserWorkspace: boolean,
+): void {
   try {
-    window.sessionStorage.setItem(
-      SELECTION_CACHE_KEY,
-      JSON.stringify(selection),
-    );
+    if (browserWorkspace) {
+      window.localStorage.setItem(
+        WORKSPACE_SELECTION_KEY,
+        JSON.stringify(selection),
+      );
+    } else {
+      window.sessionStorage.setItem(
+        SELECTION_CACHE_KEY,
+        JSON.stringify(selection),
+      );
+    }
   } catch {
-    // Best-effort browser-tab-local preference only.
+    // Best effort when the browser blocks storage.
   }
 }
 
@@ -1119,6 +1134,7 @@ interface BrowserGatewayAppProps {
   /** Desktop quick-ask panel: renders only the composer and hands sends to the main window. */
   quickAsk?: boolean;
   workspaceOnly?: boolean;
+  browserWorkspace?: boolean;
   browserShell?: boolean;
   externalBrowserUnavailable?: boolean;
   initialTheme?: BrowserGatewayThemeSnapshot;
@@ -1506,6 +1522,7 @@ export function BrowserGatewayApp({
   product = "ask-agent",
   quickAsk = false,
   workspaceOnly = false,
+  browserWorkspace = false,
   browserShell = false,
   externalBrowserUnavailable = false,
   initialTheme,
@@ -1586,16 +1603,17 @@ export function BrowserGatewayApp({
   const authRecoveryPendingRef = useRef(false);
   const storedSelectionRef = useRef<StoredBrowserSelection | null>(null);
   if (storedSelectionRef.current === null) {
-    storedSelectionRef.current = readStoredBrowserSelection();
+    storedSelectionRef.current = readStoredBrowserSelection(browserWorkspace);
   }
-  const initialSelectedTabId =
+  const restoredWorkspace =
     routeByInstance &&
     !consumerShell &&
     storedSelectionRef.current.kind === "workspace"
-      ? storedSelectionRef.current.instanceId
-      : workspaceOnly
-        ? currentInstanceId
-        : BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
+      ? storedSelectionRef.current
+      : null;
+  const initialSelectedTabId =
+    restoredWorkspace?.instanceId ??
+    (workspaceOnly ? currentInstanceId : BROWSER_GATEWAY_ASK_AGENT_TAB_ID);
   const [selectedTabId, setSelectedTabId] =
     useState<string>(initialSelectedTabId);
   const selectedTabIdRef = useRef(initialSelectedTabId);
@@ -1641,12 +1659,7 @@ export function BrowserGatewayApp({
     useState(false);
   const workspaceHydrationInFlightRef = useRef<Set<string>>(new Set());
   const [ownerSnapshotRevision, setOwnerSnapshotRevision] = useState(0);
-  const initialLogicalSelection =
-    routeByInstance &&
-    !consumerShell &&
-    storedSelectionRef.current.kind === "workspace"
-      ? (storedSelectionRef.current.logical ?? null)
-      : null;
+  const initialLogicalSelection = restoredWorkspace?.logical ?? null;
   const logicalSelectionByInstanceRef = useRef<
     Map<string, BrowserLogicalTabSelection>
   >(
@@ -1723,8 +1736,21 @@ export function BrowserGatewayApp({
   function persistStoredBrowserSelection(
     selection: StoredBrowserSelection,
   ): void {
+    if (
+      browserWorkspace &&
+      (selection.kind !== "workspace" || !selection.instanceId)
+    ) {
+      return;
+    }
+    const previous = storedSelectionRef.current;
     storedSelectionRef.current = selection;
-    writeStoredBrowserSelection(selection);
+    // Background snapshots can repeat the same selection without user input.
+    if (
+      !browserWorkspace ||
+      JSON.stringify(previous) !== JSON.stringify(selection)
+    ) {
+      writeStoredBrowserSelection(selection, browserWorkspace);
+    }
   }
 
   function storedWorkspaceSelection(
@@ -4170,6 +4196,11 @@ export function BrowserGatewayApp({
     const liveInstances = instances.filter(
       (instance) => instance.disconnectedAt === undefined,
     );
+    // The helper may start before any VS Code window has registered. Keep the
+    // saved identity so the next instance list can match it or its replacement.
+    if (browserWorkspace && liveInstances.length === 0) {
+      return currentSelectedTabId;
+    }
     const liveCurrentServerInstance = liveInstances.find(
       (instance) => instance.instanceId === currentServerInstanceId,
     );
@@ -9490,6 +9521,48 @@ export function BrowserGatewayApp({
     : undefined;
   const embeddedInShell =
     workspaceOnly && !externalBrowserUnavailable && window.parent !== window;
+  const browserWorkspaceFrame = browserWorkspace && embeddedInShell;
+  const checkForProductUpdates =
+    productUpdate &&
+    !productUpdate.state.candidate &&
+    !productUpdateDetailsOpen ? (
+      <button
+        class="icon-button"
+        type="button"
+        disabled={
+          productUpdateBusy || productUpdate.state.status === "checking"
+        }
+        onClick={() => void checkSelectedProductUpdate()}
+      >
+        Check for updates
+      </button>
+    ) : null;
+  useEffect(() => {
+    if (!browserWorkspace || !embeddedInShell) return;
+    const shell = window.frameElement?.closest(".browser-shell-web");
+    const host = shell?.ownerDocument.defaultView;
+    if (!shell || !host) return;
+
+    // Safe-area env values describe the top-level viewport, not the iframe.
+    const sides = ["left", "right", "bottom"];
+    const style = document.documentElement.style;
+    const syncInsets = () => {
+      const hostStyle = host.getComputedStyle(shell);
+      for (const side of sides) {
+        const property = `--browser-safe-area-${side}`;
+        style.setProperty(property, hostStyle.getPropertyValue(property));
+      }
+    };
+    syncInsets();
+    host.addEventListener("resize", syncInsets);
+    host.visualViewport?.addEventListener("resize", syncInsets);
+    return () => {
+      host.removeEventListener("resize", syncInsets);
+      host.visualViewport?.removeEventListener("resize", syncInsets);
+      for (const side of sides)
+        style.removeProperty(`--browser-safe-area-${side}`);
+    };
+  }, [browserWorkspace, embeddedInShell]);
   const [tabsHostedByShell, setTabsHostedByShell] = useState(false);
   const workspaceTabActionRef = useRef<(action: WorkspaceTabAction) => void>(
     () => undefined,
@@ -9756,7 +9829,7 @@ export function BrowserGatewayApp({
 
   return (
     <div
-      class={`browser-shell${isAskAgentSelected ? " browser-shell-consumer" : ""}${consumerShell ? " browser-shell-desktop" : ""}${browserShell ? " browser-shell-web" : ""}${consumerShell && desktopSidebarOpen ? " desktop-sidebar-open" : ""}${product === "assistant" || desktopAssistantSelected ? " assistant-product" : ""}${assistantDrawsSidebar ? " desktop-assistant-embedded" : ""}${desktopEmbed ? " desktop-embedded" : ""}${desktopFramed ? " desktop-framed" : ""}`}
+      class={`browser-shell${isAskAgentSelected ? " browser-shell-consumer" : ""}${consumerShell ? " browser-shell-desktop" : ""}${browserShell ? " browser-shell-web" : ""}${browserWorkspace && embeddedInShell ? " browser-shell-workspace-frame" : ""}${consumerShell && desktopSidebarOpen ? " desktop-sidebar-open" : ""}${product === "assistant" || desktopAssistantSelected ? " assistant-product" : ""}${assistantDrawsSidebar ? " desktop-assistant-embedded" : ""}${desktopEmbed ? " desktop-embedded" : ""}${desktopFramed ? " desktop-framed" : ""}`}
       style={
         desktopEmbed &&
         (embedSidebarWidth !== undefined || embedOffsetTop !== undefined)
@@ -10608,71 +10681,63 @@ export function BrowserGatewayApp({
                   onNewSession={handleNewSession}
                   onShowHistory={handleShowHistory}
                   extraActions={
-                    isAskAgentSelected && (
-                      <>
-                        <button
-                          class={`icon-button${showAskAgentMemory ? " active" : ""}`}
-                          onClick={handleShowAskAgentMemory}
-                          title="Ask Agent Memory"
-                          type="button"
-                        >
-                          <i class="codicon codicon-archive" />
-                          {askAgentMemory &&
-                            askAgentMemory.totalSummaryCount > 0 && (
-                              <span class="memory-count-badge">
-                                {askAgentMemory.totalSummaryCount}
-                              </span>
-                            )}
-                        </button>
-                        <button
-                          class={`icon-button${showAskAgentReadGrants ? " active" : ""}`}
-                          onClick={() =>
-                            setShowAskAgentReadGrants((value) => !value)
-                          }
-                          title="Manage access"
-                          type="button"
-                        >
-                          <i class="codicon codicon-folder-opened" />
-                          {askAgentReadGrants.length > 0 && (
-                            <span class="memory-count-badge">
-                              {askAgentReadGrants.length}
-                            </span>
-                          )}
-                        </button>
-                        <button
-                          class={`icon-button${showAskAgentHandoff ? " active" : ""}`}
-                          onClick={() => {
-                            setShowAskAgentHandoff((value) => !value);
-                            if (!askAgentHandoffTargetId) {
-                              setAskAgentHandoffTargetId(
-                                askAgentHandoffTargets[0]?.instanceId ?? "",
-                              );
-                            }
-                          }}
-                          title="Handoff to VS Code project session"
-                          type="button"
-                        >
-                          <i class="codicon codicon-git-pull-request-go-to-changes" />
-                        </button>
-                      </>
-                    )
+                    browserWorkspaceFrame
+                      ? checkForProductUpdates
+                      : isAskAgentSelected && (
+                          <>
+                            <button
+                              class={`icon-button${showAskAgentMemory ? " active" : ""}`}
+                              onClick={handleShowAskAgentMemory}
+                              title="Ask Agent Memory"
+                              type="button"
+                            >
+                              <i class="codicon codicon-archive" />
+                              {askAgentMemory &&
+                                askAgentMemory.totalSummaryCount > 0 && (
+                                  <span class="memory-count-badge">
+                                    {askAgentMemory.totalSummaryCount}
+                                  </span>
+                                )}
+                            </button>
+                            <button
+                              class={`icon-button${showAskAgentReadGrants ? " active" : ""}`}
+                              onClick={() =>
+                                setShowAskAgentReadGrants((value) => !value)
+                              }
+                              title="Manage access"
+                              type="button"
+                            >
+                              <i class="codicon codicon-folder-opened" />
+                              {askAgentReadGrants.length > 0 && (
+                                <span class="memory-count-badge">
+                                  {askAgentReadGrants.length}
+                                </span>
+                              )}
+                            </button>
+                            <button
+                              class={`icon-button${showAskAgentHandoff ? " active" : ""}`}
+                              onClick={() => {
+                                setShowAskAgentHandoff((value) => !value);
+                                if (!askAgentHandoffTargetId) {
+                                  setAskAgentHandoffTargetId(
+                                    askAgentHandoffTargets[0]?.instanceId ?? "",
+                                  );
+                                }
+                              }}
+                              title="Handoff to VS Code project session"
+                              type="button"
+                            >
+                              <i class="codicon codicon-git-pull-request-go-to-changes" />
+                            </button>
+                          </>
+                        )
                   }
                 />
               )}
               {productUpdate &&
                 !consumerShell &&
                 (!productUpdate.state.candidate && !productUpdateDetailsOpen ? (
-                  <button
-                    class="icon-button"
-                    type="button"
-                    disabled={
-                      productUpdateBusy ||
-                      productUpdate.state.status === "checking"
-                    }
-                    onClick={() => void checkSelectedProductUpdate()}
-                  >
-                    Check for updates
-                  </button>
+                  !browserWorkspaceFrame && checkForProductUpdates
                 ) : (
                   <ReleaseUpdateIndicator
                     state={productUpdate.state}

@@ -390,24 +390,32 @@ describe("LanceDbCodeIndexActivator", () => {
     );
   });
 
+  // Stages through the single-session path the indexer worker uses. It leaves
+  // the same staged manifest, rows and batch ledgers as begin/append/complete,
+  // which LanceDbCodeIndexStagingRepository.test.ts covers step by step.
   async function stageCompletePublication(): Promise<void> {
     const manifest = createManifest();
-    await staging.beginStagedPublication(manifest);
-    await staging.appendStagedChunkBatch({
-      publicationId: manifest.publicationId,
-      batchIndex: 0,
-      expectedIdDigest: manifest.expectedChunkDigest,
-      expectedContentDigest: createRetrievalRecordContentDigest(chunks),
-      chunks,
+    await staging.stagePublication({
+      manifest,
+      chunkBatches: [
+        {
+          publicationId: manifest.publicationId,
+          batchIndex: 0,
+          expectedIdDigest: manifest.expectedChunkDigest,
+          expectedContentDigest: createRetrievalRecordContentDigest(chunks),
+          chunks,
+        },
+      ],
+      relationBatches: [
+        {
+          publicationId: manifest.publicationId,
+          batchIndex: 0,
+          expectedIdDigest: manifest.expectedRelationDigest,
+          expectedContentDigest: createRetrievalRecordContentDigest(relations),
+          relations,
+        },
+      ],
     });
-    await staging.appendStagedRelationBatch({
-      publicationId: manifest.publicationId,
-      batchIndex: 0,
-      expectedIdDigest: manifest.expectedRelationDigest,
-      expectedContentDigest: createRetrievalRecordContentDigest(relations),
-      relations,
-    });
-    await staging.completeStagedPublication(manifest.publicationId);
   }
 
   async function seedOldGeneration(): Promise<void> {

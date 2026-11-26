@@ -3,11 +3,11 @@ import {
   createFixture,
   createWorkspace,
   expectEmptyJournal,
+  interruptWorker,
   requireCache,
   setUpWorkerFixtureBuild,
   sourceContent,
   startMessage,
-  stopChild,
   writeSource,
 } from "./workerFixtureHarness.js";
 import { describe, expect, it } from "vitest";
@@ -40,7 +40,7 @@ describe("indexer worker fixture", () => {
           message.current === 25 &&
           message.total === files.length,
       );
-      await stopChild(firstFixture.child);
+      await interruptWorker(firstFixture.child, workspace);
 
       const durableFilesBeforeResume = Object.keys(
         requireCache(workspace).files,

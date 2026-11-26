@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_GUARDIAN_REVIEW_ATTEMPTS } from "./guardianReview.js";
 import { createReadOnlyCommandReviewer } from "./readOnlyCommandReview.js";
+import { withTimersAdvanced } from "../testing/fakeTimers.js";
 
 const capabilities: ModelCapabilities = {
   supportsThinking: false,
@@ -137,7 +138,11 @@ describe("createReadOnlyCommandReviewer", () => {
       resolveContext: () => ({ provider, sessionModel }),
     });
 
-    const result = await reviewer.review(reviewInput());
+    // Skips the real backoff between attempts (1.5s in total).
+    const result = await withTimersAdvanced(
+      () => reviewer.review(reviewInput()),
+      5_000,
+    );
 
     expect(result).toMatchObject({ outcome: "deny", status: "invalid" });
     expect(complete).toHaveBeenCalledTimes(DEFAULT_GUARDIAN_REVIEW_ATTEMPTS);

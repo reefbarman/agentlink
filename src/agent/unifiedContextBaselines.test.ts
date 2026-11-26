@@ -8,7 +8,7 @@ import {
   getAgentTools,
 } from "./toolAdapter.js";
 import { TOOL_GROUPS, getToolsForMode } from "./toolPermissions.js";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { BUILT_IN_MODES } from "./modes.js";
 import { TODO_TOOL_NAME } from "./todoTool.js";
@@ -20,6 +20,18 @@ import { createHash } from "node:crypto";
 import { createNativeToolDisclosureSnapshot } from "../core/tools/nativeToolDisclosure.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 import { loadSkillsForModes } from "./skillLoader.js";
+
+// Each of the 40 prompts built here asks git for the branch and status of this
+// whole checkout. normalizePrompt() blanks both lines, so fixed answers give
+// the same measurements without launching git 80 times.
+vi.mock("child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("child_process")>()),
+  exec: (
+    command: string,
+    _options: unknown,
+    callback: (error: Error | null, stdout: string) => void,
+  ) => callback(null, command.includes("rev-parse") ? "main\n" : ""),
+}));
 
 const fixtureRoot = path.resolve(
   __dirname,

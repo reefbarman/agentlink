@@ -44,10 +44,12 @@ function BrowserGatewayRoot() {
     view: mcpView,
     action: query.get("mcpAction") === "refresh" ? "refresh" : "open",
   };
+  const browserWorkspace =
+    !desktopWorkspace && query.get("browserWorkspace") === "1";
   const workspaceOnly =
     config.routeByInstance === true &&
     config.askAgentOnly !== true &&
-    (desktopWorkspace || query.get("browserWorkspace") === "1");
+    (desktopWorkspace || browserWorkspace);
 
   if (desktopMcpManager) {
     return (
@@ -74,6 +76,7 @@ function BrowserGatewayRoot() {
         query.get("quickAsk") === "1"
       }
       workspaceOnly={workspaceOnly}
+      browserWorkspace={workspaceOnly && browserWorkspace}
       externalBrowserUnavailable={workspaceOnly && desktopWorkspace}
       browserShell={
         config.routeByInstance === true &&

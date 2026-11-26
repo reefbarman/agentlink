@@ -177,7 +177,9 @@ describe("indexer worker fixture", () => {
     async () => {
       const fixture = await createFixture();
       const workspace = createWorkspace();
-      const files = Array.from({ length: 51 }, (_, index) =>
+      // One file more than FILE_BATCH_SIZE = 25, the fewest that span two
+      // publication batches. Each extra file costs a real on-disk commit.
+      const files = Array.from({ length: 26 }, (_, index) =>
         writeSource(
           workspace.root,
           `src/file-${index}.sql`,
@@ -188,13 +190,12 @@ describe("indexer worker fixture", () => {
       const stats = await fixture.complete(startMessage(workspace, { files }));
 
       expect(stats).toMatchObject({
-        filesIndexed: 51,
-        totalFilesInIndex: 51,
+        filesIndexed: 26,
+        totalFilesInIndex: 26,
         errors: [],
       });
-      // 51 files at FILE_BATCH_SIZE = 25 → 3 publication batches; caches are
-      // checkpointed per batch (pending + current vector writes, one
-      // structural write) plus one metadata checkpoint.
+      // Caches are checkpointed per batch (pending + current vector writes,
+      // one structural write) plus one metadata checkpoint.
       const batchCount = Math.ceil(files.length / 25);
       expect(stats.metrics?.operations["retrieval.deleteIndex"]).toBe(1);
       expect(stats.metrics?.operations["retrieval.upsertRecords"]).toBe(

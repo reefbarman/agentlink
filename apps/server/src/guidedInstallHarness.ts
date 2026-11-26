@@ -1,10 +1,11 @@
 // Shared harness for the guided installer tests. The scenarios run the real
 // installer in synchronous shell subprocesses, so they are split across
 // several `guidedInstall*.test.ts` files that Vitest can run in parallel.
-import { afterEach, expect } from "vitest";
+import { afterAll, afterEach, expect } from "vitest";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -22,22 +23,39 @@ export const installer = resolve("deploy/install.sh");
 export const upgrade = resolve("deploy/upgrade.sh");
 export const container = resolve("deploy/container");
 const roots: string[] = [];
+const removal = {
+  recursive: true,
+  force: true,
+  maxRetries: 5,
+  retryDelay: 50,
+} as const;
+
+/**
+ * A copy of the first finished installation in this test file. A full install
+ * launches about a hundred processes, so later tests copy this back instead of
+ * installing again. The installation records absolute paths, so it is always
+ * restored to the folder it was made in, which the previous test has removed.
+ */
+let installedSnapshot: { root: string; copy: string } | undefined;
 
 /** Removes each test's fixture folders after it finishes. */
 export function cleanUpInstallFixtures(): void {
   afterEach(() => {
-    for (const root of roots.splice(0))
-      rmSync(root, {
-        recursive: true,
-        force: true,
-        maxRetries: 5,
-        retryDelay: 50,
-      });
+    for (const root of roots.splice(0)) rmSync(root, removal);
+  });
+  afterAll(() => {
+    if (installedSnapshot) rmSync(installedSnapshot.copy, removal);
+    installedSnapshot = undefined;
   });
 }
 
-export function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "assistant-install-test-"));
+export function fixture(reuseRoot?: string) {
+  const root =
+    reuseRoot ?? mkdtempSync(join(tmpdir(), "assistant-install-test-"));
+  if (reuseRoot) {
+    rmSync(root, removal);
+    mkdirSync(root);
+  }
   roots.push(root);
   const bin = join(root, "bin");
   const assets = join(root, "assets");
@@ -236,10 +254,17 @@ export function expectUntouched(f: ReturnType<typeof fixture>) {
 
 /** A finished fresh installation, with the command log cleared. */
 export function installed() {
-  const f = fixture();
-  const result = f.install();
-  expect(result.status).toBe(0);
-  rmSync(f.log, { force: true });
+  const f = fixture(installedSnapshot?.root);
+  if (installedSnapshot) {
+    copyTree(installedSnapshot.copy, f.root);
+  } else {
+    const result = f.install();
+    expect(result.status).toBe(0);
+    rmSync(f.log, { force: true });
+    const copy = mkdtempSync(join(tmpdir(), "assistant-install-snapshot-"));
+    copyTree(f.root, copy);
+    installedSnapshot = { root: f.root, copy };
+  }
   const updater = `${f.deploy}-updater`;
   const read = (name: string) => readFileSync(join(f.deploy, name), "utf8");
   const journal = () =>
@@ -253,6 +278,15 @@ export function installed() {
         args.every((arg, index) => call.args[index + 1] === arg),
     );
   return { ...f, updater, read, journal, lock, dockerCalls, compose };
+}
+
+function copyTree(from: string, to: string): void {
+  cpSync(from, to, {
+    recursive: true,
+    force: true,
+    preserveTimestamps: true,
+    verbatimSymlinks: true,
+  });
 }
 
 export const image = (target: string) =>

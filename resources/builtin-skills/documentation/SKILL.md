@@ -1,6 +1,6 @@
 ---
 name: documentation
-description: Answer questions about AgentLink's VS Code extension and standalone Desktop and CLI previews, including installation, update notifications, onboarding, providers, settings, tools, MCP, approvals, browser remote, indexing, skills, modes, troubleshooting, and contributing. Use when users ask how AgentLink works, what a feature or setting does, how to configure it, or why an AgentLink behavior occurs.
+description: Answer questions about AgentLink's VS Code extension and standalone Desktop and CLI previews, including installation, updates, onboarding, providers, settings, tools, MCP, approvals, browser remote, indexing, skills, modes, and troubleshooting. Use to edit OpenAI-compatible providers or models in openai-compatible.json, or troubleshoot missing models in the picker.
 ---
 
 # AgentLink Documentation
@@ -42,7 +42,7 @@ Read the smallest relevant reference page directly with `read_skill_resource`:
 | Exact contributed command, command-palette title, view, package version, engine requirement, or extension metadata                                                                                      | `references/package-contract.md`                                                                                      |
 | Release history or upgrade notes                                                                                                                                                                        | `references/release-notes.md`                                                                                         |
 
-For provider configuration, OpenRouter, local endpoints, or Claude Code authentication through Meridian, read `references/providers.md` first. It owns the setup walkthrough and connection-file examples; `references/settings.md` owns advanced connection behavior.
+For provider configuration, OpenRouter, local endpoints, or Meridian, read `references/providers.md` first. For requests to edit the user's OpenAI-compatible providers or model list, start with **Edit the provider or model list** in that guide. It identifies `~/.agentlink/openai-compatible.json` and explains how to check that AgentLink accepted the edit. The source boundary above still applies to product answers; when the user asks for an actual configuration change, read and edit the documented user file for that task. `references/settings.md` owns advanced connection behavior.
 
 For update availability, self-update installation, restart/reload prompts, automatic-check opt-out, dismissal, manual checks, and host-specific browser notices, read `references/getting-started.md` first; CLI commands are owned by `references/standalone-cli.md`. Checks retrieve metadata only. Explicit install actions download and verify a release, then install it; restarting or reloading requires separate user consent. Browser remote views have no install or restart action, source builds must be updated from source, and a locally signed Desktop build can switch to the unsigned release after a Keychain warning.
 

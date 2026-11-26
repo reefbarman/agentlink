@@ -80,11 +80,15 @@ export function renderBrowserGatewayIndexHtml(options: {
   const assetVersion = encodeURIComponent(options.assetVersion);
   const config = options.config;
   const nonce = options.nonce ? ` nonce="${htmlEscape(options.nonce)}"` : "";
+  const viewportFit =
+    config.routeByInstance && !config.askAgentOnly
+      ? ", viewport-fit=cover"
+      : "";
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1${viewportFit}">
   <meta name="application-name" content="${htmlEscape(options.applicationName ?? "AgentLink Remote")}">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="${htmlEscape(options.shortName ?? "AgentLink")}">

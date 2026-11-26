@@ -24,6 +24,7 @@ import {
   type OutsideWriteActionApprovalReviewInput,
 } from "./actionApprovalReview.js";
 import { describe, expect, it, vi } from "vitest";
+import { withTimersAdvanced } from "../testing/fakeTimers.js";
 
 const home = path.resolve("/Users/tester");
 const outside = path.resolve("/outside/project");
@@ -539,7 +540,11 @@ describe("one-shot Guardian action review", () => {
         sessionModel: invalid.sessionModel,
       }),
     });
-    const invalidOutcome = await invalidReviewer.review(outsideReadInput());
+    // Skips the real backoff between attempts (1.5s in total).
+    const invalidOutcome = await withTimersAdvanced(
+      () => invalidReviewer.review(outsideReadInput()),
+      5_000,
+    );
     expect(invalidOutcome).toMatchObject({
       disposition: "reviewed",
       result: { outcome: "deny", status: "invalid" },

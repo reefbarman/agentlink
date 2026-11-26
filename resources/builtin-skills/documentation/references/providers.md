@@ -33,7 +33,15 @@ These local diagnostics do not include credentials, account/session/thread ident
 5. Review the context and output limits, tool calling, thinking, image, and PDF document support. Missing catalog metadata uses editable conservative defaults, not verified capabilities. Coding-agent use requires working function/tool calls, not just text completion.
 6. Save, select the model with `/model`, and send a short request. A saved credential does not establish connectivity, model entitlement, or available quota.
 
-The wizard is **add-only**: each run creates one model backed by one connection. To edit or remove models, share one endpoint across multiple models, or configure advanced fields, edit `~/.agentlink/openai-compatible.json`.
+The wizard is **add-only**: each run creates one model backed by one connection. For existing entries or a multi-model connection, edit the shared file directly.
+
+### Edit the provider or model list
+
+1. **Open `~/.agentlink/openai-compatible.json`.** It's the shared VS Code and Desktop provider file, not workspace `settings.json`. The standalone CLI uses a separate file; see [Standalone CLI](standalone-cli.md).
+2. **Change only the relevant entry.** To add a model to an existing provider, update that connection's `models` array. Add a new object to `connections` for a separate API root or credential. Preserve unrelated entries and stable local IDs. If removing a model, also check whether its connection's `auxiliaryModel` points to it.
+3. **Check the endpoint contract.** For new models, use the exact upstream ID returned by `GET <baseUrl>/models` where available. Use the API root that serves `/chat/completions`, including any provider route prefix. Match capabilities to what that endpoint accepts. Don't copy API keys into the JSON.
+4. **Save and check AgentLink's catalogue.** VS Code watches the file and applies valid changes automatically; no window reload is normally needed. Reopen `/model`, or call `list_models` with `provider: "openai-compatible:<connection-id>"` and confirm the expected entries. If AgentLink warns that it kept the previous configuration, check the `[openai-compatible]` messages in the **AgentLink Agent** Output channel for the field path, fix it, and save again. Valid JSON can still fail AgentLink's validation, and reloading won't fix an invalid field. If there is no validation warning, check whether the provider is disabled.
+5. **Test the new model.** Send a short request, and test a tool round if you need agent use. A successful endpoint request doesn't prove the model appeared in AgentLink, and a picker entry doesn't prove upstream access or quota. Report those checks separately.
 
 ### Shared connection file
 
@@ -68,6 +76,7 @@ The file uses this envelope. If it already exists, merge entries into its `conne
 
 - Connection `id` is a stable local key and creates provider ID `openai-compatible:<id>`. Use `profile: "generic"` for other Chat Completions-compatible servers.
 - Model `id` is AgentLink's unique local selector ID. Model `model` is the exact upstream wire ID, which may contain a vendor prefix. Keep local IDs stable so saved sessions can resolve them.
+- Optional connection-level `auxiliaryModel` must match a local `models[].id` in the **same** connection, not `models[].model`. In the example above, use `"auxiliaryModel": "openrouter-my-model"`, not `"vendor/model-id"`. Omit it unless you want to use a specific model for auxiliary requests.
 - `authKey` names a credential, not its value. Run **AgentLink: Set OpenAI-compatible API Key** and select that name to store the key securely; **AgentLink: Clear OpenAI-compatible API Key** removes it. On macOS, the shared Keychain store lets local AgentLink surfaces reuse the credential. Never put API keys in this JSON or static headers.
 - Omit `authKey` for a no-auth server. Do not add a dummy key merely because another client's example requires one.
 - `contextWindow` and `maxOutputTokens` describe the served model's limits. VS Code agent responses default to 8,192 tokens; optional model-level `agentMaxTokens` overrides that request size and must not exceed `maxOutputTokens`.

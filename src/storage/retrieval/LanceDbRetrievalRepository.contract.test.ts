@@ -7,7 +7,7 @@ import {
   acquireCodeIndexWriterLease,
 } from "../../indexer/codeIndexWriterLease.js";
 import { connect, makeArrowTable } from "@lancedb/lancedb";
-import { describe, expect, it } from "vitest";
+import { describe, expect } from "vitest";
 import {
   retrievalChunkSchema,
   retrievalRelationSchema,
@@ -22,6 +22,10 @@ import {
   type RetrievalRepositoryContractInstance,
 } from "../../test/retrievalRepositoryContract.js";
 import { withRetrievalStoreLock } from "./retrievalStoreLock.js";
+import { partitionTests } from "../../testing/testParts.js";
+
+// Runs as three parallel files: this one and the .part2 and .part3 files.
+const { it } = partitionTests(3);
 
 const fingerprint: RetrievalFingerprint = {
   schemaVersion: 1,
@@ -80,7 +84,7 @@ async function createLanceDbContractInstance(): Promise<RetrievalRepositoryContr
 describeRetrievalRepositoryContract(
   "LanceDbRetrievalRepository",
   createLanceDbContractInstance,
-  { testTimeoutMs: LANCEDB_CONTRACT_TEST_TIMEOUT_MS },
+  { testTimeoutMs: LANCEDB_CONTRACT_TEST_TIMEOUT_MS, it },
 );
 
 describe("LanceDbRetrievalRepository persistence", () => {
