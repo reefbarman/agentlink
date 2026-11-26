@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.110.0
+
+- Test-only helper now refuses to run Vitest if home directory isolation is unsafe (e.g. threads pool), with no change to shipped extension or desktop behaviour.
+- Deleting development feedback now permanently removes the report, its full-content file and triage history from disk (with locking and index renumbering), and purges entries older builds only hid.
+
 ## 1.109.0
 
 - The browser gateway now reopens the last VS Code workspace and chat tab you viewed, alongside remembering whether you were in Ask Agent or VS Code. The selection stays in that browser across reloads and new visits.

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2",
-  "createdAt": "2026-11-26T05:13:02.934Z",
+  "sourceSha": "35a68166c2de8ed27a87dd47b3366fb485daaf9f",
+  "createdAt": "2026-11-26T23:26:43.397Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,76 +10,82 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.108.0",
-      "baselineRef": "v1.108.0",
-      "reserved": "1.108.0",
-      "commits": ["8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2"],
-      "unknownPaths": ["vitest.testPartsSequencer.mts"],
+      "published": "1.109.0",
+      "baselineRef": "v1.109.0",
+      "reserved": "1.109.0",
+      "commits": [
+        "7435ae4f72a72625bc534d96bff6bcbf2a92dc09",
+        "35a68166c2de8ed27a87dd47b3366fb485daaf9f"
+      ],
+      "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.109.0",
+      "version": "1.110.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.109.0",
+      "tag": "v1.110.0",
       "notes": [
         {
-          "sha": "8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2",
-          "subject": "feat: restore browser gateway views and streamline test runs",
-          "summary": "The browser gateway now remembers the last VS Code workspace and chat across visits, uses iPhone safe areas without wasting chat space, and moves Check for updates into the chat toolbar; also adds provider-editing docs and faster test runs.}",
+          "sha": "7435ae4f72a72625bc534d96bff6bcbf2a92dc09",
+          "subject": "test: fail closed when Vitest home isolation is unsafe",
+          "summary": "Test-only helper now refuses to run Vitest if home directory isolation is unsafe (e.g. threads pool), with no change to shipped extension or desktop behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "35a68166c2de8ed27a87dd47b3366fb485daaf9f",
+          "subject": "feat(feedback): delete feedback from disk instead of hiding it",
+          "summary": "Deleting development feedback now permanently removes the report, its full-content file and triage history from disk (with locking and index renumbering), and purges entries older builds only hid.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.108.0",
-      "baselineRef": "desktop-v0.108.0",
-      "reserved": "0.108.0",
-      "commits": ["8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2"],
-      "unknownPaths": ["vitest.testPartsSequencer.mts"],
+      "published": "0.109.0",
+      "baselineRef": "desktop-v0.109.0",
+      "reserved": "0.109.0",
+      "commits": [
+        "7435ae4f72a72625bc534d96bff6bcbf2a92dc09",
+        "35a68166c2de8ed27a87dd47b3366fb485daaf9f"
+      ],
+      "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.109.0",
+      "version": "0.110.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.109.0",
+      "tag": "desktop-v0.110.0",
       "notes": [
         {
-          "sha": "8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2",
-          "subject": "feat: restore browser gateway views and streamline test runs",
-          "summary": "The browser gateway now remembers the last VS Code workspace and chat across visits, uses iPhone safe areas without wasting chat space, and moves Check for updates into the chat toolbar; also adds provider-editing docs and faster test runs.}",
+          "sha": "7435ae4f72a72625bc534d96bff6bcbf2a92dc09",
+          "subject": "test: fail closed when Vitest home isolation is unsafe",
+          "summary": "Test-only helper now refuses to run Vitest if home directory isolation is unsafe (e.g. threads pool), with no change to shipped extension or desktop behaviour.",
+          "breaking": false
+        },
+        {
+          "sha": "35a68166c2de8ed27a87dd47b3366fb485daaf9f",
+          "subject": "feat(feedback): delete feedback from disk instead of hiding it",
+          "summary": "Deleting development feedback now permanently removes the report, its full-content file and triage history from disk (with locking and index renumbering), and purges entries older builds only hid.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.75.0",
-      "baselineRef": "cli-v0.75.0",
-      "reserved": "0.75.0",
-      "commits": ["8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2"],
-      "unknownPaths": ["vitest.testPartsSequencer.mts"],
+      "published": "0.76.0",
+      "baselineRef": "cli-v0.76.0",
+      "reserved": "0.76.0",
+      "commits": [],
+      "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.76.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.76.0",
-      "notes": [
-        {
-          "sha": "8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2",
-          "subject": "feat: restore browser gateway views and streamline test runs",
-          "summary": "The browser gateway now remembers the last VS Code workspace and chat across visits, uses iPhone safe areas without wasting chat space, and moves Check for updates into the chat toolbar; also adds provider-editing docs and faster test runs.}",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
       "published": "0.60.0",
@@ -94,31 +100,39 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.78.0",
-      "baselineRef": "assistant-v0.78.0",
-      "reserved": "0.78.0",
-      "commits": ["8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2"],
-      "unknownPaths": ["vitest.testPartsSequencer.mts"],
+      "published": "0.79.0",
+      "baselineRef": "assistant-v0.79.0",
+      "reserved": "0.79.0",
+      "commits": ["35a68166c2de8ed27a87dd47b3366fb485daaf9f"],
+      "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.79.0",
+      "version": "0.80.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.79.0",
+      "tag": "assistant-v0.80.0",
       "notes": [
         {
-          "sha": "8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2",
-          "subject": "feat: restore browser gateway views and streamline test runs",
-          "summary": "The browser gateway now remembers the last VS Code workspace and chat across visits, uses iPhone safe areas without wasting chat space, and moves Check for updates into the chat toolbar; also adds provider-editing docs and faster test runs.}",
+          "sha": "35a68166c2de8ed27a87dd47b3366fb485daaf9f",
+          "subject": "feat(feedback): delete feedback from disk instead of hiding it",
+          "summary": "Deleting development feedback now permanently removes the report, its full-content file and triage history from disk (with locking and index renumbering), and purges entries older builds only hid.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
+    "7435ae4f72a72625bc534d96bff6bcbf2a92dc09": {
+      "bump": "none",
+      "breakingUnits": [],
+      "summary": "Test-only helper now refuses to run Vitest if home directory isolation is unsafe (e.g. threads pool), with no change to shipped extension or desktop behaviour.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
     "47dea7cfcdeac25101b615a6671ea7c3f57d2b0a": {
       "bump": "minor",
       "breakingUnits": [],
@@ -155,6 +169,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "The browser gateway now remembers the last VS Code workspace and chat across visits, uses iPhone safe areas without wasting chat space, and moves Check for updates into the chat toolbar; also adds provider-editing docs and faster test runs.}",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "35a68166c2de8ed27a87dd47b3366fb485daaf9f": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Deleting development feedback now permanently removes the report, its full-content file and triage history from disk (with locking and index renumbering), and purges entries older builds only hid.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
