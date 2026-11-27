@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.60.1 — 2026-11-27
+
+- Web search/fetch results list each citation once, unscoped research background agents run read-only instead of being rejected, spawn results report a read-only command policy, and unrequested transparent images are flagged.
+
 ## 0.60.0 — 2026-11-25
 
 - VS Code gains commands and sidebar controls to turn semantic search embeddings on or off, an Embeddings health section, lazy loading of large transcript images for remote views, and faster crashed-window credential queue recovery and indexer stability fixes.

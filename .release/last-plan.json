@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "35a68166c2de8ed27a87dd47b3366fb485daaf9f",
-  "createdAt": "2026-11-26T23:26:43.397Z",
+  "sourceSha": "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf",
+  "createdAt": "2026-11-27T01:49:27.730Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,67 +10,67 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.109.0",
-      "baselineRef": "v1.109.0",
-      "reserved": "1.109.0",
+      "published": "1.110.0",
+      "baselineRef": "v1.110.0",
+      "reserved": "1.110.0",
       "commits": [
-        "7435ae4f72a72625bc534d96bff6bcbf2a92dc09",
-        "35a68166c2de8ed27a87dd47b3366fb485daaf9f"
+        "442c3916a76018b4642829f44a6d88fbea1d04b7",
+        "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.110.0",
+      "version": "1.111.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.110.0",
+      "tag": "v1.111.0",
       "notes": [
         {
-          "sha": "7435ae4f72a72625bc534d96bff6bcbf2a92dc09",
-          "subject": "test: fail closed when Vitest home isolation is unsafe",
-          "summary": "Test-only helper now refuses to run Vitest if home directory isolation is unsafe (e.g. threads pool), with no change to shipped extension or desktop behaviour.",
+          "sha": "442c3916a76018b4642829f44a6d88fbea1d04b7",
+          "subject": "feat(webview): show sent /btw threads as an expandable card",
+          "summary": "Sent /btw side threads now appear as an expandable \"/btw thread\" card in the chat message and in the queue, so users can reread the attached exchanges.",
           "breaking": false
         },
         {
-          "sha": "35a68166c2de8ed27a87dd47b3366fb485daaf9f",
-          "subject": "feat(feedback): delete feedback from disk instead of hiding it",
-          "summary": "Deleting development feedback now permanently removes the report, its full-content file and triage history from disk (with locking and index renumbering), and purges entries older builds only hid.",
+          "sha": "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf",
+          "subject": "fix(tools): dedupe web citations, run unscoped research read-only, flag unrequested image transparency",
+          "summary": "Web search/fetch results list each citation once, unscoped research background agents run read-only instead of being rejected, spawn results report a read-only command policy, and unrequested transparent images are flagged.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.109.0",
-      "baselineRef": "desktop-v0.109.0",
-      "reserved": "0.109.0",
+      "published": "0.110.0",
+      "baselineRef": "desktop-v0.110.0",
+      "reserved": "0.110.0",
       "commits": [
-        "7435ae4f72a72625bc534d96bff6bcbf2a92dc09",
-        "35a68166c2de8ed27a87dd47b3366fb485daaf9f"
+        "442c3916a76018b4642829f44a6d88fbea1d04b7",
+        "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.110.0",
+      "version": "0.111.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.110.0",
+      "tag": "desktop-v0.111.0",
       "notes": [
         {
-          "sha": "7435ae4f72a72625bc534d96bff6bcbf2a92dc09",
-          "subject": "test: fail closed when Vitest home isolation is unsafe",
-          "summary": "Test-only helper now refuses to run Vitest if home directory isolation is unsafe (e.g. threads pool), with no change to shipped extension or desktop behaviour.",
+          "sha": "442c3916a76018b4642829f44a6d88fbea1d04b7",
+          "subject": "feat(webview): show sent /btw threads as an expandable card",
+          "summary": "Sent /btw side threads now appear as an expandable \"/btw thread\" card in the chat message and in the queue, so users can reread the attached exchanges.",
           "breaking": false
         },
         {
-          "sha": "35a68166c2de8ed27a87dd47b3366fb485daaf9f",
-          "subject": "feat(feedback): delete feedback from disk instead of hiding it",
-          "summary": "Deleting development feedback now permanently removes the report, its full-content file and triage history from disk (with locking and index renumbering), and purges entries older builds only hid.",
+          "sha": "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf",
+          "subject": "fix(tools): dedupe web citations, run unscoped research read-only, flag unrequested image transparency",
+          "summary": "Web search/fetch results list each citation once, unscoped research background agents run read-only instead of being rejected, spawn results report a read-only command policy, and unrequested transparent images are flagged.",
           "breaking": false
         }
       ]
@@ -79,46 +79,79 @@
       "published": "0.76.0",
       "baselineRef": "cli-v0.76.0",
       "reserved": "0.76.0",
-      "commits": [],
+      "commits": ["8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.76.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.76.1",
+      "notes": [
+        {
+          "sha": "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf",
+          "subject": "fix(tools): dedupe web citations, run unscoped research read-only, flag unrequested image transparency",
+          "summary": "Web search/fetch results list each citation once, unscoped research background agents run read-only instead of being rejected, spawn results report a read-only command policy, and unrequested transparent images are flagged.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.60.0",
       "baselineRef": "sdk-v0.60.0",
       "reserved": "0.60.0",
-      "commits": [],
+      "commits": ["8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.60.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.60.1",
+      "notes": [
+        {
+          "sha": "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf",
+          "subject": "fix(tools): dedupe web citations, run unscoped research read-only, flag unrequested image transparency",
+          "summary": "Web search/fetch results list each citation once, unscoped research background agents run read-only instead of being rejected, spawn results report a read-only command policy, and unrequested transparent images are flagged.",
+          "breaking": false
+        }
+      ]
     },
     "assistant": {
-      "published": "0.79.0",
-      "baselineRef": "assistant-v0.79.0",
-      "reserved": "0.79.0",
-      "commits": ["35a68166c2de8ed27a87dd47b3366fb485daaf9f"],
+      "published": "0.80.0",
+      "baselineRef": "assistant-v0.80.0",
+      "reserved": "0.80.0",
+      "commits": [
+        "442c3916a76018b4642829f44a6d88fbea1d04b7",
+        "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.80.0",
+      "version": "0.81.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.80.0",
+      "tag": "assistant-v0.81.0",
       "notes": [
         {
-          "sha": "35a68166c2de8ed27a87dd47b3366fb485daaf9f",
-          "subject": "feat(feedback): delete feedback from disk instead of hiding it",
-          "summary": "Deleting development feedback now permanently removes the report, its full-content file and triage history from disk (with locking and index renumbering), and purges entries older builds only hid.",
+          "sha": "442c3916a76018b4642829f44a6d88fbea1d04b7",
+          "subject": "feat(webview): show sent /btw threads as an expandable card",
+          "summary": "Sent /btw side threads now appear as an expandable \"/btw thread\" card in the chat message and in the queue, so users can reread the attached exchanges.",
+          "breaking": false
+        },
+        {
+          "sha": "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf",
+          "subject": "fix(tools): dedupe web citations, run unscoped research read-only, flag unrequested image transparency",
+          "summary": "Web search/fetch results list each citation once, unscoped research background agents run read-only instead of being rejected, spawn results report a read-only command policy, and unrequested transparent images are flagged.",
           "breaking": false
         }
       ]
@@ -129,6 +162,14 @@
       "bump": "none",
       "breakingUnits": [],
       "summary": "Test-only helper now refuses to run Vitest if home directory isolation is unsafe (e.g. threads pool), with no change to shipped extension or desktop behaviour.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "35a68166c2de8ed27a87dd47b3366fb485daaf9f": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Deleting development feedback now permanently removes the report, its full-content file and triage history from disk (with locking and index renumbering), and purges entries older builds only hid.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
@@ -173,10 +214,18 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "35a68166c2de8ed27a87dd47b3366fb485daaf9f": {
+    "442c3916a76018b4642829f44a6d88fbea1d04b7": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "Deleting development feedback now permanently removes the report, its full-content file and triage history from disk (with locking and index renumbering), and purges entries older builds only hid.",
+      "summary": "Sent /btw side threads now appear as an expandable \"/btw thread\" card in the chat message and in the queue, so users can reread the attached exchanges.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Web search/fetch results list each citation once, unscoped research background agents run read-only instead of being rejected, spawn results report a read-only command policy, and unrequested transparent images are flagged.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
