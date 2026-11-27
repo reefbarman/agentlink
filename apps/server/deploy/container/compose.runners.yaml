@@ -56,7 +56,8 @@ services:
       - DAC_READ_SEARCH
     security_opt:
       - no-new-privileges:true
-    mem_limit: 256m
+    # Node needs about 300 MB just to load the agentlink-server bundle.
+    mem_limit: 512m
     pids_limit: 64
     entrypoint: ["agentlink-server", "runner-manager"]
     command:

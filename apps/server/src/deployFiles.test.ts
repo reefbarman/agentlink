@@ -269,6 +269,51 @@ describe("deployment files", () => {
     expect(overlay).toMatch(/^ {2}runner-manager:\n {4}internal: true\n/mu);
   });
 
+  it("gives every service that runs the server bundle room to load it", async () => {
+    // Node needs about 300 MB just to parse the single-file bundle, so a
+    // smaller limit OOM-kills the service at startup (exit 137).
+    const container = path.join(deploy, "container");
+    const files = (await fs.readdir(container)).filter((file) =>
+      file.startsWith("compose"),
+    );
+    const bundleImage =
+      /agentlink-(?:assistant|command-worker|publisher|backup|updater):/u;
+    const megabytes = (raw: string) => {
+      const value = raw.replace(/^\$\{[^:}]+:-([^}]+)\}$/u, "$1");
+      const match = /^(\d+)([kmg])$/iu.exec(value);
+      if (!match) throw new Error(`unparsed mem_limit ${raw}`);
+      const scale = { k: 1 / 1024, m: 1, g: 1024 }[
+        match[2]!.toLowerCase() as "k" | "m" | "g"
+      ];
+      return Number(match[1]) * scale;
+    };
+    const checked: string[] = [];
+    for (const file of files) {
+      const text = await fs.readFile(path.join(container, file), "utf8");
+      const services = text.slice(text.indexOf("\nservices:\n"));
+      const end = services.search(/\n(?!services:)\S/u);
+      const blocks = (end > 0 ? services.slice(0, end) : services).split(
+        /^(?= {2}[a-z][a-z0-9-]*:$)/mu,
+      );
+      for (const block of blocks) {
+        const name = /^ {2}([a-z][a-z0-9-]*):$/mu.exec(block)?.[1];
+        const image = /^ {4}image: (.+)$/mu.exec(block)?.[1];
+        const limit = /^ {4}mem_limit: (.+)$/mu.exec(block)?.[1];
+        if (!name || !image || !bundleImage.test(image) || !limit) continue;
+        expect(megabytes(limit), `${file} ${name}`).toBeGreaterThanOrEqual(512);
+        checked.push(`${file} ${name}`);
+      }
+    }
+    expect(checked).toEqual(
+      expect.arrayContaining([
+        "compose.yaml egress-gateway",
+        "compose.yaml command-worker",
+        "compose.runners.yaml runner-manager",
+        "compose.publisher.yaml publisher",
+      ]),
+    );
+  });
+
   it("mounts the whole data root (and the audit log) only in the assistant", async () => {
     const container = path.join(deploy, "container");
     const files = (await fs.readdir(container)).filter((file) =>
