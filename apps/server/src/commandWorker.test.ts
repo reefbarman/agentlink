@@ -370,6 +370,15 @@ describe("command worker", () => {
     expect(alive()).toBe(false);
   });
 
+  it("finishes when a background job still holds the output pipes", async () => {
+    // A job left holding stdout (as one forked mid-signal can be) must not
+    // keep the command from finishing until the job ends on its own.
+    const test = await fixture();
+    const result = await test.run(test.request("sleep 30 & echo started"));
+    expect(result.exit).toEqual({ exitCode: 0 });
+    expect(result.stdout).toBe("started\n");
+  });
+
   it("closes promptly while a command is still running", async () => {
     const test = await fixture();
     const handle = test.launcher.launchProcess({

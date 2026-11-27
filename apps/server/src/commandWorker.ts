@@ -225,12 +225,16 @@ export async function startCommandWorker(
       };
       process_.stdout?.on("data", forward("stdout"));
       process_.stderr?.on("data", forward("stderr"));
+      // Background jobs the command left in its process group end with it.
+      // Kill them on `exit`, not `close`: `close` waits for every holder of the
+      // output pipes, so a job still writing to them (or one forked while a
+      // group signal was in flight, and so missed it) would hold it open.
+      process_.once("exit", () => killGroup(process_, "SIGKILL"));
       // `close` follows the last output, so the exit frame is always last.
       process_.once("close", (code, signal) => {
         exited = true;
         live.delete(process_);
         if (process_.pid === undefined) return;
-        // Background jobs the command left in its process group end with it.
         killGroup(process_, "SIGKILL");
         reapOrphans();
         send({
