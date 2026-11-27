@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "eeea020e6b650fed38a7d1f20e9645cfa579446a",
-  "createdAt": "2026-11-27T04:02:31.851Z",
+  "sourceSha": "52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55",
+  "createdAt": "2026-11-27T22:42:21.101Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -13,25 +13,49 @@
       "published": "1.111.1",
       "baselineRef": "v1.111.1",
       "reserved": "1.111.1",
-      "commits": [],
+      "commits": ["52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "1.111.2",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "v1.111.2",
+      "notes": [
+        {
+          "sha": "52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55",
+          "subject": "fix(chat): cap question card height so it cannot push the transcript off screen",
+          "summary": "The chat question card is now capped at half the viewport height and scrolls internally, so a tall card no longer pushes the transcript off screen, especially on small screens.'",
+          "breaking": false
+        }
+      ]
     },
     "desktop": {
       "published": "0.111.1",
       "baselineRef": "desktop-v0.111.1",
       "reserved": "0.111.1",
-      "commits": [],
+      "commits": ["52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.111.2",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "desktop-v0.111.2",
+      "notes": [
+        {
+          "sha": "52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55",
+          "subject": "fix(chat): cap question card height so it cannot push the transcript off screen",
+          "summary": "The chat question card is now capped at half the viewport height and scrolls internally, so a tall card no longer pushes the transcript off screen, especially on small screens.'",
+          "breaking": false
+        }
+      ]
     },
     "cli": {
       "published": "0.76.1",
@@ -58,31 +82,39 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.81.1",
-      "baselineRef": "assistant-v0.81.1",
-      "reserved": "0.81.1",
-      "commits": ["eeea020e6b650fed38a7d1f20e9645cfa579446a"],
+      "published": "0.81.2",
+      "baselineRef": "assistant-v0.81.2",
+      "reserved": "0.81.2",
+      "commits": ["52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.81.2",
+      "version": "0.81.3",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.81.2",
+      "tag": "assistant-v0.81.3",
       "notes": [
         {
-          "sha": "eeea020e6b650fed38a7d1f20e9645cfa579446a",
-          "subject": "fix(server): give the egress gateway and runner manager 512m to load the bundle",
-          "summary": "Raises the memory limit of the egress gateway and runner manager containers from 256m to 512m so they no longer get OOM-killed at startup while loading the server bundle.}]}</br>",
+          "sha": "52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55",
+          "subject": "fix(chat): cap question card height so it cannot push the transcript off screen",
+          "summary": "The chat question card is now capped at half the viewport height and scrolls internally, so a tall card no longer pushes the transcript off screen, especially on small screens.'",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
+    "eeea020e6b650fed38a7d1f20e9645cfa579446a": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Raises the memory limit of the egress gateway and runner manager containers from 256m to 512m so they no longer get OOM-killed at startup while loading the server bundle.}]}</br>",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
     "052ed6811fa6e3a313e1918665133dae215bb31a": {
       "bump": "patch",
       "breakingUnits": [],
@@ -99,10 +131,10 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "eeea020e6b650fed38a7d1f20e9645cfa579446a": {
+    "52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Raises the memory limit of the egress gateway and runner manager containers from 256m to 512m so they no longer get OOM-killed at startup while loading the server bundle.}]}</br>",
+      "summary": "The chat question card is now capped at half the viewport height and scrolls internally, so a tall card no longer pushes the transcript off screen, especially on small screens.'",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
