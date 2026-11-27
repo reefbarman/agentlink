@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "542f13ae1032a47e1864076103a802dac460d042",
-  "createdAt": "2026-11-27T03:20:33.708Z",
+  "sourceSha": "eeea020e6b650fed38a7d1f20e9645cfa579446a",
+  "createdAt": "2026-11-27T04:02:31.851Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,52 +10,28 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.111.0",
-      "baselineRef": "v1.111.0",
-      "reserved": "1.111.0",
-      "commits": ["052ed6811fa6e3a313e1918665133dae215bb31a"],
+      "published": "1.111.1",
+      "baselineRef": "v1.111.1",
+      "reserved": "1.111.1",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "1.111.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "v1.111.1",
-      "notes": [
-        {
-          "sha": "052ed6811fa6e3a313e1918665133dae215bb31a",
-          "subject": "fix(execute_command): tell protected-git native retries to drop the sandbox terminal target",
-          "summary": "Protected-git recovery guidance now tells callers to omit terminal_id, terminal_name and split_from on the native retry, since the sandbox terminal cannot run native commands.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "desktop": {
-      "published": "0.111.0",
-      "baselineRef": "desktop-v0.111.0",
-      "reserved": "0.111.0",
-      "commits": ["052ed6811fa6e3a313e1918665133dae215bb31a"],
+      "published": "0.111.1",
+      "baselineRef": "desktop-v0.111.1",
+      "reserved": "0.111.1",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.111.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "desktop-v0.111.1",
-      "notes": [
-        {
-          "sha": "052ed6811fa6e3a313e1918665133dae215bb31a",
-          "subject": "fix(execute_command): tell protected-git native retries to drop the sandbox terminal target",
-          "summary": "Protected-git recovery guidance now tells callers to omit terminal_id, terminal_name and split_from on the native retry, since the sandbox terminal cannot run native commands.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "cli": {
       "published": "0.76.1",
@@ -82,34 +58,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.81.0",
-      "baselineRef": "assistant-v0.81.0",
-      "reserved": "0.81.0",
-      "commits": [
-        "052ed6811fa6e3a313e1918665133dae215bb31a",
-        "542f13ae1032a47e1864076103a802dac460d042"
-      ],
+      "published": "0.81.1",
+      "baselineRef": "assistant-v0.81.1",
+      "reserved": "0.81.1",
+      "commits": ["eeea020e6b650fed38a7d1f20e9645cfa579446a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.81.1",
+      "version": "0.81.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.81.1",
+      "tag": "assistant-v0.81.2",
       "notes": [
         {
-          "sha": "052ed6811fa6e3a313e1918665133dae215bb31a",
-          "subject": "fix(execute_command): tell protected-git native retries to drop the sandbox terminal target",
-          "summary": "Protected-git recovery guidance now tells callers to omit terminal_id, terminal_name and split_from on the native retry, since the sandbox terminal cannot run native commands.",
-          "breaking": false
-        },
-        {
-          "sha": "542f13ae1032a47e1864076103a802dac460d042",
-          "subject": "fix(server): kill leftover command process-group jobs on exit, not close",
-          "summary": "The assistant server now kills leftover background jobs in a command's process group when the command exits, so commands no longer hang when a job keeps the output pipes open.",
+          "sha": "eeea020e6b650fed38a7d1f20e9645cfa579446a",
+          "subject": "fix(server): give the egress gateway and runner manager 512m to load the bundle",
+          "summary": "Raises the memory limit of the egress gateway and runner manager containers from 256m to 512m so they no longer get OOM-killed at startup while loading the server bundle.}]}</br>",
           "breaking": false
         }
       ]
@@ -128,6 +95,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "The assistant server now kills leftover background jobs in a command's process group when the command exits, so commands no longer hang when a job keeps the output pipes open.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "eeea020e6b650fed38a7d1f20e9645cfa579446a": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Raises the memory limit of the egress gateway and runner manager containers from 256m to 512m so they no longer get OOM-killed at startup while loading the server bundle.}]}</br>",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
