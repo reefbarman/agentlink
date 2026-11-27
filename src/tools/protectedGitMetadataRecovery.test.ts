@@ -45,6 +45,16 @@ describe("protectedGitMetadataRecovery", () => {
     });
   });
 
+  it("tells the native retry to drop the sandbox terminal target", async () => {
+    const recovery = await recover(objectWriteDenial);
+    expect(recovery?.retry_guidance.options[0]?.omit_parameters).toEqual([
+      "terminal_id",
+      "terminal_name",
+      "split_from",
+    ]);
+    expect(recovery?.retry_guidance.message).toContain("terminal_name");
+  });
+
   it("needs both the temporary-file denial and the object-write failure", async () => {
     await expect(
       recover(

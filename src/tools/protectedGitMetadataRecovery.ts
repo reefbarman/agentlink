@@ -30,6 +30,8 @@ export interface ProtectedGitMetadataRecovery {
       reviewed_native_execution: true;
       command: string;
       cwd?: string;
+      /** Terminal targets stay bound to the sandbox, so the native retry must not reuse them. */
+      omit_parameters: ["terminal_id", "terminal_name", "split_from"];
       suggested_reason: string;
     }>;
   };
@@ -111,7 +113,7 @@ export async function protectedGitMetadataRecovery(input: {
     retry_guidance: {
       code: "protected_git_metadata",
       message:
-        "The sandbox denied a write to this repository's protected Git metadata. Earlier steps may have changed repository state; inspect it before any reviewed native retry. AgentLink will not retry automatically.",
+        "The sandbox denied a write to this repository's protected Git metadata. Earlier steps may have changed repository state; inspect it before any reviewed native retry. Omit terminal_id, terminal_name and split_from on the retry: a terminal the sandbox ran in cannot run native commands, so use no target or a new terminal_name. AgentLink will not retry automatically.",
       automatic_retry: false,
       options: [
         {
@@ -122,6 +124,7 @@ export async function protectedGitMetadataRecovery(input: {
           reviewed_native_execution: true,
           command,
           ...(input.includeCwd ? { cwd } : {}),
+          omit_parameters: ["terminal_id", "terminal_name", "split_from"],
           suggested_reason:
             "The command needs to write protected repository Git metadata.",
         },

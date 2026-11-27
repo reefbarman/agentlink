@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The `protected_git_metadata` reviewed native retry option now says to omit `terminal_id`, `terminal_name` and `split_from`. Before, retrying a command such as `npm run preflight` with the same `terminal_name` it first ran under was rejected, because that terminal belongs to the sandbox.
+
 ## 1.111.0
 
 - A `/btw` thread sent to the main chat now shows as a **/btw thread** card on your message instead of a `[/btw thread attached: …]` text marker. Expand it to read the side questions and answers that went with the message. Queued `/btw` messages show a compact thread chip, and editing one changes only your message while keeping the thread attached.
