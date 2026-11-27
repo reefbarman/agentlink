@@ -194,13 +194,13 @@ describe("executeCodexStandaloneWeb", () => {
     expect(result.content).toContain("1. One");
     expect(result.content).not.toContain("Two");
     expect(JSON.stringify(result)).not.toContain("must-not-leak");
+    // Each snippet reaches the model once: in content, not in citations or
+    // a per-activity citation copy.
     expect(result.citations).toEqual([
-      {
-        url: "https://one.example.com",
-        title: "One",
-        citedText: "First result",
-      },
+      { url: "https://one.example.com", title: "One" },
     ]);
+    expect(result.activities[0]).not.toHaveProperty("citations");
+    expect(JSON.stringify(result).split("First result")).toHaveLength(2);
     expect(webFetch).toHaveBeenCalledOnce();
     expect(capturedInit?.headers).toMatchObject({
       Authorization: "Bearer test-token",

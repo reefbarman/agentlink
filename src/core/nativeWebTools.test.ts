@@ -182,7 +182,6 @@ describe("native web provider continuation", () => {
           status: "completed",
           backend: "provider",
           query: "AgentLink",
-          citations: [{ url: "https://example.com/agentlink" }],
         },
       ],
       content: "AgentLink search result.",

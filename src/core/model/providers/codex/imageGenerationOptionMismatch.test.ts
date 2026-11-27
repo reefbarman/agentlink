@@ -81,6 +81,39 @@ describe("imageGenerationOptionMismatches", () => {
     });
   });
 
+  it("warns when a transparent background was returned but not requested", () => {
+    for (const background of [undefined, "opaque"] as const) {
+      const fields = imageGenerationOptionMismatchFields({ background }, [
+        { background: "opaque" },
+        { background: "transparent" },
+      ]);
+      expect(fields.option_mismatches).toEqual([
+        {
+          image_index: 1,
+          option: "background",
+          requested: background ?? "unset",
+          actual: "transparent",
+        },
+      ]);
+      expect(fields.warning).toContain(
+        "transparent background for image 1 although transparency was not requested",
+      );
+      expect(fields.warning).toContain('background: "opaque"');
+      expect(fields.warning).not.toContain("did not honour every");
+    }
+  });
+
+  it("stays silent about transparency that was requested, auto, or unreported", () => {
+    for (const background of ["transparent", "auto"] as const) {
+      expect(
+        imageGenerationOptionMismatchFields({ background }, [
+          { background: "transparent" },
+        ]),
+      ).toEqual({});
+    }
+    expect(imageGenerationOptionMismatchFields({}, [{}])).toEqual({});
+  });
+
   it("stays silent when options match, are auto, or are not reported", () => {
     expect(
       imageGenerationOptionMismatchFields(

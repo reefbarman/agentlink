@@ -29,6 +29,7 @@ import {
   getEngineHardLimit,
   resolveBackgroundBudget,
   parseBackgroundReasoningEffortInput,
+  READ_ONLY_CHILD_COMMAND_NOTE,
 } from "@agentlink/core/background-agent-tools";
 import { workHistoryRegistry } from "./WorkHistoryRegistry.js";
 import * as nodePath from "path";
@@ -12593,13 +12594,29 @@ export class AgentSessionManager {
     const configuredReviewDetail = configuredReviewEffort
       ? `${configuredReviewModel ?? route.resolvedModel}, effort=${configuredReviewEffort}`
       : configuredReviewModel;
+    // An unscoped Ask-mode delegation (for example taskClass "research")
+    // cannot write anyway. While an ancestor holds the tree-wide write lease
+    // it would be rejected as a writer, so run it with the readonly-research
+    // profile instead, exactly as taskClass "readonly-research" does.
+    const readOnlyLeaseFallback =
+      route.toolProfile === undefined &&
+      request.permissionProfile === undefined &&
+      !request.mode?.trim() &&
+      !request.ownedPaths?.length &&
+      route.resolvedMode === "ask" &&
+      parent !== undefined &&
+      (this.sessionOwnsMutationLease(parent.id) ||
+        this.findMutationLeaseOwningAncestor(parent) !== undefined);
+    const routeReason = readOnlyLeaseFallback
+      ? `${route.routingReason}; ran read-only (readonly-research tools, read-only commands) because the parent session holds the workspace write lease and no ownedPaths were declared`
+      : route.routingReason;
     const backendFallbackReason = configuredReviewDetail
       ? `configured review model target (${configuredReviewDetail})`
       : backendRoute.fallback
         ? backendRoute.fallback.reason === "images_unsupported"
-          ? `configured ACP agent ${backendRoute.fallback.reference} does not support image handoff; routed to native background agent; ${route.routingReason}`
-          : `configured ACP agent ${backendRoute.fallback.reference} was unavailable; ${route.routingReason}`
-        : route.routingReason;
+          ? `configured ACP agent ${backendRoute.fallback.reference} does not support image handoff; routed to native background agent; ${routeReason}`
+          : `configured ACP agent ${backendRoute.fallback.reference} was unavailable; ${routeReason}`
+        : routeReason;
     const backendFallbackUsed =
       Boolean(backendRoute.fallback) || route.fallbackUsed;
     const isReviewTask = isReviewTaskClass(route.taskClass);
@@ -12635,7 +12652,9 @@ export class AgentSessionManager {
     const effectiveToolProfile =
       effectivePermissionProfile === "review-only"
         ? "review"
-        : route.toolProfile;
+        : readOnlyLeaseFallback
+          ? "readonly-research"
+          : route.toolProfile;
     const usesReadOnlyNativeProfile =
       effectiveToolProfile === "review" ||
       effectiveToolProfile === "readonly-research" ||
@@ -13025,11 +13044,22 @@ export class AgentSessionManager {
     };
     this.scheduleBackgroundLaunch(session, runNativeBackground);
 
+    const childCommandsAreReadOnly =
+      bgContextOverrides.commandExecutionPolicy === "read-only" ||
+      usesReadOnlyNativeProfile ||
+      session.agentMode.toolGroups.includes("read-only-command");
+
     return {
       sessionId: session.id,
       resolvedMode: route.resolvedMode,
       resolvedModel: route.resolvedModel,
       resolvedProvider: route.resolvedProvider,
+      ...(childCommandsAreReadOnly
+        ? {
+            commandPolicy: "read-only" as const,
+            commandPolicyNote: READ_ONLY_CHILD_COMMAND_NOTE,
+          }
+        : {}),
       reasoningEffort: session.reasoningEffort,
       taskClass: route.taskClass,
       requestedModelTier: request.modelTier,

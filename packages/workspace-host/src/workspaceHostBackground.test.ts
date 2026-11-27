@@ -1065,6 +1065,8 @@ describe("workspace host background composition", () => {
         routingReason: "taskClass review_code: model_role review",
         fallbackUsed: false,
         expectedResult: "review_findings",
+        commandPolicy: "read-only",
+        commandPolicyNote: expect.stringContaining("Interpreters"),
       });
       await events.settled;
       expect(host.listBackgroundAgents(sessionId)[0]).toMatchObject({

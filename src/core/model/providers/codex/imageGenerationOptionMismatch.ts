@@ -5,7 +5,7 @@ import type {
 
 export interface ImageGenerationOptionMismatch {
   image_index: number;
-  option: "output_size" | "quality";
+  option: "output_size" | "quality" | "background";
   requested: string;
   actual: string;
 }
@@ -15,10 +15,20 @@ export interface ImageGenerationOptionMismatch {
  * returned image reports. Image backends may silently return a different
  * size or a lower quality; callers surface the result so the agent does not
  * assume the request was honoured. `auto` requests are never compared.
+ * A transparent background is reported whenever the caller did not ask for
+ * one (unset or `opaque`): a partly transparent image looks normal in chat
+ * but composites as a washed-out tile.
  */
 export function imageGenerationOptionMismatches(
-  options: Pick<CodexImageGenerationOptions, "outputSize" | "quality">,
-  images: ReadonlyArray<{ size?: string; quality?: string }>,
+  options: Pick<
+    CodexImageGenerationOptions,
+    "outputSize" | "quality" | "background"
+  >,
+  images: ReadonlyArray<{
+    size?: string;
+    quality?: string;
+    background?: string;
+  }>,
 ): ImageGenerationOptionMismatch[] {
   const requestedSize =
     options.outputSize && options.outputSize !== "auto"
@@ -51,6 +61,19 @@ export function imageGenerationOptionMismatches(
         actual: quality,
       });
     }
+    const background = image.background?.trim().toLowerCase();
+    if (
+      background === "transparent" &&
+      options.background !== "transparent" &&
+      options.background !== "auto"
+    ) {
+      mismatches.push({
+        image_index: index,
+        option: "background",
+        requested: options.background ?? "unset",
+        actual: background,
+      });
+    }
   });
   return mismatches;
 }
@@ -69,9 +92,13 @@ export interface ImageGenerationServedTool {
 export function imageGenerationOptionMismatchFields(
   options: Pick<
     CodexImageGenerationOptions,
-    "outputSize" | "quality" | "maskImage" | "complexity"
+    "outputSize" | "quality" | "background" | "maskImage" | "complexity"
   >,
-  images: ReadonlyArray<{ size?: string; quality?: string }>,
+  images: ReadonlyArray<{
+    size?: string;
+    quality?: string;
+    background?: string;
+  }>,
   served?: ImageGenerationServedTool,
 ): {
   served_image_tool?: CodexServedImageTool;
@@ -102,10 +129,13 @@ export function imageGenerationOptionMismatchFields(
       `The image backend served ${servedModel}${settingsText} instead of ${served.requestedImageModel}. On ChatGPT/Codex OAuth the backend chooses the image model, size and quality itself and ignores masks; the image model, exact sizes, quality, complexity and masks need an OpenAI API key. Describe the shape in the prompt (for example "Aspect ratio: 16:9") instead.${maskText}${complexityText ? ` The${complexityText}` : ""}`.trimEnd(),
     );
   }
-  if (mismatches.length > 0) {
+  const sizeOrQuality = mismatches.filter(
+    (item) => item.option !== "background",
+  );
+  if (sizeOrQuality.length > 0) {
     const summary = [
       ...new Set(
-        mismatches.map(
+        sizeOrQuality.map(
           (item) =>
             `${item.option} requested ${item.requested}, returned ${item.actual}`,
         ),
@@ -113,6 +143,18 @@ export function imageGenerationOptionMismatchFields(
     ].join("; ");
     warnings.push(
       `The image backend did not honour every requested option (${summary}). Use images[].size and images[].quality, not requested_options, when exact dimensions or quality matter.`,
+    );
+  }
+  const transparent = [
+    ...new Set(
+      mismatches
+        .filter((item) => item.option === "background")
+        .map((item) => item.image_index),
+    ),
+  ];
+  if (transparent.length > 0) {
+    warnings.push(
+      `The image backend returned a transparent background for image ${transparent.join(", ")} although transparency was not requested; the saved file may be partly see-through. If it must be opaque (for example to composite it), retry with background: "opaque".`,
     );
   }
   return {

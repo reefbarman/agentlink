@@ -4484,6 +4484,112 @@ describe("AgentSessionManager background agents", () => {
     (mgr as any).releaseWorkspaceMutationLease(leaseHolder);
   });
 
+  it("runs an unscoped research child read-only while its parent owns the mutation lease", async () => {
+    const coordinator = new WorkspaceMutationCoordinator();
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          config: configHost,
+          workspaceMutationCoordinator: coordinator,
+        },
+      },
+    );
+    const parent = await mgr.createSession("architect");
+    mgr.setToolContext(toolCtx);
+    const leaseHolder = { sessionId: parent.id };
+    await (mgr as any).ensureWorkspaceMutationLease(parent, leaseHolder);
+    const askRoute = async (_registry: unknown, request: any) => ({
+      resolvedMode: request.mode ?? "ask",
+      resolvedModel: "claude-sonnet-4-6",
+      resolvedProvider: "anthropic",
+      taskClass: request.taskClass ?? "general",
+      routingReason: "test route",
+      fallbackUsed: false,
+    });
+    mocks.resolveBackgroundRoute
+      .mockImplementationOnce(askRoute)
+      .mockImplementationOnce(askRoute);
+
+    const spawn = await mgr.spawnBackground(
+      { task: "research child", message: "research", taskClass: "research" },
+      parent.id,
+    );
+    expect(spawn).toMatchObject({
+      resolvedMode: "ask",
+      routingReason: expect.stringContaining("ran read-only"),
+      commandPolicy: "read-only",
+      commandPolicyNote: expect.stringContaining("Interpreters"),
+    });
+    await waitFor(
+      () => mocks.runArgs.mock.calls.length,
+      (calls) => calls === 1,
+    );
+    expect(mocks.runArgs.mock.calls[0]?.[1]).toMatchObject({
+      toolProfile: "readonly-research",
+    });
+
+    // Explicit writable intent is still rejected rather than downgraded.
+    await expect(
+      mgr.spawnBackground(
+        {
+          task: "explicit writer",
+          message: "write",
+          taskClass: "research",
+          permissionProfile: "workspace-safe",
+        },
+        parent.id,
+      ),
+    ).rejects.toMatchObject({
+      result: expect.objectContaining({ code: "workspace_conflict" }),
+    });
+
+    (mgr as any).releaseWorkspaceMutationLease(leaseHolder);
+  });
+
+  it("keeps the full Ask tool set for research when no lease is held", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const parent = await mgr.createSession("architect");
+    mgr.setToolContext(toolCtx);
+    mocks.resolveBackgroundRoute.mockResolvedValueOnce({
+      resolvedMode: "ask",
+      resolvedModel: "claude-sonnet-4-6",
+      resolvedProvider: "anthropic",
+      taskClass: "research",
+      routingReason: "test route",
+      fallbackUsed: false,
+    });
+
+    const spawn = await mgr.spawnBackground(
+      { task: "research child", message: "research", taskClass: "research" },
+      parent.id,
+    );
+    expect(spawn.routingReason).not.toContain("ran read-only");
+    await waitFor(
+      () => mocks.runArgs.mock.calls.length,
+      (calls) => calls === 1,
+    );
+    expect(mocks.runArgs.mock.calls[0]?.[1]?.toolProfile).toBeUndefined();
+  });
+
+  it("omits the read-only command note for writable children", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const spawn = await mgr.spawnBackground({
+      task: "writer",
+      message: "write",
+      mode: "code",
+    });
+    expect(spawn).not.toHaveProperty("commandPolicy");
+    expect(spawn).not.toHaveProperty("commandPolicyNote");
+  });
+
   it("reports a background writer waiting for workspace write access", async () => {
     const coordinator = new WorkspaceMutationCoordinator();
     const mgr = new AgentSessionManager(

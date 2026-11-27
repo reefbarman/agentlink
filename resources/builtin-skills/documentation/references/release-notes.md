@@ -3,6 +3,10 @@
 ## Unreleased
 
 - A `/btw` thread sent to the main chat now shows as a **/btw thread** card on your message instead of a `[/btw thread attached: …]` text marker. Expand it to read the side questions and answers that went with the message. Queued `/btw` messages show a compact thread chip, and editing one changes only your message while keeping the thread attached.
+- `web_search` and `web_fetch` results no longer repeat each source. Citations are listed once at the top level instead of also under every activity, and ChatGPT/Codex search citations drop the snippet that is already in the result text, which makes search results roughly half the size.
+- A `taskClass: "research"` background agent with no `ownedPaths` no longer fails while the parent turn can edit files. It now runs read-only, as `readonly-research` does, and the spawn result's `routingReason` says so. Explicit writable requests are still rejected.
+- `generate_image` now warns when an image comes back with a transparent background that was not requested, and suggests retrying with `background: "opaque"`.
+- Spawning a background agent that can only run read-only commands now returns `commandPolicy: "read-only"` and a note that scripts, builds, tests and project binaries will be refused, so the coordinator can run them itself before delegating. The standalone CLI and Assistant report the same for their read-only task classes.
 
 ## 1.110.0
 

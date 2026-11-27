@@ -149,7 +149,11 @@ export async function executeCodexStandaloneWeb(
     request.operation === "search"
       ? records.slice(0, prepared.maxResults)
       : records;
-  const citations = citationsFromRecords(visibleRecords);
+  // Search snippets are already in the formatted content, so search citations
+  // keep only the URL and title.
+  const citations = citationsFromRecords(visibleRecords, {
+    includeSnippets: request.operation !== "search",
+  });
   const rawOutput = typeof payload.output === "string" ? payload.output : "";
   const initialPagination = paginationMetadata(rawOutput, prepared.startLine);
   const initialNextStartLine = initialPagination.next_start_line;
@@ -238,7 +242,6 @@ export async function executeCodexStandaloneWeb(
         ...(request.operation === "search"
           ? { query: prepared.query }
           : { url: prepared.url }),
-        ...(citations.length > 0 ? { citations } : {}),
       },
     ],
     content,
@@ -524,6 +527,7 @@ function isHostnameAllowed(
 
 function citationsFromRecords(
   records: readonly CodexStandaloneWebResultRecord[],
+  options: { includeSnippets: boolean },
 ): CoreWebCitation[] {
   const seen = new Set<string>();
   return records.flatMap((record) => {
@@ -533,7 +537,9 @@ function citationsFromRecords(
       {
         url: record.url,
         ...(record.title ? { title: record.title } : {}),
-        ...(record.snippet ? { citedText: record.snippet } : {}),
+        ...(options.includeSnippets && record.snippet
+          ? { citedText: record.snippet }
+          : {}),
       },
     ];
   });

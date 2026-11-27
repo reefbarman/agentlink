@@ -261,6 +261,7 @@ import {
   CORE_NATIVE_WEB_MAX_PAUSE_TURNS,
   CORE_NATIVE_WEB_TOOL_DEFINITIONS,
   mergeNativeWebUsage,
+  withoutActivityCitations,
   type CoreNativeWebToolResult,
 } from "../../core/nativeWebTools.js";
 import { runAgentToolLoop } from "@agentlink/core/agent-tool-loop";
@@ -9031,7 +9032,7 @@ export class BrowserGatewayHelper {
         ),
         operation: kind,
         input: structuredClone(toolCall.input),
-        activities: [...activitiesById.values()],
+        activities: withoutActivityCitations([...activitiesById.values()]),
         content: resultText,
         citations,
         ...(usage ? { usage } : {}),

@@ -105,6 +105,10 @@ export interface SpawnBackgroundRequest {
   workflowId?: string;
 }
 
+/** Spawn-result note for children whose commands must pass the read-only check. */
+export const READ_ONLY_CHILD_COMMAND_NOTE =
+  "This agent can only run read-only commands. Interpreters, scripts, builds, tests and project binaries (for example python3 tool.py or ./build/bin) will be refused and cannot be approved from the agent. If the task needs one, run it yourself and pass the output, or spawn a writable agent with ownedPaths.";
+
 export interface SpawnBackgroundResult {
   sessionId: string;
   resolvedMode: string;
@@ -124,6 +128,13 @@ export interface SpawnBackgroundResult {
    * write with its inherited authority. Dispatch enforcement is unchanged.
    */
   writeScopeWarnings?: string[];
+  /**
+   * Set when the child can only run commands the read-only check clears, so
+   * the coordinator learns before work starts that interpreters, scripts,
+   * builds, tests and project binaries will be refused.
+   */
+  commandPolicy?: "read-only";
+  commandPolicyNote?: string;
 }
 
 /**

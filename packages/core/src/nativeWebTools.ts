@@ -320,7 +320,7 @@ export async function collectNativeWebToolResult(params: {
     provider: params.provider,
     operation: params.operation,
     input: structuredClone(params.input),
-    activities: [...activitiesById.values()],
+    activities: withoutActivityCitations([...activitiesById.values()]),
     content: resolvedContent,
     ...(params.operation === "fetch"
       ? {
@@ -332,6 +332,21 @@ export async function collectNativeWebToolResult(params: {
     citations,
     ...(usage ? { usage } : {}),
   };
+}
+
+/**
+ * Tool results already carry every activity citation in the top-level
+ * `citations` list. Dropping the per-activity copy keeps each source from
+ * reaching the model twice.
+ */
+export function withoutActivityCitations(
+  activities: readonly CoreWebActivity[],
+): CoreWebActivity[] {
+  return activities.map((activity) => {
+    if (!activity.citations) return activity;
+    const { citations: _citations, ...rest } = activity;
+    return rest;
+  });
 }
 
 function appendCitation(

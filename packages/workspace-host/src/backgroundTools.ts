@@ -33,6 +33,7 @@ import {
   buildBackgroundStillRunningPayload,
   buildBackgroundWaitCancelledPayload,
   getBackgroundResultToolDefinition,
+  READ_ONLY_CHILD_COMMAND_NOTE,
   type BackgroundAgentKillResult,
   type BackgroundAgentStatusResult,
   type BackgroundResultState,
@@ -42,6 +43,7 @@ import { MISSING_TEXT_RESULT_ISSUE } from "@agentlink/core/background-results";
 
 import {
   ENFORCED_BACKGROUND_BUDGET_LIMITS,
+  isReadOnlyBackgroundTaskClass,
   type SpawnWorkspaceBackgroundRequest,
   type WorkspaceBackgroundRecord,
   type WorkspaceBackgroundSupervisor,
@@ -286,6 +288,12 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
           ...(record.modelTier ? { modelTier: record.modelTier } : {}),
           routingReason: routing.report.routingReason,
           fallbackUsed: routing.report.fallbackUsed,
+          ...(isReadOnlyBackgroundTaskClass(record.taskClass)
+            ? {
+                commandPolicy: "read-only",
+                commandPolicyNote: READ_ONLY_CHILD_COMMAND_NOTE,
+              }
+            : {}),
           ...(record.expectedResult
             ? { expectedResult: record.expectedResult }
             : {}),
