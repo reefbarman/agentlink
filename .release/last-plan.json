@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf",
-  "createdAt": "2026-11-27T01:49:27.730Z",
+  "sourceSha": "542f13ae1032a47e1864076103a802dac460d042",
+  "createdAt": "2026-11-27T03:20:33.708Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,222 +10,124 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.110.0",
-      "baselineRef": "v1.110.0",
-      "reserved": "1.110.0",
-      "commits": [
-        "442c3916a76018b4642829f44a6d88fbea1d04b7",
-        "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf"
-      ],
+      "published": "1.111.0",
+      "baselineRef": "v1.111.0",
+      "reserved": "1.111.0",
+      "commits": ["052ed6811fa6e3a313e1918665133dae215bb31a"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.111.0",
-      "effectiveBump": "minor",
+      "version": "1.111.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.111.0",
+      "tag": "v1.111.1",
       "notes": [
         {
-          "sha": "442c3916a76018b4642829f44a6d88fbea1d04b7",
-          "subject": "feat(webview): show sent /btw threads as an expandable card",
-          "summary": "Sent /btw side threads now appear as an expandable \"/btw thread\" card in the chat message and in the queue, so users can reread the attached exchanges.",
-          "breaking": false
-        },
-        {
-          "sha": "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf",
-          "subject": "fix(tools): dedupe web citations, run unscoped research read-only, flag unrequested image transparency",
-          "summary": "Web search/fetch results list each citation once, unscoped research background agents run read-only instead of being rejected, spawn results report a read-only command policy, and unrequested transparent images are flagged.",
+          "sha": "052ed6811fa6e3a313e1918665133dae215bb31a",
+          "subject": "fix(execute_command): tell protected-git native retries to drop the sandbox terminal target",
+          "summary": "Protected-git recovery guidance now tells callers to omit terminal_id, terminal_name and split_from on the native retry, since the sandbox terminal cannot run native commands.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.110.0",
-      "baselineRef": "desktop-v0.110.0",
-      "reserved": "0.110.0",
-      "commits": [
-        "442c3916a76018b4642829f44a6d88fbea1d04b7",
-        "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf"
-      ],
+      "published": "0.111.0",
+      "baselineRef": "desktop-v0.111.0",
+      "reserved": "0.111.0",
+      "commits": ["052ed6811fa6e3a313e1918665133dae215bb31a"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.111.0",
-      "effectiveBump": "minor",
+      "version": "0.111.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.111.0",
+      "tag": "desktop-v0.111.1",
       "notes": [
         {
-          "sha": "442c3916a76018b4642829f44a6d88fbea1d04b7",
-          "subject": "feat(webview): show sent /btw threads as an expandable card",
-          "summary": "Sent /btw side threads now appear as an expandable \"/btw thread\" card in the chat message and in the queue, so users can reread the attached exchanges.",
-          "breaking": false
-        },
-        {
-          "sha": "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf",
-          "subject": "fix(tools): dedupe web citations, run unscoped research read-only, flag unrequested image transparency",
-          "summary": "Web search/fetch results list each citation once, unscoped research background agents run read-only instead of being rejected, spawn results report a read-only command policy, and unrequested transparent images are flagged.",
+          "sha": "052ed6811fa6e3a313e1918665133dae215bb31a",
+          "subject": "fix(execute_command): tell protected-git native retries to drop the sandbox terminal target",
+          "summary": "Protected-git recovery guidance now tells callers to omit terminal_id, terminal_name and split_from on the native retry, since the sandbox terminal cannot run native commands.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.76.0",
-      "baselineRef": "cli-v0.76.0",
-      "reserved": "0.76.0",
-      "commits": ["8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf"],
+      "published": "0.76.1",
+      "baselineRef": "cli-v0.76.1",
+      "reserved": "0.76.1",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.76.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.76.1",
-      "notes": [
-        {
-          "sha": "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf",
-          "subject": "fix(tools): dedupe web citations, run unscoped research read-only, flag unrequested image transparency",
-          "summary": "Web search/fetch results list each citation once, unscoped research background agents run read-only instead of being rejected, spawn results report a read-only command policy, and unrequested transparent images are flagged.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.60.0",
-      "baselineRef": "sdk-v0.60.0",
-      "reserved": "0.60.0",
-      "commits": ["8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf"],
+      "published": "0.60.1",
+      "baselineRef": "sdk-v0.60.1",
+      "reserved": "0.60.1",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.60.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.60.1",
-      "notes": [
-        {
-          "sha": "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf",
-          "subject": "fix(tools): dedupe web citations, run unscoped research read-only, flag unrequested image transparency",
-          "summary": "Web search/fetch results list each citation once, unscoped research background agents run read-only instead of being rejected, spawn results report a read-only command policy, and unrequested transparent images are flagged.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.80.0",
-      "baselineRef": "assistant-v0.80.0",
-      "reserved": "0.80.0",
+      "published": "0.81.0",
+      "baselineRef": "assistant-v0.81.0",
+      "reserved": "0.81.0",
       "commits": [
-        "442c3916a76018b4642829f44a6d88fbea1d04b7",
-        "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf"
+        "052ed6811fa6e3a313e1918665133dae215bb31a",
+        "542f13ae1032a47e1864076103a802dac460d042"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.81.0",
-      "effectiveBump": "minor",
+      "version": "0.81.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.81.0",
+      "tag": "assistant-v0.81.1",
       "notes": [
         {
-          "sha": "442c3916a76018b4642829f44a6d88fbea1d04b7",
-          "subject": "feat(webview): show sent /btw threads as an expandable card",
-          "summary": "Sent /btw side threads now appear as an expandable \"/btw thread\" card in the chat message and in the queue, so users can reread the attached exchanges.",
+          "sha": "052ed6811fa6e3a313e1918665133dae215bb31a",
+          "subject": "fix(execute_command): tell protected-git native retries to drop the sandbox terminal target",
+          "summary": "Protected-git recovery guidance now tells callers to omit terminal_id, terminal_name and split_from on the native retry, since the sandbox terminal cannot run native commands.",
           "breaking": false
         },
         {
-          "sha": "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf",
-          "subject": "fix(tools): dedupe web citations, run unscoped research read-only, flag unrequested image transparency",
-          "summary": "Web search/fetch results list each citation once, unscoped research background agents run read-only instead of being rejected, spawn results report a read-only command policy, and unrequested transparent images are flagged.",
+          "sha": "542f13ae1032a47e1864076103a802dac460d042",
+          "subject": "fix(server): kill leftover command process-group jobs on exit, not close",
+          "summary": "The assistant server now kills leftover background jobs in a command's process group when the command exits, so commands no longer hang when a job keeps the output pipes open.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "7435ae4f72a72625bc534d96bff6bcbf2a92dc09": {
-      "bump": "none",
-      "breakingUnits": [],
-      "summary": "Test-only helper now refuses to run Vitest if home directory isolation is unsafe (e.g. threads pool), with no change to shipped extension or desktop behaviour.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "35a68166c2de8ed27a87dd47b3366fb485daaf9f": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Deleting development feedback now permanently removes the report, its full-content file and triage history from disk (with locking and index renumbering), and purges entries older builds only hid.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "47dea7cfcdeac25101b615a6671ea7c3f57d2b0a": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The /btw panel now supports follow-up questions in the side thread, replaces 'Add to conversation' with 'Send to chat' to send your message plus the side thread to the main agent, and raises per-question limits to 25 turns, 50 tool calls and 10 minutes.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "01a855f6d21e8777358dd1534f5f7c27a8a15518": {
+    "052ed6811fa6e3a313e1918665133dae215bb31a": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Background agents spawned in one batch with overlapping owned paths are now rejected with workspace_conflict, writers waiting on workspace write access show as queued with the blocker, and read-only agents get clearer guidance about scripts.",
+      "summary": "Protected-git recovery guidance now tells callers to omit terminal_id, terminal_name and split_from on the native retry, since the sandbox terminal cannot run native commands.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "cf5857f771495dee83fc721fa77cbe5e294f413d": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "File approval cards now share one rule editor with folder-prefix defaults, outside-workspace write cards keep their layout, rule patterns wrap, and a new Allow Folder for Session button approves a file's folder in one click.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "0dc88b64a80cf3e0976cdd81c4553d23578eb752": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The Approve for Me Guardian now receives host-measured diffs and session-edit facts for git checkout/restore file reverts, so it can approve restoring a session's own edits without the agent printing the diff first.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "8e4ce15cf64a1c81a04a261f2b5b2c12929a26c2": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The browser gateway now remembers the last VS Code workspace and chat across visits, uses iPhone safe areas without wasting chat space, and moves Check for updates into the chat toolbar; also adds provider-editing docs and faster test runs.}",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "442c3916a76018b4642829f44a6d88fbea1d04b7": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Sent /btw side threads now appear as an expandable \"/btw thread\" card in the chat message and in the queue, so users can reread the attached exchanges.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "8ebddbfd4bb02fed3b3e896d6c90c4f85a10ecdf": {
+    "542f13ae1032a47e1864076103a802dac460d042": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Web search/fetch results list each citation once, unscoped research background agents run read-only instead of being rejected, spawn results report a read-only command policy, and unrequested transparent images are flagged.",
+      "summary": "The assistant server now kills leftover background jobs in a command's process group when the command exits, so commands no longer hang when a job keeps the output pipes open.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
