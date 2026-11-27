@@ -149,15 +149,28 @@ interface ResizeStart {
   cardNaturalHeight: number;
 }
 
+/**
+ * Height the card has without a handle-set size: its content height, or the
+ * stylesheet cap when the content is taller and the card scrolls instead.
+ */
+function measureCardDefaultHeight(card: HTMLElement): number {
+  const inline = card.style.maxHeight;
+  const inlineOverflow = card.style.overflowY;
+  card.style.removeProperty("max-height");
+  card.style.removeProperty("overflow-y");
+  const height = card.getBoundingClientRect().height;
+  if (inline) card.style.maxHeight = inline;
+  if (inlineOverflow) card.style.overflowY = inlineOverflow;
+  return height;
+}
+
 function measureResizeStart(shelf: HTMLElement): ResizeStart {
   const card = findQuestionCard(shelf);
   return {
     shelfHeight: shelf.getBoundingClientRect().height,
     card,
     cardHeight: card?.getBoundingClientRect().height ?? 0,
-    cardNaturalHeight: card
-      ? card.scrollHeight + Math.max(0, card.offsetHeight - card.clientHeight)
-      : 0,
+    cardNaturalHeight: card ? measureCardDefaultHeight(card) : 0,
   };
 }
 

@@ -499,19 +499,20 @@ describe("ChatActivityShelf", () => {
     const shelf = separator.parentElement as HTMLDivElement;
     const card = document.querySelector(".question-card") as HTMLDivElement;
     let shelfHeight = 44;
-    let cardHeight = 300;
+    // Like real layout, the card's height follows its inline max-height.
     Object.defineProperty(shelf, "getBoundingClientRect", {
       value: () => ({ bottom: 700, height: shelfHeight }),
     });
     Object.defineProperty(card, "getBoundingClientRect", {
-      value: () => ({ height: cardHeight }),
+      value: () => ({
+        height: card.style.maxHeight
+          ? Math.min(300, Number.parseFloat(card.style.maxHeight))
+          : 300,
+      }),
     });
     Object.defineProperty(card, "scrollHeight", { value: 300 });
     const sync = () => {
       shelfHeight = Number.parseFloat(shelf.style.height);
-      cardHeight = card.style.maxHeight
-        ? Number.parseFloat(card.style.maxHeight)
-        : 300;
     };
 
     // 32px down: the shelf takes 32px first (44 -> 12), card untouched.
@@ -543,6 +544,50 @@ describe("ChatActivityShelf", () => {
     expect(card.style.maxHeight).toBe("268px");
     fireEvent.dblClick(separator);
     expect(card.style.maxHeight).toBe("");
+  });
+
+  it("restores a stylesheet-capped question card to its cap, not its content height", () => {
+    window.localStorage.setItem(CHAT_ACTIVITY_SHELF_STORAGE_KEY, "12");
+    render(
+      <div class="chat-container">
+        <ChatActivityShelf>
+          <div>Activity</div>
+        </ChatActivityShelf>
+        <div class="input-area">
+          <div class="question-card">Question</div>
+        </div>
+      </div>,
+    );
+    const separator = screen.getByRole("separator");
+    const shelf = separator.parentElement as HTMLDivElement;
+    const card = document.querySelector(".question-card") as HTMLDivElement;
+    // The stylesheet caps the card at 200px while its content is 600px tall.
+    const cap = 200;
+    Object.defineProperty(shelf, "getBoundingClientRect", {
+      value: () => ({
+        bottom: 700,
+        height: Number.parseFloat(shelf.style.height) || 12,
+      }),
+    });
+    Object.defineProperty(card, "getBoundingClientRect", {
+      value: () => ({
+        height: card.style.maxHeight
+          ? Math.min(cap, Number.parseFloat(card.style.maxHeight))
+          : cap,
+      }),
+    });
+    Object.defineProperty(card, "scrollHeight", { value: 600 });
+
+    fireEvent.keyDown(separator, { key: "ArrowDown" });
+    expect(card.style.maxHeight).toBe("168px");
+
+    // Going up restores the capped height, then grows the shelf.
+    fireEvent.keyDown(separator, { key: "ArrowUp" });
+    expect(card.style.maxHeight).toBe("");
+    expect(shelf.style.height).toBe("12px");
+    fireEvent.keyDown(separator, { key: "ArrowUp" });
+    expect(card.style.maxHeight).toBe("");
+    expect(shelf.style.height).toBe("44px");
   });
 
   it("reveals a different approval after the shelf is collapsed again", async () => {

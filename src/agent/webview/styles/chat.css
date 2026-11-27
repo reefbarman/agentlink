@@ -4728,8 +4728,8 @@ body.chat-activity-shelf-resizing * {
   min-width: 0;
   min-height: 0;
   box-sizing: border-box;
-  /* The activity shelf owns vertical scrolling. A nested card scroller can
-     trap wheel input at its boundary before the shelf reaches later content. */
+  /* Height capping and scrolling inside the composer are set on
+     `.input-area > .question-card` below. */
   overflow: visible;
 }
 
@@ -5701,6 +5701,19 @@ body.chat-activity-shelf-resizing * {
     color-mix(in srgb, var(--vscode-focusBorder) 8%, transparent),
     transparent 68%
   );
+}
+
+/*
+ * The composer never shrinks, so an uncapped card taller than the viewport
+ * pushes its own top and the whole transcript off screen with no way to scroll
+ * back (notably on phones). Cap it and let the card scroll instead. Dragging
+ * the shelf handle sets an inline max-height, which still takes precedence.
+ */
+.input-area > .question-card {
+  max-height: 50vh;
+  max-height: 50dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .question-context-composer > .question-card {
