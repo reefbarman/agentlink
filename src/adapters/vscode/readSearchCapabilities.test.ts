@@ -350,7 +350,11 @@ describe("createVscodeContext providers", () => {
   });
 });
 
-describe("createVscodeStructuralGraphProvider", () => {
+// Several tests here open real on-disk LanceDB stores; the default 5s limit is
+// too tight once the full suite saturates the machine.
+const LANCEDB_TIMEOUT = { timeout: 30_000 };
+
+describe("createVscodeStructuralGraphProvider", LANCEDB_TIMEOUT, () => {
   const directories: string[] = [];
 
   afterEach(() => {
