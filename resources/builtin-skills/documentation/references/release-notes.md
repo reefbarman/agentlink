@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.111.3
+
+- Updates the VSIX packaging tool @vscode/vsce from 4.1.0 to 4.1.1, a build-time dependency bump for the VS Code extension package.
+
 ## 1.111.2
 
 - The chat question card is now capped at half the viewport height and scrolls internally, so a tall card no longer pushes the transcript off screen, especially on small screens.'

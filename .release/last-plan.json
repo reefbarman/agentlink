@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55",
-  "createdAt": "2026-11-27T22:42:21.101Z",
+  "sourceSha": "1160cb7ab217affe6fdf1bcbb9f830d96bc946d4",
+  "createdAt": "2026-11-28T09:06:09.797Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.111.1",
-      "baselineRef": "v1.111.1",
-      "reserved": "1.111.1",
-      "commits": ["52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55"],
+      "published": "1.111.2",
+      "baselineRef": "v1.111.2",
+      "reserved": "1.111.2",
+      "commits": ["f1143d52df0dc098ff82f77b415e286dc2bcbedd"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.111.2",
+      "version": "1.111.3",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.111.2",
+      "tag": "v1.111.3",
       "notes": [
         {
-          "sha": "52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55",
-          "subject": "fix(chat): cap question card height so it cannot push the transcript off screen",
-          "summary": "The chat question card is now capped at half the viewport height and scrolls internally, so a tall card no longer pushes the transcript off screen, especially on small screens.'",
+          "sha": "f1143d52df0dc098ff82f77b415e286dc2bcbedd",
+          "subject": "build: update @vscode/vsce to 4.1.1",
+          "summary": "Updates the VSIX packaging tool @vscode/vsce from 4.1.0 to 4.1.1, a build-time dependency bump for the VS Code extension package.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.111.1",
-      "baselineRef": "desktop-v0.111.1",
-      "reserved": "0.111.1",
-      "commits": ["52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55"],
+      "published": "0.111.2",
+      "baselineRef": "desktop-v0.111.2",
+      "reserved": "0.111.2",
+      "commits": ["f1143d52df0dc098ff82f77b415e286dc2bcbedd"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.111.2",
+      "version": "0.111.3",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.111.2",
+      "tag": "desktop-v0.111.3",
       "notes": [
         {
-          "sha": "52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55",
-          "subject": "fix(chat): cap question card height so it cannot push the transcript off screen",
-          "summary": "The chat question card is now capped at half the viewport height and scrolls internally, so a tall card no longer pushes the transcript off screen, especially on small screens.'",
+          "sha": "f1143d52df0dc098ff82f77b415e286dc2bcbedd",
+          "subject": "build: update @vscode/vsce to 4.1.1",
+          "summary": "Updates the VSIX packaging tool @vscode/vsce from 4.1.0 to 4.1.1, a build-time dependency bump for the VS Code extension package.",
           "breaking": false
         }
       ]
@@ -61,13 +61,25 @@
       "published": "0.76.1",
       "baselineRef": "cli-v0.76.1",
       "reserved": "0.76.1",
-      "commits": [],
+      "commits": ["f1143d52df0dc098ff82f77b415e286dc2bcbedd"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.76.2",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.76.2",
+      "notes": [
+        {
+          "sha": "f1143d52df0dc098ff82f77b415e286dc2bcbedd",
+          "subject": "build: update @vscode/vsce to 4.1.1",
+          "summary": "Updates the VSIX packaging tool @vscode/vsce from 4.1.0 to 4.1.1, a build-time dependency bump for the VS Code extension package.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.60.1",
@@ -82,39 +94,19 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.81.2",
-      "baselineRef": "assistant-v0.81.2",
-      "reserved": "0.81.2",
-      "commits": ["52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55"],
+      "published": "0.81.3",
+      "baselineRef": "assistant-v0.81.3",
+      "reserved": "0.81.3",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.81.3",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "assistant-v0.81.3",
-      "notes": [
-        {
-          "sha": "52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55",
-          "subject": "fix(chat): cap question card height so it cannot push the transcript off screen",
-          "summary": "The chat question card is now capped at half the viewport height and scrolls internally, so a tall card no longer pushes the transcript off screen, especially on small screens.'",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     }
   },
   "decisions": {
-    "eeea020e6b650fed38a7d1f20e9645cfa579446a": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Raises the memory limit of the egress gateway and runner manager containers from 256m to 512m so they no longer get OOM-killed at startup while loading the server bundle.}]}</br>",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
     "052ed6811fa6e3a313e1918665133dae215bb31a": {
       "bump": "patch",
       "breakingUnits": [],
@@ -131,10 +123,26 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
+    "eeea020e6b650fed38a7d1f20e9645cfa579446a": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Raises the memory limit of the egress gateway and runner manager containers from 256m to 512m so they no longer get OOM-killed at startup while loading the server bundle.}]}</br>",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
     "52b0b2fa0dc76f7c9611a9293b68808f9dfa6f55": {
       "bump": "patch",
       "breakingUnits": [],
       "summary": "The chat question card is now capped at half the viewport height and scrolls internally, so a tall card no longer pushes the transcript off screen, especially on small screens.'",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "f1143d52df0dc098ff82f77b415e286dc2bcbedd": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Updates the VSIX packaging tool @vscode/vsce from 4.1.0 to 4.1.1, a build-time dependency bump for the VS Code extension package.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
